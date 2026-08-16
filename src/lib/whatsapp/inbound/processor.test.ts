@@ -131,7 +131,7 @@ describe('processNormalizedInboundEvent', () => {
     expect(resB.processed).toBe(true)
   })
 
-  it('ignores duplicate messages with the same externalMessageId (Idempotency)', async () => {
+  it('ignores duplicate messages with the same externalMessageId (Idempotency pre-check)', async () => {
     const dedupeMockDb = {
       from: (table: string) => {
         const b: Record<string, unknown> = {}
@@ -169,5 +169,69 @@ describe('processNormalizedInboundEvent', () => {
     expect(res.processed).toBe(true)
     expect(res.duplicate).toBe(true)
     expect(res.messageId).toBe('existing-msg-id')
+  })
+
+  it('handles concurrent race condition via DB unique constraint violation (Atomic Concurrency)', async () => {
+    let insertAttempt = 0
+    const racingMockDb = {
+      from: (table: string) => {
+        const b: Record<string, unknown> = {}
+        const chain = () => b
+        for (const m of ['select', 'eq', 'like', 'order', 'limit', 'not']) {
+          b[m] = vi.fn(chain)
+        }
+
+        b.maybeSingle = vi.fn(async () => {
+          if (table === 'messages') {
+            // Initial pre-check returns null (simulating both workers passing pre-check simultaneously)
+            if (insertAttempt === 0) return { data: null, error: null }
+            // Post-violation lookup returns the row committed by the racing worker
+            return { data: { id: 'raced-message-uuid', conversation_id: 'conv-race-1' }, error: null }
+          }
+          if (table === 'profiles') return { data: { user_id: 'user-1' }, error: null }
+          return { data: null, error: null }
+        })
+
+        b.single = vi.fn(async () => {
+          if (table === 'contacts') return { data: { id: 'contact-race-1', phone: '+5511999999999' }, error: null }
+          if (table === 'conversations') return { data: { id: 'conv-race-1', unread_count: 0 }, error: null }
+          if (table === 'messages') {
+            insertAttempt++
+            // Simulate Postgres unique violation (SQLSTATE 23505 / uq_messages_conversation_message_id)
+            return {
+              data: null,
+              error: {
+                code: '23505',
+                message: 'duplicate key value violates unique constraint "uq_messages_conversation_message_id"',
+              },
+            }
+          }
+          return { data: null, error: null }
+        })
+
+        b.insert = vi.fn(() => b)
+        b.update = vi.fn(() => b)
+        b.then = (resolve: (v: unknown) => unknown) => resolve({ data: null, error: null })
+        return b
+      },
+    }
+
+    const event: NormalizedInboundMessageEvent = {
+      type: 'message',
+      provider: 'meta',
+      accountId: 'account-race',
+      externalMessageId: 'wamid-racing-concurrent-123',
+      fromPhone: '5511999999999',
+      senderName: 'Cliente Concorrente',
+      timestamp: 1700000000,
+      fromMe: false,
+      content: { type: 'text', text: 'Mensagem simultânea' },
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const res = await processNormalizedInboundEvent({ event, db: racingMockDb as any })
+    expect(res.processed).toBe(true)
+    expect(res.duplicate).toBe(true)
+    expect(res.messageId).toBe('raced-message-uuid')
   })
 })

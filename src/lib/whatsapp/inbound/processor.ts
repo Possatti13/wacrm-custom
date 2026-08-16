@@ -158,6 +158,31 @@ async function processInboundMessage(
     .single()
 
   if (insertError) {
+    if (
+      isUniqueViolation(insertError) ||
+      (insertError as { code?: string })?.code === '23505' ||
+      insertError.message?.includes('duplicate key') ||
+      insertError.message?.includes('uq_messages_conversation_message_id')
+    ) {
+      // Atomic deduplication: a concurrent worker inserted the message first
+      const { data: racedMessage } = await db
+        .from('messages')
+        .select('id, conversation_id')
+        .eq('conversation_id', conversation.id)
+        .eq('message_id', event.externalMessageId)
+        .maybeSingle()
+
+      if (racedMessage) {
+        return {
+          processed: true,
+          duplicate: true,
+          messageId: racedMessage.id,
+          conversationId: conversation.id,
+          contactId: contact.id,
+        }
+      }
+    }
+
     console.error('[inbound-processor] message insert failed:', insertError.message)
     return { processed: false, error: insertError.message }
   }
