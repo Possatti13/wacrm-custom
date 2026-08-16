@@ -42,6 +42,14 @@ export async function middleware(request: NextRequest) {
     return response
   }
 
+  // Public non-API routes that logged-out users may access.
+  const isPublicPage =
+    request.nextUrl.pathname === '/login' ||
+    request.nextUrl.pathname === '/signup' ||
+    request.nextUrl.pathname === '/forgot-password' ||
+    request.nextUrl.pathname === '/icon' ||
+    request.nextUrl.pathname.startsWith('/join')
+
   // Auth pages - redirect to dashboard if already logged in.
   // Exception: when an invite token is in the query string we
   // send the already-signed-in user to /join/<token> instead so
@@ -69,20 +77,30 @@ export async function middleware(request: NextRequest) {
     return withRefreshedCookies(NextResponse.redirect(url))
   }
 
-  // Protected pages - redirect to login if not authenticated
-  const protectedPaths = ['/dashboard', '/inbox', '/contacts', '/pipelines', '/broadcasts', '/automations', '/settings']
-  if (!user && protectedPaths.some(path => request.nextUrl.pathname.startsWith(path))) {
+  // Protected pages - any non-API, non-public page requires an active session.
+  // Covers /dashboard, /inbox, /contacts, /pipelines, /broadcasts, /automations,
+  // /flows, /agents, /notifications, /settings and any future private routes.
+  if (!user && !request.nextUrl.pathname.startsWith('/api') && !isPublicPage && request.nextUrl.pathname !== '/') {
     const url = request.nextUrl.clone()
     url.pathname = '/login'
     return withRefreshedCookies(NextResponse.redirect(url))
   }
 
-  // API routes that need auth (not webhooks)
-  if (!user && request.nextUrl.pathname.startsWith('/api/whatsapp/') &&
-      !request.nextUrl.pathname.includes('/webhook')) {
-    return withRefreshedCookies(
-      NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    )
+  // Protected internal API routes (excluding public endpoints, webhooks, cron, and public v1 API).
+  if (!user && request.nextUrl.pathname.startsWith('/api/')) {
+    const isPublicApi =
+      request.nextUrl.pathname.startsWith('/api/v1/') ||
+      request.nextUrl.pathname.startsWith('/api/whatsapp/webhook') ||
+      request.nextUrl.pathname.startsWith('/api/whatsapp/waha/webhook') ||
+      request.nextUrl.pathname.startsWith('/api/invitations/') ||
+      request.nextUrl.pathname.startsWith('/api/automations/cron') ||
+      request.nextUrl.pathname.startsWith('/api/flows/cron')
+
+    if (!isPublicApi) {
+      return withRefreshedCookies(
+        NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+      )
+    }
   }
 
   return supabaseResponse

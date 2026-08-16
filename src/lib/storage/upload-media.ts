@@ -110,11 +110,21 @@ export async function uploadAccountMedia(
   });
   if (upErr) throw new Error(upErr.message);
 
-  const {
-    data: { publicUrl },
-  } = supabase.storage.from(bucket).getPublicUrl(path);
+  let mediaUrl = "";
+  const { data: signedData, error: signErr } = await supabase.storage
+    .from(bucket)
+    .createSignedUrl(path, 3600 * 24); // 24h signed URL for private buckets
 
-  return { publicUrl, path };
+  if (!signErr && signedData?.signedUrl) {
+    mediaUrl = signedData.signedUrl;
+  } else {
+    const {
+      data: { publicUrl },
+    } = supabase.storage.from(bucket).getPublicUrl(path);
+    mediaUrl = publicUrl;
+  }
+
+  return { publicUrl: mediaUrl, path };
 }
 
 /**

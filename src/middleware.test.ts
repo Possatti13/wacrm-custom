@@ -110,4 +110,32 @@ describe("middleware — refreshed auth cookies survive redirects", () => {
     expect(res.headers.get("location")).toBeNull();
     expect(res.cookies.get(ROTATED.name)?.value).toBe(ROTATED.value);
   });
+
+  it("redirects an unauth user accessing /agents, /flows, or /notifications to /login", async () => {
+    mockUser = null;
+    refreshedCookies = [{ ...ROTATED, value: "cleared" }];
+
+    for (const path of ["/agents", "/flows", "/notifications", "/settings"]) {
+      const res = await middleware(new NextRequest(`https://app.test${path}`));
+      expect(res.status).toBe(307);
+      expect(res.headers.get("location")).toContain("/login");
+    }
+  });
+
+  it("blocks unauthenticated internal API requests with 401", async () => {
+    mockUser = null;
+    const res = await middleware(new NextRequest("https://app.test/api/account/members"));
+    expect(res.status).toBe(401);
+    const json = await res.json();
+    expect(json.error).toBe("Unauthorized");
+  });
+
+  it("allows public webhooks through without authentication", async () => {
+    mockUser = null;
+    const metaRes = await middleware(new NextRequest("https://app.test/api/whatsapp/webhook"));
+    expect(metaRes.status).toBe(200);
+
+    const wahaRes = await middleware(new NextRequest("https://app.test/api/whatsapp/waha/webhook"));
+    expect(wahaRes.status).toBe(200);
+  });
 });

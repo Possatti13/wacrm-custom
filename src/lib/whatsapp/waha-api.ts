@@ -150,11 +150,13 @@ export async function sendWahaMediaMessage(
 
 export async function configureWahaWebhook(
   config: WahaConfig,
-  webhookUrl: string
+  webhookUrl: string,
+  hmacKey?: string
 ): Promise<void> {
+  const key = hmacKey || config.apiKey || process.env.WAHA_WEBHOOK_SECRET || process.env.WAHA_API_KEY;
   // WAHA accepts session config updates with a webhooks array on recent
-  // versions. If a local/dev version rejects it, config save still works;
-  // the user can set the webhook manually or we can retry after deploy.
+  // versions. When hmac key is provided, WAHA will sign every outbound event
+  // with X-Webhook-Hmac.
   await wahaFetch(config, `/api/sessions/${encodeURIComponent(config.session)}`, {
     method: 'PUT',
     body: JSON.stringify({
@@ -164,6 +166,7 @@ export async function configureWahaWebhook(
           {
             url: webhookUrl,
             events: ['message', 'message.any', 'session.status'],
+            hmac: key ? { key } : undefined,
           },
         ],
       },

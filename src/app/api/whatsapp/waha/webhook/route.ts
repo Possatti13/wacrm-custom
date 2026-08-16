@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { normalizePhone } from '@/lib/whatsapp/phone-utils'
+import { decrypt } from '@/lib/whatsapp/encryption'
+import { verifyWahaWebhookSignature } from '@/lib/whatsapp/waha-signature'
 import { findExistingContact, isUniqueViolation } from '@/lib/contacts/dedupe'
 import { runAutomationsForTrigger } from '@/lib/automations/engine'
 import { dispatchInboundToAiReply } from '@/lib/ai/auto-reply'
@@ -185,9 +187,10 @@ async function findOrCreateConversation(
 }
 
 export async function POST(request: Request) {
+  const rawBody = await request.text()
   let body: WahaWebhookBody
   try {
-    body = await request.json()
+    body = JSON.parse(rawBody)
   } catch {
     return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 })
   }
@@ -205,10 +208,6 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Missing WAHA session' }, { status: 400 })
   }
 
-  const msg = extractMessage(body)
-  if (msg.fromMe) return NextResponse.json({ status: 'ignored', reason: 'fromMe' })
-  if (!msg.phone) return NextResponse.json({ status: 'ignored', reason: 'no_phone' })
-
   const { data: config, error: configError } = await supabaseAdmin()
     .from('whatsapp_config')
     .select('*')
@@ -220,6 +219,36 @@ export async function POST(request: Request) {
     console.error('[waha-webhook] no config for session:', sessionName, configError?.message)
     return NextResponse.json({ status: 'ignored', reason: 'no_config' })
   }
+
+  let sessionSecret: string | null = null
+  if (config.access_token) {
+    try {
+      sessionSecret = decrypt(config.access_token)
+    } catch {
+      sessionSecret = null
+    }
+  }
+
+  const isVerified =
+    verifyWahaWebhookSignature({
+      rawBody,
+      headers: request.headers,
+      secret: sessionSecret,
+    }) ||
+    verifyWahaWebhookSignature({
+      rawBody,
+      headers: request.headers,
+      secret: process.env.WAHA_WEBHOOK_SECRET || process.env.WAHA_API_KEY,
+    })
+
+  if (!isVerified) {
+    console.warn('[waha-webhook] rejected request with invalid or missing signature/token')
+    return NextResponse.json({ error: 'Invalid signature' }, { status: 401 })
+  }
+
+  const msg = extractMessage(body)
+  if (msg.fromMe) return NextResponse.json({ status: 'ignored', reason: 'fromMe' })
+  if (!msg.phone) return NextResponse.json({ status: 'ignored', reason: 'no_phone' })
 
   const contactOutcome = await findOrCreateContact(
     config.account_id,
