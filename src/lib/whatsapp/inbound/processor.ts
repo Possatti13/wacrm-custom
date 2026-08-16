@@ -76,25 +76,7 @@ async function processInboundMessage(
     return { processed: false, error: 'missing_from_phone' }
   }
 
-  // 1. Idempotency check
-  if (event.externalMessageId) {
-    const { data: existingMessage } = await db
-      .from('messages')
-      .select('id, conversation_id')
-      .eq('message_id', event.externalMessageId)
-      .maybeSingle()
-
-    if (existingMessage) {
-      return {
-        processed: true,
-        duplicate: true,
-        messageId: existingMessage.id,
-        conversationId: existingMessage.conversation_id,
-      }
-    }
-  }
-
-  // 2. Resolve default user_id for tenant if not provided
+  // 1. Resolve default user_id for tenant if not provided
   let userId: string = fallbackUserId || ''
   if (!userId) {
     const { data: profile } = await db
@@ -108,7 +90,7 @@ async function processInboundMessage(
     userId = profile?.user_id || '00000000-0000-0000-0000-000000000000'
   }
 
-  // 3. Find or create Contact
+  // 2. Find or create Contact strictly within account_id
   const contactOutcome = await findOrCreateContact(
     db,
     event.accountId,
@@ -121,7 +103,7 @@ async function processInboundMessage(
   }
   const contact = contactOutcome.contact
 
-  // 4. Find or create Conversation
+  // 3. Find or create Conversation strictly within account_id + contact_id
   const conversation = await findOrCreateConversation(
     db,
     event.accountId,
@@ -130,6 +112,27 @@ async function processInboundMessage(
   )
   if (!conversation || !conversation.id) {
     return { processed: false, error: 'conversation_creation_failed' }
+  }
+
+  // 4. Scoped Idempotency Pre-Check (optimization: conversation_id + source_provider + message_id)
+  if (event.externalMessageId) {
+    const { data: existingMessage } = await db
+      .from('messages')
+      .select('id, conversation_id')
+      .eq('conversation_id', conversation.id)
+      .eq('source_provider', event.provider)
+      .eq('message_id', event.externalMessageId)
+      .maybeSingle()
+
+    if (existingMessage) {
+      return {
+        processed: true,
+        duplicate: true,
+        messageId: existingMessage.id,
+        conversationId: existingMessage.conversation_id,
+        contactId: contact.id,
+      }
+    }
   }
 
   // 5. Determine if first inbound message in thread
@@ -142,7 +145,7 @@ async function processInboundMessage(
 
   const isFirstInboundMessage = !priorCustomerMessages || priorCustomerMessages.length === 0
 
-  // 6. Insert message
+  // 6. Insert message with source_provider
   const { data: insertedMessage, error: insertError } = await db
     .from('messages')
     .insert({
@@ -152,6 +155,7 @@ async function processInboundMessage(
       content_text: event.content.text || null,
       media_url: event.content.mediaUrl || null,
       message_id: event.externalMessageId || null,
+      source_provider: event.provider || null,
       status: 'delivered',
     })
     .select('*')
@@ -162,6 +166,7 @@ async function processInboundMessage(
       isUniqueViolation(insertError) ||
       (insertError as { code?: string })?.code === '23505' ||
       insertError.message?.includes('duplicate key') ||
+      insertError.message?.includes('uq_messages_conversation_provider_message_id') ||
       insertError.message?.includes('uq_messages_conversation_message_id')
     ) {
       // Atomic deduplication: a concurrent worker inserted the message first
@@ -169,6 +174,7 @@ async function processInboundMessage(
         .from('messages')
         .select('id, conversation_id')
         .eq('conversation_id', conversation.id)
+        .eq('source_provider', event.provider)
         .eq('message_id', event.externalMessageId)
         .maybeSingle()
 

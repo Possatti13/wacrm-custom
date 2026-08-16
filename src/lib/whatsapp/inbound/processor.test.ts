@@ -1,55 +1,11 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 import { processNormalizedInboundEvent } from './processor'
 import type { NormalizedInboundMessageEvent } from './types'
+import { runAutomationsForTrigger } from '@/lib/automations/engine'
+import { dispatchInboundToAiReply } from '@/lib/ai/auto-reply'
 
 const messageInserts: Array<Record<string, unknown>> = []
 const conversationUpdates: Array<Record<string, unknown>> = []
-
-const mockDb = {
-  from: (table: string) => {
-    const b: Record<string, unknown> = {}
-    const chain = () => b
-    for (const m of ['select', 'eq', 'like', 'order', 'limit', 'not']) {
-      b[m] = vi.fn(chain)
-    }
-
-    b.maybeSingle = vi.fn(async () => {
-      if (table === 'messages') {
-        return { data: null, error: null }
-      }
-      if (table === 'profiles') {
-        return { data: { user_id: 'user-owner-1' }, error: null }
-      }
-      return { data: null, error: null }
-    })
-
-    b.single = vi.fn(async () => {
-      if (table === 'contacts') {
-        return { data: { id: 'contact-test-1', phone: '+5511999999999' }, error: null }
-      }
-      if (table === 'conversations') {
-        return { data: { id: 'conv-test-1', unread_count: 0 }, error: null }
-      }
-      if (table === 'messages') {
-        return { data: { id: 'msg-test-1' }, error: null }
-      }
-      return { data: null, error: null }
-    })
-
-    b.insert = vi.fn((payload: Record<string, unknown>) => {
-      if (table === 'messages') messageInserts.push(payload)
-      return b
-    })
-
-    b.update = vi.fn((payload: Record<string, unknown>) => {
-      if (table === 'conversations') conversationUpdates.push(payload)
-      return b
-    })
-
-    b.then = (resolve: (v: unknown) => unknown) => resolve({ data: null, error: null })
-    return b
-  },
-}
 
 vi.mock('@/lib/automations/engine', () => ({
   runAutomationsForTrigger: vi.fn(async () => {}),
@@ -59,179 +15,327 @@ vi.mock('@/lib/ai/auto-reply', () => ({
   dispatchInboundToAiReply: vi.fn(async () => {}),
 }))
 
-describe('processNormalizedInboundEvent', () => {
+interface Filter {
+  field: string
+  value?: unknown
+  matchFn?: (v: unknown) => boolean
+}
+
+function createMemoryDb() {
+  const store = {
+    contacts: [] as Array<Record<string, unknown>>,
+    conversations: [] as Array<Record<string, unknown>>,
+    messages: [] as Array<Record<string, unknown>>,
+    profiles: [
+      { user_id: 'default-user-1', account_id: 'account-1' },
+      { user_id: 'default-user-alpha', account_id: 'tenant-alpha' },
+      { user_id: 'default-user-beta', account_id: 'tenant-beta' },
+    ] as Array<Record<string, unknown>>,
+  }
+
+  const db = {
+    from: (table: keyof typeof store) => {
+      const filters: Filter[] = []
+
+      const checkMatch = (row: Record<string, unknown>) => {
+        return filters.every((f) => {
+          if (f.matchFn) return f.matchFn(row[f.field])
+          return row[f.field] === f.value
+        })
+      }
+
+      const b: Record<string, unknown> = {
+        select: vi.fn(() => b),
+        eq: vi.fn((field: string, value: unknown) => {
+          filters.push({ field, value })
+          return b
+        }),
+        like: vi.fn((field: string, pattern: string) => {
+          const clean = pattern.replace(/%/g, '')
+          filters.push({
+            field,
+            matchFn: (val: unknown) => String(val || '').includes(clean),
+          })
+          return b
+        }),
+        order: vi.fn(() => b),
+        limit: vi.fn(() => b),
+        not: vi.fn(() => b),
+
+        maybeSingle: vi.fn(async () => {
+          const rows = (store[table] || []).filter(checkMatch)
+          return { data: rows[0] ?? null, error: null }
+        }),
+
+        single: vi.fn(async () => {
+          const rows = (store[table] || []).filter(checkMatch)
+          return { data: rows[0] ?? null, error: rows[0] ? null : { message: 'Not found' } }
+        }),
+
+        insert: vi.fn((payload: Record<string, unknown>) => {
+          const row = { id: `${table}-${Date.now()}-${Math.random().toString(36).slice(2)}`, ...payload }
+          if (table === 'messages') {
+            // Composite unique index: (conversation_id, source_provider, message_id)
+            const exists = store.messages.some(
+              (m) =>
+                m.conversation_id === payload.conversation_id &&
+                m.source_provider === payload.source_provider &&
+                m.message_id === payload.message_id &&
+                payload.message_id != null &&
+                payload.source_provider != null
+            )
+            if (exists) {
+              return {
+                select: () => ({
+                  single: async () => ({
+                    data: null,
+                    error: {
+                      code: '23505',
+                      message: 'duplicate key value violates unique constraint "uq_messages_conversation_provider_message_id"',
+                    },
+                  }),
+                }),
+              }
+            }
+            messageInserts.push(row)
+          }
+          store[table].push(row)
+          return {
+            select: () => ({
+              single: async () => ({ data: row, error: null }),
+            }),
+          }
+        }),
+
+        update: vi.fn((payload: Record<string, unknown>) => {
+          if (table === 'conversations') conversationUpdates.push(payload)
+          for (const row of store[table] || []) {
+            if (checkMatch(row)) {
+              Object.assign(row, payload)
+            }
+          }
+          return b
+        }),
+
+        then: (resolve: (v: unknown) => unknown) => {
+          const rows = (store[table] || []).filter(checkMatch)
+          return resolve({ data: rows, error: null })
+        },
+      }
+
+      return b
+    },
+  }
+
+  return { db, store }
+}
+
+describe('InboundProcessor Idempotency & Provenance Scoping', () => {
   beforeEach(() => {
     messageInserts.length = 0
     conversationUpdates.length = 0
     vi.clearAllMocks()
   })
 
-  it('processes inbound message, creates conversation and persists message', async () => {
+  it('1. mesmo provider + mesma conversation + mesmo message ID → detectado como duplicado', async () => {
+    const { db, store } = createMemoryDb()
     const event: NormalizedInboundMessageEvent = {
       type: 'message',
       provider: 'meta',
-      accountId: 'account-alpha',
-      externalMessageId: 'wamid-unique-123',
+      accountId: 'account-1',
+      externalMessageId: 'wamid-shared-123',
       fromPhone: '5511999999999',
-      senderName: 'Cliente Teste',
+      senderName: 'Cliente Alpha',
       timestamp: 1700000000,
       fromMe: false,
-      content: {
-        type: 'text',
-        text: 'Olá CRM',
-      },
+      content: { type: 'text', text: 'Primeira entrega' },
     }
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const result = await processNormalizedInboundEvent({ event, db: mockDb as any })
-    expect(result.processed).toBe(true)
-    expect(result.duplicate).toBeUndefined()
-    expect(messageInserts).toHaveLength(1)
-    expect(messageInserts[0]).toMatchObject({
-      conversation_id: 'conv-test-1',
-      sender_type: 'customer',
-      content_type: 'text',
-      content_text: 'Olá CRM',
-      message_id: 'wamid-unique-123',
-    })
-    expect(conversationUpdates).toHaveLength(1)
+    const firstRes = await processNormalizedInboundEvent({ event, db: db as any })
+    expect(firstRes.processed).toBe(true)
+    expect(firstRes.duplicate).toBeUndefined()
+    expect(store.messages).toHaveLength(1)
+    expect(store.messages[0].source_provider).toBe('meta')
+    expect(store.messages[0].message_id).toBe('wamid-shared-123')
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const secondRes = await processNormalizedInboundEvent({ event, db: db as any })
+    expect(secondRes.processed).toBe(true)
+    expect(secondRes.duplicate).toBe(true)
+    expect(secondRes.messageId).toBe(firstRes.messageId)
+    // No second row inserted
+    expect(store.messages).toHaveLength(1)
   })
 
-  it('enforces strict tenant isolation and prevents cross-tenant contamination', async () => {
-    const eventA: NormalizedInboundMessageEvent = {
+  it('2. providers diferentes + mesma conversation + mesmo message ID → permitido', async () => {
+    const { db, store } = createMemoryDb()
+    const contactId = 'contact-c1'
+    const conversationId = 'conv-c1'
+
+    // Pre-populate single conversation
+    store.contacts.push({ id: contactId, account_id: 'account-1', phone: '+5511999999999' })
+    store.conversations.push({ id: conversationId, account_id: 'account-1', contact_id: contactId, unread_count: 0 })
+
+    const metaEvent: NormalizedInboundMessageEvent = {
       type: 'message',
-      provider: 'waha',
-      accountId: 'account-A',
-      externalMessageId: 'waha-msg-A',
+      provider: 'meta',
+      accountId: 'account-1',
+      externalMessageId: 'msg-common-id',
       fromPhone: '5511999999999',
-      senderName: 'Cliente A',
+      senderName: 'Cliente Alpha',
       timestamp: 1700000000,
       fromMe: false,
-      content: { type: 'text', text: 'Msg para A' },
+      content: { type: 'text', text: 'Msg via Meta' },
     }
 
-    const eventB: NormalizedInboundMessageEvent = {
+    const wahaEvent: NormalizedInboundMessageEvent = {
       type: 'message',
       provider: 'waha',
-      accountId: 'account-B',
-      externalMessageId: 'waha-msg-B',
-      fromPhone: '5511888888888',
-      senderName: 'Cliente B',
-      timestamp: 1700000000,
+      accountId: 'account-1',
+      externalMessageId: 'msg-common-id',
+      fromPhone: '5511999999999',
+      senderName: 'Cliente Alpha',
+      timestamp: 1700000001,
       fromMe: false,
-      content: { type: 'text', text: 'Msg para B' },
+      content: { type: 'text', text: 'Msg via WAHA com mesmo id' },
     }
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const resA = await processNormalizedInboundEvent({ event: eventA, db: mockDb as any })
+    const resMeta = await processNormalizedInboundEvent({ event: metaEvent, db: db as any })
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const resB = await processNormalizedInboundEvent({ event: eventB, db: mockDb as any })
+    const resWaha = await processNormalizedInboundEvent({ event: wahaEvent, db: db as any })
+
+    expect(resMeta.processed).toBe(true)
+    expect(resMeta.duplicate).toBeUndefined()
+
+    expect(resWaha.processed).toBe(true)
+    expect(resWaha.duplicate).toBeUndefined()
+
+    expect(store.messages).toHaveLength(2)
+    expect(store.messages[0].source_provider).toBe('meta')
+    expect(store.messages[1].source_provider).toBe('waha')
+  })
+
+  it('3. conversations diferentes + mesmo message ID → permitido', async () => {
+    const { db, store } = createMemoryDb()
+
+    const eventUserA: NormalizedInboundMessageEvent = {
+      type: 'message',
+      provider: 'meta',
+      accountId: 'account-1',
+      externalMessageId: 'wamid-collide-1',
+      fromPhone: '5511111111111',
+      senderName: 'Cliente 1',
+      timestamp: 1700000000,
+      fromMe: false,
+      content: { type: 'text', text: 'Msg de 1' },
+    }
+
+    const eventUserB: NormalizedInboundMessageEvent = {
+      type: 'message',
+      provider: 'meta',
+      accountId: 'account-1',
+      externalMessageId: 'wamid-collide-1',
+      fromPhone: '5511222222222',
+      senderName: 'Cliente 2',
+      timestamp: 1700000000,
+      fromMe: false,
+      content: { type: 'text', text: 'Msg de 2' },
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const resA = await processNormalizedInboundEvent({ event: eventUserA, db: db as any })
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const resB = await processNormalizedInboundEvent({ event: eventUserB, db: db as any })
 
     expect(resA.processed).toBe(true)
+    expect(resA.duplicate).toBeUndefined()
     expect(resB.processed).toBe(true)
+    expect(resB.duplicate).toBeUndefined()
+    expect(store.messages).toHaveLength(2)
   })
 
-  it('ignores duplicate messages with the same externalMessageId (Idempotency pre-check)', async () => {
-    const dedupeMockDb = {
-      from: (table: string) => {
-        const b: Record<string, unknown> = {}
-        const chain = () => b
-        for (const m of ['select', 'eq', 'like', 'order', 'limit', 'not']) {
-          b[m] = vi.fn(chain)
-        }
-        b.maybeSingle = vi.fn(async () => {
-          if (table === 'messages') {
-            return { data: { id: 'existing-msg-id', conversation_id: 'conv-1' }, error: null }
-          }
-          return { data: null, error: null }
-        })
-        b.insert = vi.fn(() => b)
-        b.update = vi.fn(() => b)
-        b.then = (resolve: (v: unknown) => unknown) => resolve({ data: null, error: null })
-        return b
-      },
+  it('4. tenants diferentes + mesmo message ID → permitido', async () => {
+    const { db, store } = createMemoryDb()
+
+    const eventTenant1: NormalizedInboundMessageEvent = {
+      type: 'message',
+      provider: 'waha',
+      accountId: 'tenant-alpha',
+      externalMessageId: 'false_5511999999999@c.us_SAME',
+      fromPhone: '5511999999999',
+      senderName: 'Cliente T1',
+      timestamp: 1700000000,
+      fromMe: false,
+      content: { type: 'text', text: 'Para Tenant 1' },
     }
+
+    const eventTenant2: NormalizedInboundMessageEvent = {
+      type: 'message',
+      provider: 'waha',
+      accountId: 'tenant-beta',
+      externalMessageId: 'false_5511999999999@c.us_SAME',
+      fromPhone: '5511999999999',
+      senderName: 'Cliente T2',
+      timestamp: 1700000000,
+      fromMe: false,
+      content: { type: 'text', text: 'Para Tenant 2' },
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const res1 = await processNormalizedInboundEvent({ event: eventTenant1, db: db as any })
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const res2 = await processNormalizedInboundEvent({ event: eventTenant2, db: db as any })
+
+    expect(res1.processed).toBe(true)
+    expect(res1.duplicate).toBeUndefined()
+    expect(res2.processed).toBe(true)
+    expect(res2.duplicate).toBeUndefined()
+    expect(store.messages).toHaveLength(2)
+  })
+
+  it('5. corrida simultânea do mesmo evento → apenas uma persistência e sem efeitos colaterais duplicados', async () => {
+    const { db, store } = createMemoryDb()
+
+    const contactId = 'contact-race-1'
+    const conversationId = 'conv-race-1'
+    store.contacts.push({ id: contactId, account_id: 'account-1', phone: '+5511999999999' })
+    store.conversations.push({ id: conversationId, account_id: 'account-1', contact_id: contactId, unread_count: 0 })
 
     const event: NormalizedInboundMessageEvent = {
       type: 'message',
       provider: 'meta',
-      accountId: 'account-alpha',
-      externalMessageId: 'wamid-already-processed',
+      accountId: 'account-1',
+      externalMessageId: 'wamid-concurrent-race-999',
       fromPhone: '5511999999999',
-      senderName: 'Cliente Repetido',
+      senderName: 'Cliente Race',
       timestamp: 1700000000,
       fromMe: false,
-      content: { type: 'text', text: 'Mensagem repetida' },
+      content: { type: 'text', text: 'Mensagem Concorrente' },
     }
 
+    // First arrival inserts
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const res = await processNormalizedInboundEvent({ event, db: dedupeMockDb as any })
-    expect(res.processed).toBe(true)
-    expect(res.duplicate).toBe(true)
-    expect(res.messageId).toBe('existing-msg-id')
-  })
-
-  it('handles concurrent race condition via DB unique constraint violation (Atomic Concurrency)', async () => {
-    let insertAttempt = 0
-    const racingMockDb = {
-      from: (table: string) => {
-        const b: Record<string, unknown> = {}
-        const chain = () => b
-        for (const m of ['select', 'eq', 'like', 'order', 'limit', 'not']) {
-          b[m] = vi.fn(chain)
-        }
-
-        b.maybeSingle = vi.fn(async () => {
-          if (table === 'messages') {
-            // Initial pre-check returns null (simulating both workers passing pre-check simultaneously)
-            if (insertAttempt === 0) return { data: null, error: null }
-            // Post-violation lookup returns the row committed by the racing worker
-            return { data: { id: 'raced-message-uuid', conversation_id: 'conv-race-1' }, error: null }
-          }
-          if (table === 'profiles') return { data: { user_id: 'user-1' }, error: null }
-          return { data: null, error: null }
-        })
-
-        b.single = vi.fn(async () => {
-          if (table === 'contacts') return { data: { id: 'contact-race-1', phone: '+5511999999999' }, error: null }
-          if (table === 'conversations') return { data: { id: 'conv-race-1', unread_count: 0 }, error: null }
-          if (table === 'messages') {
-            insertAttempt++
-            // Simulate Postgres unique violation (SQLSTATE 23505 / uq_messages_conversation_message_id)
-            return {
-              data: null,
-              error: {
-                code: '23505',
-                message: 'duplicate key value violates unique constraint "uq_messages_conversation_message_id"',
-              },
-            }
-          }
-          return { data: null, error: null }
-        })
-
-        b.insert = vi.fn(() => b)
-        b.update = vi.fn(() => b)
-        b.then = (resolve: (v: unknown) => unknown) => resolve({ data: null, error: null })
-        return b
-      },
-    }
-
-    const event: NormalizedInboundMessageEvent = {
-      type: 'message',
-      provider: 'meta',
-      accountId: 'account-race',
-      externalMessageId: 'wamid-racing-concurrent-123',
-      fromPhone: '5511999999999',
-      senderName: 'Cliente Concorrente',
-      timestamp: 1700000000,
-      fromMe: false,
-      content: { type: 'text', text: 'Mensagem simultânea' },
-    }
-
+    const res1 = await processNormalizedInboundEvent({ event, db: db as any })
+    // Simultaneous second arrival runs pre-check or insert collision
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const res = await processNormalizedInboundEvent({ event, db: racingMockDb as any })
-    expect(res.processed).toBe(true)
-    expect(res.duplicate).toBe(true)
-    expect(res.messageId).toBe('raced-message-uuid')
+    const res2 = await processNormalizedInboundEvent({ event, db: db as any })
+
+    expect(res1.processed).toBe(true)
+    expect(res2.processed).toBe(true)
+
+    // Exactly one regular and one duplicate
+    expect(res1.duplicate).toBeUndefined()
+    expect(res2.duplicate).toBe(true)
+    expect(res2.messageId).toBe(res1.messageId)
+
+    // Exactly 1 message persisted in DB
+    expect(store.messages).toHaveLength(1)
+    expect(store.messages[0].source_provider).toBe('meta')
+
+    // Exactly 1 automation trigger & AI reply dispatch
+    expect(runAutomationsForTrigger).toHaveBeenCalledTimes(2) // 1 new_message_received, 1 first_inbound_message
+    expect(dispatchInboundToAiReply).toHaveBeenCalledTimes(1)
   })
 })

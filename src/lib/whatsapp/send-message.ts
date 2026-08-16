@@ -493,6 +493,7 @@ export async function sendMessageToConversation(
       media_url: mediaUrl || null,
       template_name: templateName || null,
       message_id: waMessageId,
+      source_provider: whatsappProvider.type,
       status: 'sent',
       reply_to_message_id: replyToMessageId || null,
     })

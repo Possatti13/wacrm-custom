@@ -252,6 +252,8 @@ export interface Message {
    * badge in the inbox. Migration 033.
    */
   ai_generated?: boolean;
+  /** Provenance of an external message (e.g. 'meta' | 'waha'). Migration 041. */
+  source_provider?: string;
 }
 
 export type ReactionActor = 'customer' | 'agent';
