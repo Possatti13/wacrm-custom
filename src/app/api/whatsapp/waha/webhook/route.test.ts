@@ -33,6 +33,9 @@ vi.mock('@supabase/supabase-js', () => ({
         if (table === 'conversations') {
           return { data: { id: 'conv-1', unread_count: 0 }, error: null }
         }
+        if (table === 'messages') {
+          return { data: { id: 'msg-1' }, error: null }
+        }
         return { data: null, error: null }
       })
       b.then = (resolve: (v: unknown) => unknown) =>
