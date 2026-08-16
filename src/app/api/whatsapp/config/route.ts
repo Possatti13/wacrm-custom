@@ -7,6 +7,7 @@ import {
   verifyPhoneNumber,
 } from '@/lib/whatsapp/meta-api'
 import { encrypt, decrypt } from '@/lib/whatsapp/encryption'
+import { ensureWahaSession, getWahaSession } from '@/lib/whatsapp/waha-api'
 
 /**
  * Resolve the caller's account_id from their profile. Inlined here
@@ -87,7 +88,7 @@ export async function GET() {
 
     const { data: config, error: configError } = await supabase
       .from('whatsapp_config')
-      .select('phone_number_id, access_token, status')
+      .select('provider, phone_number_id, access_token, status, waha_base_url, waha_session_name')
       .eq('account_id', accountId)
       .maybeSingle()
 
@@ -110,10 +111,21 @@ export async function GET() {
       )
     }
 
-    // Try to decrypt the stored token with the current ENCRYPTION_KEY.
+    // Try to decrypt the stored provider secret with the current ENCRYPTION_KEY.
     // If this fails, the key changed (or was never consistent across envs).
     let accessToken: string
     try {
+      if (!config.access_token) {
+        return NextResponse.json(
+          {
+            connected: false,
+            reason: 'token_missing',
+            needs_reset: true,
+            message: 'The saved WhatsApp provider is missing its token/API key. Reset and re-save the configuration.',
+          },
+          { status: 200 }
+        )
+      }
       accessToken = decrypt(config.access_token)
     } catch (err) {
       console.error('[whatsapp/config GET] Token decryption failed:', err)
@@ -127,6 +139,47 @@ export async function GET() {
         },
         { status: 200 }
       )
+    }
+
+    if ((config.provider ?? 'meta') === 'waha') {
+      if (!config.waha_base_url || !config.waha_session_name) {
+        return NextResponse.json(
+          {
+            connected: false,
+            provider: 'waha',
+            reason: 'waha_missing_fields',
+            message: 'WAHA base URL/session is missing. Re-save the WAHA configuration.',
+          },
+          { status: 200 }
+        )
+      }
+      try {
+        const session = await getWahaSession({
+          baseUrl: config.waha_base_url,
+          apiKey: accessToken,
+          session: config.waha_session_name,
+        })
+        return NextResponse.json({
+          connected: session.status === 'WORKING',
+          provider: 'waha',
+          session,
+          message: session.status === 'WORKING'
+            ? 'WAHA session is connected.'
+            : `WAHA session status: ${session.status}`,
+        })
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown WAHA API error'
+        console.error('[whatsapp/config GET] WAHA verification failed:', message)
+        return NextResponse.json(
+          {
+            connected: false,
+            provider: 'waha',
+            reason: 'waha_api_error',
+            message: `WAHA rejected the configuration: ${message}`,
+          },
+          { status: 200 }
+        )
+      }
     }
 
     // Validate credentials against Meta
@@ -185,7 +238,106 @@ export async function POST(request: Request) {
     }
 
     const body = await request.json()
-    const { phone_number_id, waba_id, access_token, verify_token, pin } = body
+    const {
+      provider = 'meta',
+      phone_number_id,
+      waba_id,
+      access_token,
+      verify_token,
+      pin,
+      waha_base_url,
+      waha_api_key,
+      waha_session_name,
+    } = body
+
+    if (provider === 'waha') {
+      if (!waha_base_url || !waha_api_key || !waha_session_name) {
+        return NextResponse.json(
+          { error: 'waha_base_url, waha_api_key and waha_session_name are required' },
+          { status: 400 }
+        )
+      }
+
+      let encryptedApiKey: string
+      try {
+        encryptedApiKey = encrypt(String(waha_api_key))
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown encryption error'
+        console.error('WAHA API key encryption failed:', message)
+        return NextResponse.json(
+          {
+            error:
+              'Failed to encrypt WAHA API key. Check that ENCRYPTION_KEY is a valid 64-character hex string.',
+          },
+          { status: 500 }
+        )
+      }
+
+      let session
+      try {
+        session = await ensureWahaSession({
+          baseUrl: String(waha_base_url),
+          apiKey: String(waha_api_key),
+          session: String(waha_session_name),
+        })
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown WAHA API error'
+        console.error('WAHA verification failed during save:', message)
+        return NextResponse.json(
+          { error: `WAHA API error: ${message}` },
+          { status: 400 }
+        )
+      }
+
+      const baseRow = {
+        provider: 'waha',
+        phone_number_id: null,
+        waba_id: null,
+        access_token: encryptedApiKey,
+        verify_token: null,
+        waha_base_url: String(waha_base_url).replace(/\/+$/, ''),
+        waha_session_name: String(waha_session_name),
+        status: session.status === 'WORKING' ? 'connected' : 'disconnected',
+        connected_at: session.status === 'WORKING' ? new Date().toISOString() : null,
+        registered_at: null,
+        subscribed_apps_at: null,
+        last_registration_error: null,
+        updated_at: new Date().toISOString(),
+      }
+
+      const { data: existing } = await supabase
+        .from('whatsapp_config')
+        .select('id')
+        .eq('account_id', accountId)
+        .maybeSingle()
+
+      if (existing) {
+        const { error: updateError } = await supabase
+          .from('whatsapp_config')
+          .update(baseRow)
+          .eq('account_id', accountId)
+        if (updateError) {
+          console.error('Error updating WAHA whatsapp_config:', updateError)
+          return NextResponse.json({ error: 'Failed to update WAHA configuration' }, { status: 500 })
+        }
+      } else {
+        const { error: insertError } = await supabase
+          .from('whatsapp_config')
+          .insert({ account_id: accountId, user_id: user.id, ...baseRow })
+        if (insertError) {
+          console.error('Error inserting WAHA whatsapp_config:', insertError)
+          return NextResponse.json({ error: 'Failed to save WAHA configuration' }, { status: 500 })
+        }
+      }
+
+      return NextResponse.json({
+        success: true,
+        saved: true,
+        provider: 'waha',
+        connected: session.status === 'WORKING',
+        session,
+      })
+    }
 
     if (!access_token || !phone_number_id) {
       return NextResponse.json(

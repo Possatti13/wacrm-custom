@@ -16,6 +16,7 @@ import {
   isRecipientNotAllowedError,
 } from '@/lib/whatsapp/phone-utils'
 import { supabaseAdmin } from './admin-client'
+import { sendWahaTextMessage } from '@/lib/whatsapp/waha-api'
 
 // ------------------------------------------------------------
 // Flows-side Meta sender (interactive variants).
@@ -92,6 +93,67 @@ export async function engineSendText(
   }
 
   const accessToken = decrypt(config.access_token)
+
+  if (config.provider === 'waha') {
+    if (!config.waha_base_url || !config.waha_session_name) {
+      throw new Error('WAHA base URL/session is missing')
+    }
+
+    let recipient = sanitized
+    try {
+      const { data: lastInbound } = await db
+        .from('messages')
+        .select('message_id')
+        .eq('conversation_id', args.conversationId)
+        .eq('sender_type', 'customer')
+        .not('message_id', 'is', null)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+
+      const rawMessageId = lastInbound?.message_id as string | null | undefined
+      const match = rawMessageId?.match(/^(?:true|false)_([^_]+)_.+$/)
+      if (match?.[1]?.includes('@')) {
+        recipient = match[1]
+      }
+    } catch (err) {
+      console.warn('[flows] Could not resolve WAHA chat id from history:', err)
+    }
+
+    const waMessageId = await sendWahaTextMessage(
+      {
+        baseUrl: config.waha_base_url,
+        apiKey: accessToken,
+        session: config.waha_session_name,
+      },
+      recipient,
+      args.text,
+    )
+
+    const { error: msgErr } = await db.from('messages').insert({
+      conversation_id: args.conversationId,
+      sender_type: 'bot',
+      content_type: 'text',
+      content_text: args.text,
+      message_id: waMessageId,
+      status: 'sent',
+      ai_generated: args.aiGenerated ?? false,
+    })
+    if (msgErr) {
+      throw new Error(`sent to WAHA but DB insert failed: ${msgErr.message}`)
+    }
+
+    await db
+      .from('conversations')
+      .update({
+        last_message_text: args.text,
+        last_message_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', args.conversationId)
+
+    return { whatsapp_message_id: waMessageId }
+  }
 
   const attempt = async (phone: string): Promise<string> => {
     const r = await sendTextMessage({

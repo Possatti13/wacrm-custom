@@ -41,11 +41,13 @@ const HANDOFF_QUEUE = '__queue__';
 const PROVIDER_LABEL: Record<AiProvider, string> = {
   openai: 'OpenAI',
   anthropic: 'Anthropic (Claude)',
+  xai: 'Grok / xAI',
 };
 
 const KEY_PLACEHOLDER: Record<AiProvider, string> = {
   openai: 'sk-...',
   anthropic: 'sk-ant-...',
+  xai: 'xai-...',
 };
 
 export function AiConfig() {
@@ -278,6 +280,7 @@ export function AiConfig() {
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="openai">{PROVIDER_LABEL.openai}</SelectItem>
+                    <SelectItem value="xai">{PROVIDER_LABEL.xai}</SelectItem>
                     <SelectItem value="anthropic">
                       {PROVIDER_LABEL.anthropic}
                     </SelectItem>
@@ -299,6 +302,9 @@ export function AiConfig() {
 
             <div className="space-y-2">
               <Label htmlFor="ai-key">{t('apiKey')}</Label>
+              <p className="rounded-md border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+                OAuth direto para OpenAI/xAI ainda não está ligado aqui. Para uso real da API, o modo estável é chave do provedor. Quando tivermos app OAuth oficial/credenciais de callback, este painel pode ganhar “Conectar conta”.
+              </p>
               <div className="flex gap-2">
                 <div className="relative flex-1">
                   <Input

@@ -44,6 +44,7 @@ import {
 } from '@/lib/whatsapp/phone-utils';
 import type { MessageTemplate } from '@/types';
 import { isMessageTemplate } from '@/lib/whatsapp/template-row-guard';
+import { sendWahaMediaMessage, sendWahaTextMessage } from '@/lib/whatsapp/waha-api';
 
 export const MEDIA_KINDS = ['image', 'video', 'document', 'audio'] as const;
 export const VALID_MESSAGE_TYPES = [
@@ -262,10 +263,21 @@ export async function sendMessageToConversation(
     );
   }
 
-  const accessToken = decrypt(config.access_token);
+  const provider = config.provider ?? 'meta';
+  const encryptedToken = config.access_token as string | null | undefined;
+
+  if (!encryptedToken) {
+    throw new SendMessageError(
+      'whatsapp_not_configured',
+      'WhatsApp provider token/API key is missing. Please reconnect WhatsApp in Settings.',
+      400
+    );
+  }
+
+  const accessToken = decrypt(encryptedToken);
 
   // Self-heal legacy CBC ciphertexts. Fire-and-forget; idempotent.
-  if (isLegacyFormat(config.access_token)) {
+  if (isLegacyFormat(encryptedToken)) {
     void db
       .from('whatsapp_config')
       .update({ access_token: encrypt(accessToken) })
@@ -278,6 +290,108 @@ export async function sendMessageToConversation(
           );
         }
       });
+  }
+
+  if (provider === 'waha') {
+    const supportedWahaMedia = messageType === 'image' || messageType === 'document';
+    if (messageType !== 'text' && !supportedWahaMedia) {
+      throw new SendMessageError(
+        'unsupported_provider_message_type',
+        'WAHA agora envia texto, imagem e documento pelo inbox. Vídeo, áudio, templates e mensagens interativas ainda ficam para a próxima etapa.',
+        400
+      );
+    }
+    if (!config.waha_base_url || !config.waha_session_name) {
+      throw new SendMessageError(
+        'whatsapp_not_configured',
+        'WAHA base URL/session is missing. Re-save the WAHA configuration.',
+        400
+      );
+    }
+
+    let recipient = sanitizedPhone;
+    try {
+      const { data: lastInbound } = await db
+        .from('messages')
+        .select('message_id')
+        .eq('conversation_id', conversationId)
+        .eq('sender_type', 'customer')
+        .not('message_id', 'is', null)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      const rawMessageId = lastInbound?.message_id as string | null | undefined;
+      const match = rawMessageId?.match(/^(?:true|false)_([^_]+)_.+$/);
+      if (match?.[1]?.includes('@')) {
+        recipient = match[1];
+      }
+    } catch (err) {
+      console.warn('[send-message] Could not resolve WAHA chat id from history:', err);
+    }
+
+    let waMessageId = '';
+    try {
+      const wahaConfig = {
+        baseUrl: config.waha_base_url,
+        apiKey: accessToken,
+        session: config.waha_session_name,
+      };
+
+      if (messageType === 'text') {
+        waMessageId = await sendWahaTextMessage(wahaConfig, recipient, contentText!);
+      } else {
+        waMessageId = await sendWahaMediaMessage(wahaConfig, recipient, {
+          kind: messageType as 'image' | 'document',
+          mediaUrl: mediaUrl!,
+          caption: contentText || undefined,
+          filename: filename || undefined,
+        });
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unknown WAHA API error';
+      console.error('[send-message] WAHA send failed:', message);
+      throw new SendMessageError('waha_error', `WAHA API error: ${message}`, 502);
+    }
+
+    const { data: messageRecord, error: msgError } = await db
+      .from('messages')
+      .insert({
+        conversation_id: conversationId,
+        sender_type: 'agent',
+        content_type: messageType,
+        content_text: contentText ?? null,
+        media_url: mediaUrl || null,
+        template_name: null,
+        message_id: waMessageId,
+        status: 'sent',
+        reply_to_message_id: replyToMessageId || null,
+      })
+      .select()
+      .single();
+
+    if (msgError) {
+      console.error('[send-message] error inserting WAHA sent message:', msgError);
+      throw new SendMessageError(
+        'db_error',
+        `Message sent through WAHA but failed to save to DB: ${msgError.message}`,
+        500
+      );
+    }
+
+    await db
+      .from('conversations')
+      .update({
+        last_message_text: contentText || `[${messageType}]`,
+        last_message_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', conversationId);
+
+    return {
+      messageId: messageRecord.id,
+      whatsappMessageId: waMessageId,
+    };
   }
 
   // Resolve the reply target to its Meta message_id. The parent must

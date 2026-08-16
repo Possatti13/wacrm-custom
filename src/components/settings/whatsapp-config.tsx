@@ -12,7 +12,10 @@ import {
   ExternalLink,
   Zap,
   AlertTriangle,
+  QrCode,
+  RefreshCw,
   RotateCcw,
+  Smartphone,
 } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
 import { useAuth } from '@/hooks/use-auth';
@@ -35,6 +38,17 @@ const MASKED_TOKEN = '••••••••••••••••';
 
 type ConnectionStatus = 'connected' | 'disconnected' | 'unknown';
 type ResetReason = 'token_corrupted' | 'meta_api_error' | null;
+
+interface WahaSessionState {
+  provider: 'waha';
+  connected: boolean;
+  session?: {
+    name: string;
+    status: string;
+    me?: { id?: string; pushName?: string } | null;
+  };
+  error?: string;
+}
 
 export function WhatsAppConfig() {
   const t = useTranslations('Settings.whatsapp');
@@ -386,6 +400,19 @@ export function WhatsAppConfig() {
   }
 
   const showResetBanner = resetReason === 'token_corrupted';
+
+  if (config?.provider === 'waha') {
+    return (
+      <WahaConnectionPanel
+        config={config}
+        onReset={handleReset}
+        resetting={resetting}
+        onReload={async () => {
+          if (accountId) await fetchConfig(accountId);
+        }}
+      />
+    );
+  }
 
   return (
     <section className="animate-in fade-in-50 duration-200">
@@ -838,3 +865,267 @@ export function WhatsAppConfig() {
     </section>
   );
 }
+
+function WahaConnectionPanel({
+  config,
+  onReset,
+  resetting,
+  onReload,
+}: {
+  config: WhatsAppConfigType;
+  onReset: () => void;
+  resetting: boolean;
+  onReload: () => void | Promise<void>;
+}) {
+  const [sessionState, setSessionState] = useState<WahaSessionState | null>(null);
+  const [loadingStatus, setLoadingStatus] = useState(true);
+  const [starting, setStarting] = useState(false);
+  const [qrVersion, setQrVersion] = useState(0);
+  const [qrError, setQrError] = useState<string | null>(null);
+
+  const sessionStatus = sessionState?.session?.status ?? 'UNKNOWN';
+  const connected = sessionState?.connected || sessionStatus === 'WORKING';
+  const displayName =
+    sessionState?.session?.me?.pushName ||
+    sessionState?.session?.me?.id ||
+    config.waha_session_name ||
+    'WhatsApp';
+
+  const loadStatus = useCallback(async () => {
+    setLoadingStatus(true);
+    try {
+      const res = await fetch('/api/whatsapp/waha/session', { cache: 'no-store' });
+      const data = (await res.json().catch(() => ({}))) as WahaSessionState;
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      setSessionState(data);
+      if (data.connected || data.session?.status === 'WORKING') {
+        setQrError(null);
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Erro ao consultar sessão WAHA';
+      setSessionState({ provider: 'waha', connected: false, error: message });
+    } finally {
+      setLoadingStatus(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadStatus();
+    const timer = window.setInterval(() => {
+      void loadStatus();
+    }, 5000);
+    return () => window.clearInterval(timer);
+  }, [loadStatus]);
+
+  async function handleStartSession() {
+    setStarting(true);
+    setQrError(null);
+    try {
+      const res = await fetch('/api/whatsapp/waha/session', { method: 'POST' });
+      const data = (await res.json().catch(() => ({}))) as WahaSessionState;
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      setSessionState(data);
+      setQrVersion((v) => v + 1);
+      toast.success(data.connected ? 'WhatsApp conectado.' : 'Sessão iniciada. Escaneie o QR Code abaixo.');
+      await onReload();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Não foi possível iniciar a sessão WAHA';
+      toast.error(message);
+    } finally {
+      setStarting(false);
+      void loadStatus();
+    }
+  }
+
+  function refreshQr() {
+    setQrError(null);
+    setQrVersion((v) => v + 1);
+    void loadStatus();
+  }
+
+  return (
+    <section className="animate-in fade-in-50 duration-200">
+      <SettingsPanelHead
+        title="Conexão WhatsApp"
+        description="Conecte o WhatsApp do cliente pelo QR Code e acompanhe o status da sessão WAHA."
+      />
+
+      <div className="grid gap-6 lg:grid-cols-[1fr_380px]">
+        <div className="space-y-6">
+          <Alert
+            className={
+              connected
+                ? 'border-emerald-700/50 bg-emerald-950/30'
+                : 'border-amber-700/50 bg-amber-950/30'
+            }
+          >
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="flex gap-3">
+                <div
+                  className={
+                    'mt-0.5 flex size-10 items-center justify-center rounded-xl ' +
+                    (connected ? 'bg-emerald-500/15 text-emerald-300' : 'bg-amber-500/15 text-amber-300')
+                  }
+                >
+                  {connected ? <CheckCircle2 className="size-5" /> : <QrCode className="size-5" />}
+                </div>
+                <div>
+                  <AlertTitle className={connected ? 'text-emerald-100' : 'text-amber-100'}>
+                    {connected ? 'WhatsApp conectado' : 'Escaneie o QR Code para conectar'}
+                  </AlertTitle>
+                  <AlertDescription className="mt-1 text-sm text-muted-foreground">
+                    {connected
+                      ? `${displayName} está online e pronto para receber/enviar mensagens.`
+                      : 'Abra o WhatsApp no celular do cliente e escaneie o QR Code exibido abaixo.'}
+                  </AlertDescription>
+                </div>
+              </div>
+
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={loadStatus}
+                disabled={loadingStatus}
+                className="border-border bg-transparent"
+              >
+                {loadingStatus ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
+                Atualizar
+              </Button>
+            </div>
+          </Alert>
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-foreground">
+                <QrCode className="size-5 text-primary" />
+                QR Code de conexão
+              </CardTitle>
+              <CardDescription>
+                Este é o jeito mais simples para conectar o WhatsApp do cliente nesta instalação.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-5">
+              {connected ? (
+                <div className="rounded-2xl border border-emerald-700/40 bg-emerald-950/20 p-6 text-center">
+                  <CheckCircle2 className="mx-auto size-12 text-emerald-300" />
+                  <h3 className="mt-3 text-base font-semibold text-foreground">Sessão conectada</h3>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    Não precisa escanear QR Code enquanto a sessão estiver conectada.
+                  </p>
+                </div>
+              ) : (
+                <div className="grid gap-5 md:grid-cols-[280px_1fr]">
+                  <div className="flex min-h-[280px] items-center justify-center rounded-2xl border border-dashed border-border bg-muted/40 p-4">
+                    {qrError ? (
+                      <div className="text-center">
+                        <AlertTriangle className="mx-auto size-10 text-amber-400" />
+                        <p className="mt-2 text-sm font-medium text-foreground">QR indisponível</p>
+                        <p className="mt-1 text-xs text-muted-foreground">{qrError}</p>
+                      </div>
+                    ) : (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        key={qrVersion}
+                        src={`/api/whatsapp/waha/qr?v=${qrVersion}`}
+                        alt="QR Code para conectar WhatsApp"
+                        className="h-64 w-64 rounded-xl bg-white object-contain p-3 shadow-sm"
+                        onError={() => setQrError('Clique em “Iniciar ou renovar QR” e aguarde alguns segundos.')}
+                      />
+                    )}
+                  </div>
+
+                  <div className="space-y-4">
+                    <div className="rounded-xl border border-border bg-card p-4">
+                      <h3 className="font-semibold text-foreground">Como conectar</h3>
+                      <ol className="mt-3 space-y-2 text-sm text-muted-foreground">
+                        <li className="flex gap-2"><span className="font-semibold text-primary">1.</span> Abra o WhatsApp no celular do cliente.</li>
+                        <li className="flex gap-2"><span className="font-semibold text-primary">2.</span> Toque em Aparelhos conectados.</li>
+                        <li className="flex gap-2"><span className="font-semibold text-primary">3.</span> Toque em Conectar aparelho.</li>
+                        <li className="flex gap-2"><span className="font-semibold text-primary">4.</span> Aponte a câmera para este QR Code.</li>
+                      </ol>
+                    </div>
+
+                    <div className="flex flex-wrap gap-2">
+                      <Button onClick={handleStartSession} disabled={starting}>
+                        {starting ? <Loader2 className="size-4 animate-spin" /> : <Smartphone className="size-4" />}
+                        Iniciar ou renovar QR
+                      </Button>
+                      <Button variant="outline" onClick={refreshQr}>
+                        <RefreshCw className="size-4" />
+                        Recarregar QR
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          <div className="flex flex-wrap gap-3">
+            <Button variant="outline" onClick={handleStartSession} disabled={starting}>
+              {starting ? <Loader2 className="size-4 animate-spin" /> : <Smartphone className="size-4" />}
+              {connected ? 'Reiniciar sessão' : 'Iniciar sessão'}
+            </Button>
+            <Button
+              variant="outline"
+              onClick={onReset}
+              disabled={resetting}
+              className="border-red-900 text-red-400 hover:bg-red-950/40 hover:text-red-300"
+            >
+              {resetting ? <Loader2 className="size-4 animate-spin" /> : <RotateCcw className="size-4" />}
+              Resetar configuração
+            </Button>
+          </div>
+        </div>
+
+        <div className="space-y-4">
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base text-foreground">Detalhes da sessão</CardTitle>
+              <CardDescription>Dados técnicos para conferência rápida.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3 text-sm">
+              <div className="flex justify-between gap-3">
+                <span className="text-muted-foreground">Provider</span>
+                <span className="font-medium text-foreground">WAHA</span>
+              </div>
+              <div className="flex justify-between gap-3">
+                <span className="text-muted-foreground">Sessão</span>
+                <code className="rounded bg-muted px-1.5 py-0.5 text-xs text-foreground">{config.waha_session_name}</code>
+              </div>
+              <div className="flex justify-between gap-3">
+                <span className="text-muted-foreground">Status</span>
+                <span className={connected ? 'font-medium text-emerald-400' : 'font-medium text-amber-400'}>
+                  {loadingStatus ? 'consultando...' : sessionStatus}
+                </span>
+              </div>
+              <div className="flex justify-between gap-3">
+                <span className="text-muted-foreground">WhatsApp</span>
+                <span className="text-right font-medium text-foreground">{displayName}</span>
+              </div>
+              {sessionState?.error && (
+                <div className="rounded-lg border border-red-900/60 bg-red-950/30 p-3 text-xs text-red-200">
+                  {sessionState.error}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base text-foreground">Checklist rápido</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <ul className="space-y-2 text-sm text-muted-foreground">
+                <li className="flex gap-2"><CheckCircle2 className="mt-0.5 size-4 text-primary" /> WAHA configurado nesta conta.</li>
+                <li className="flex gap-2"><CheckCircle2 className="mt-0.5 size-4 text-primary" /> Webhook configurado para receber mensagens.</li>
+                <li className="flex gap-2"><CheckCircle2 className="mt-0.5 size-4 text-primary" /> Depois de conectar, teste enviando uma mensagem para o número do cliente.</li>
+              </ul>
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+    </section>
+  );
+}
+

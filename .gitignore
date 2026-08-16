@@ -42,3 +42,11 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# local WAHA runtime data
+/waha-sessions/
+/waha-media/
+/waha-qr-*.png
+
+# local helper caches
+/scripts/.translate-cache-*.json

@@ -1,0 +1,20 @@
+services:
+  waha:
+    image: devlikeapro/waha:latest
+    container_name: wacrm-waha
+    restart: unless-stopped
+    ports:
+      - "3001:3000"
+    environment:
+      # Chave simples para proteger a API local do WAHA.
+      # Em produção, trocaremos por uma chave longa e secreta.
+      WAHA_API_KEY: "wacrm-local-dev-key"
+      # URL pública/base usada pelo WAHA para montar URLs e integrações.
+      # Localmente deixamos localhost; em produção troca para o domínio/subdomínio.
+      WAHA_BASE_URL: "http://localhost:3001"
+      # Mantém sessões em disco para não perder QR/login ao reiniciar o container.
+      WHATSAPP_DEFAULT_ENGINE: "WEBJS"
+      WHATSAPP_RESTART_ALL_SESSIONS: "True"
+    volumes:
+      - ./waha-sessions:/app/.sessions
+      - ./waha-media:/app/.media

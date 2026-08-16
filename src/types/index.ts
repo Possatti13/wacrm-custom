@@ -269,10 +269,13 @@ export interface MessageReaction {
 export interface WhatsAppConfig {
   id: string;
   user_id: string;
-  phone_number_id: string;
-  waba_id?: string;
-  access_token: string;
-  verify_token?: string;
+  provider?: 'meta' | 'waha';
+  phone_number_id?: string | null;
+  waba_id?: string | null;
+  access_token?: string | null;
+  verify_token?: string | null;
+  waha_base_url?: string | null;
+  waha_session_name?: string | null;
   status: 'connected' | 'disconnected';
   connected_at?: string;
   /**
