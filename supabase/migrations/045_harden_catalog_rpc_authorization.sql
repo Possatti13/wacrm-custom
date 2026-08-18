@@ -1,0 +1,230 @@
+-- ============================================================
+-- Migration 045: Harden Catalog RPC Authorization & Search Path
+--
+-- 1. Sets search_path = '' on all catalog transactional RPCs.
+-- 2. Fully schema-qualifies all table and function references.
+-- 3. Enforces strict caller authentication & tenant membership verification:
+--    - When called by an authenticated user (auth.uid() IS NOT NULL):
+--      requires minimum role 'agent' in p_account_id via is_account_member.
+--    - When called without auth.uid():
+--      strictly requires service_role / postgres context.
+-- ============================================================
+
+-- 1. create_catalog_item_with_terms (Hardened)
+CREATE OR REPLACE FUNCTION public.create_catalog_item_with_terms(
+  p_account_id UUID,
+  p_category_id UUID,
+  p_type TEXT,
+  p_name TEXT,
+  p_normalized_name TEXT,
+  p_description TEXT,
+  p_sku TEXT,
+  p_status TEXT,
+  p_sort_order INTEGER,
+  p_metadata JSONB,
+  p_aliases JSONB DEFAULT '[]'::jsonb
+) RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+  v_item_id UUID;
+  v_item_record RECORD;
+  v_alias_entry JSONB;
+  v_alias_text TEXT;
+  v_alias_norm TEXT;
+  v_terms JSONB := '[]'::jsonb;
+  v_term_record RECORD;
+BEGIN
+  -- 1. Authorization check: caller must belong to p_account_id with at least 'agent' role
+  IF auth.uid() IS NOT NULL THEN
+    IF NOT public.is_account_member(p_account_id, 'agent'::public.account_role_enum) THEN
+      RAISE EXCEPTION 'Forbidden: insufficient permissions for account %', p_account_id
+        USING ERRCODE = '42501';
+    END IF;
+  ELSE
+    -- Require service_role or internal postgres caller
+    IF current_user NOT IN ('service_role', 'postgres')
+       AND COALESCE(pg_catalog.current_setting('request.jwt.claim.role', true), '') <> 'service_role' THEN
+      RAISE EXCEPTION 'Unauthorized'
+        USING ERRCODE = '42501';
+    END IF;
+  END IF;
+
+  -- 2. If category_id provided, verify it belongs to same account
+  IF p_category_id IS NOT NULL THEN
+    IF NOT EXISTS (
+      SELECT 1 FROM public.catalog_categories
+      WHERE id = p_category_id AND account_id = p_account_id
+    ) THEN
+      RAISE EXCEPTION 'Category % not found in this account', p_category_id
+        USING ERRCODE = '23503';
+    END IF;
+  END IF;
+
+  -- 3. Insert item into catalog
+  INSERT INTO public.catalog_items (
+    account_id,
+    category_id,
+    type,
+    name,
+    description,
+    sku,
+    status,
+    sort_order,
+    metadata
+  ) VALUES (
+    p_account_id,
+    p_category_id,
+    p_type,
+    p_name,
+    p_description,
+    p_sku,
+    COALESCE(p_status, 'active'),
+    COALESCE(p_sort_order, 0),
+    COALESCE(p_metadata, '{}'::jsonb)
+  ) RETURNING * INTO v_item_record;
+
+  v_item_id := v_item_record.id;
+
+  -- 4. Atomically insert canonical term
+  INSERT INTO public.catalog_item_terms (
+    account_id,
+    catalog_item_id,
+    term,
+    normalized_term,
+    kind
+  ) VALUES (
+    p_account_id,
+    v_item_id,
+    p_name,
+    p_normalized_name,
+    'canonical'
+  ) RETURNING * INTO v_term_record;
+
+  v_terms := v_terms || pg_catalog.to_jsonb(v_term_record);
+
+  -- 5. Insert aliases if provided
+  IF p_aliases IS NOT NULL AND pg_catalog.jsonb_array_length(p_aliases) > 0 THEN
+    FOR v_alias_entry IN SELECT * FROM pg_catalog.jsonb_array_elements(p_aliases)
+    LOOP
+      v_alias_text := v_alias_entry->>'term';
+      v_alias_norm := v_alias_entry->>'normalized_term';
+      IF v_alias_text IS NOT NULL AND v_alias_norm IS NOT NULL AND pg_catalog.length(pg_catalog.btrim(v_alias_norm)) > 0 THEN
+        INSERT INTO public.catalog_item_terms (
+          account_id,
+          catalog_item_id,
+          term,
+          normalized_term,
+          kind
+        ) VALUES (
+          p_account_id,
+          v_item_id,
+          v_alias_text,
+          v_alias_norm,
+          'alias'
+        ) RETURNING * INTO v_term_record;
+
+        v_terms := v_terms || pg_catalog.to_jsonb(v_term_record);
+      END IF;
+    END LOOP;
+  END IF;
+
+  RETURN pg_catalog.jsonb_build_object(
+    'item', pg_catalog.to_jsonb(v_item_record),
+    'terms', v_terms
+  );
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.create_catalog_item_with_terms FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.create_catalog_item_with_terms TO authenticated, service_role;
+
+
+-- 2. update_catalog_item_with_canonical (Hardened)
+CREATE OR REPLACE FUNCTION public.update_catalog_item_with_canonical(
+  p_account_id UUID,
+  p_item_id UUID,
+  p_category_id UUID,
+  p_type TEXT,
+  p_name TEXT,
+  p_normalized_name TEXT,
+  p_description TEXT,
+  p_sku TEXT,
+  p_status TEXT,
+  p_sort_order INTEGER,
+  p_metadata JSONB,
+  p_update_name BOOLEAN DEFAULT false
+) RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+  v_item_record RECORD;
+BEGIN
+  -- 1. Authorization check: caller must belong to p_account_id with at least 'agent' role
+  IF auth.uid() IS NOT NULL THEN
+    IF NOT public.is_account_member(p_account_id, 'agent'::public.account_role_enum) THEN
+      RAISE EXCEPTION 'Forbidden: insufficient permissions for account %', p_account_id
+        USING ERRCODE = '42501';
+    END IF;
+  ELSE
+    -- Require service_role or internal postgres caller
+    IF current_user NOT IN ('service_role', 'postgres')
+       AND COALESCE(pg_catalog.current_setting('request.jwt.claim.role', true), '') <> 'service_role' THEN
+      RAISE EXCEPTION 'Unauthorized'
+        USING ERRCODE = '42501';
+    END IF;
+  END IF;
+
+  -- 2. If category_id provided, verify it belongs to same account
+  IF p_category_id IS NOT NULL THEN
+    IF NOT EXISTS (
+      SELECT 1 FROM public.catalog_categories
+      WHERE id = p_category_id AND account_id = p_account_id
+    ) THEN
+      RAISE EXCEPTION 'Category % not found in this account', p_category_id
+        USING ERRCODE = '23503';
+    END IF;
+  END IF;
+
+  -- 3. Update catalog item
+  UPDATE public.catalog_items
+  SET
+    category_id = p_category_id,
+    type = p_type,
+    name = p_name,
+    description = p_description,
+    sku = p_sku,
+    status = p_status,
+    sort_order = p_sort_order,
+    metadata = p_metadata,
+    updated_at = pg_catalog.now()
+  WHERE id = p_item_id AND account_id = p_account_id
+  RETURNING * INTO v_item_record;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Catalog item % not found in this account', p_item_id
+      USING ERRCODE = 'P0002';
+  END IF;
+
+  -- 4. If name changed, atomically update canonical term
+  IF p_update_name AND p_normalized_name IS NOT NULL THEN
+    UPDATE public.catalog_item_terms
+    SET
+      term = p_name,
+      normalized_term = p_normalized_name,
+      updated_at = pg_catalog.now()
+    WHERE catalog_item_id = p_item_id
+      AND account_id = p_account_id
+      AND kind = 'canonical';
+  END IF;
+
+  RETURN pg_catalog.to_jsonb(v_item_record);
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.update_catalog_item_with_canonical FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.update_catalog_item_with_canonical TO authenticated, service_role;
