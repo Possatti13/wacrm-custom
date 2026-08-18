@@ -1,9 +1,12 @@
-import { NextResponse } from 'next/server'
+import { NextResponse, after } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { decrypt } from '@/lib/whatsapp/encryption'
 import { verifyWahaWebhookSignature } from '@/lib/whatsapp/waha-signature'
 import { normalizeWahaInbound } from '@/lib/whatsapp/providers/waha/normalize-inbound'
-import { processNormalizedInboundEvent } from '@/lib/whatsapp/inbound/processor'
+import { enqueueWhatsAppInboundEvent } from '@/lib/jobs/producer'
+import { processWhatsAppInboundBatch } from '@/lib/jobs/workers/whatsapp-inbound-worker'
+
+export const maxDuration = 60
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let _adminClient: any = null
@@ -86,20 +89,26 @@ export async function POST(request: Request) {
     return NextResponse.json({ status: 'ignored', reason: 'unknown_or_empty_event' })
   }
 
-  // 4. Process normalized event through unified processor
-  const result = await processNormalizedInboundEvent({
-    event,
-    db: supabaseAdmin(),
-    userId: config.user_id,
-  })
-
-  if (!result.processed) {
-    return NextResponse.json({ error: result.error || 'processing_failed' }, { status: 500 })
+  // 4. Durably enqueue event before responding HTTP 200
+  let enqueueResult: { jobId: string; messageId?: number }
+  try {
+    enqueueResult = await enqueueWhatsAppInboundEvent(event, { db: supabaseAdmin() })
+  } catch (enqueueErr) {
+    console.error('[waha-webhook] Critical: Failed to enqueue inbound event:', enqueueErr)
+    return NextResponse.json({ error: 'Queue persistence failed' }, { status: 500 })
   }
+
+  // 5. Best-effort latency accelerator in background
+  after(async () => {
+    try {
+      await processWhatsAppInboundBatch()
+    } catch (drainErr) {
+      console.warn('[waha-webhook] after() accelerator encountered an error (queue remains durable):', drainErr)
+    }
+  })
 
   return NextResponse.json({
     status: 'received',
-    duplicate: result.duplicate,
-    message_id: result.messageId,
+    job_id: enqueueResult.jobId,
   })
 }

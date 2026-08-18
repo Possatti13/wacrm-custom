@@ -13,9 +13,26 @@ function signPayload(body: string, secret = appSecret): string {
 const mockMessages: Array<Record<string, unknown>> = []
 const mockStatusUpdates: Array<Record<string, unknown>> = []
 const mockReactions: Array<Record<string, unknown>> = []
+let mockEnqueueFail = false
 
 vi.mock('@supabase/supabase-js', () => ({
   createClient: vi.fn(() => ({
+    rpc: vi.fn(async (fn: string, params: Record<string, unknown>) => {
+      if (fn === 'enqueue_whatsapp_inbound_batch') {
+        if (mockEnqueueFail) {
+          return { data: null, error: { message: 'Queue unavailable / PGMQ connection timeout' } }
+        }
+        const msgs = (params.p_messages as unknown[]) || []
+        return { data: msgs.map((_, i) => i + 1), error: null }
+      }
+      if (fn === 'read_whatsapp_inbound') {
+        return { data: [], error: null }
+      }
+      if (fn === 'archive_whatsapp_inbound') {
+        return { data: true, error: null }
+      }
+      return { data: null, error: null }
+    }),
     from: (table: string) => {
       const b: Record<string, unknown> = {}
       const chain = () => b
@@ -116,13 +133,12 @@ vi.mock('@/lib/webhooks/deliver', () => ({
   dispatchWebhookEvent: vi.fn(async () => {}),
 }))
 
-let afterPromise: Promise<void> | null = null
 vi.mock('next/server', async (importOriginal) => {
   const mod = await importOriginal<typeof import('next/server')>()
   return {
     ...mod,
-    after: (fn: () => Promise<void>) => {
-      afterPromise = fn()
+    after: (fn: () => void | Promise<void>) => {
+      void fn()
     },
   }
 })
@@ -132,7 +148,7 @@ describe('Meta Webhook Route (/api/whatsapp/webhook)', () => {
     mockMessages.length = 0
     mockStatusUpdates.length = 0
     mockReactions.length = 0
-    afterPromise = null
+    mockEnqueueFail = false
     vi.clearAllMocks()
   })
 
@@ -156,7 +172,7 @@ describe('Meta Webhook Route (/api/whatsapp/webhook)', () => {
     })
   })
 
-  describe('POST signature & inbound processing', () => {
+  describe('POST signature & durable queue ingestion', () => {
     it('rejects invalid signature with 401', async () => {
       const payload = JSON.stringify({ entry: [] })
       const req = new Request('http://localhost/api/whatsapp/webhook', {
@@ -172,7 +188,54 @@ describe('Meta Webhook Route (/api/whatsapp/webhook)', () => {
       expect(res.status).toBe(401)
     })
 
-    it('processes inbound text message through normalized pipeline', async () => {
+    it('TESTE 25: returns 500 and rejects when queue enqueue fails (no false 200)', async () => {
+      mockEnqueueFail = true
+
+      const payload = JSON.stringify({
+        object: 'whatsapp_business_account',
+        entry: [
+          {
+            id: 'WABA_123',
+            changes: [
+              {
+                value: {
+                  messaging_product: 'whatsapp',
+                  metadata: { phone_number_id: 'PN_123' },
+                  contacts: [{ profile: { name: 'Meta Cliente' }, wa_id: '5511999999999' }],
+                  messages: [
+                    {
+                      from: '5511999999999',
+                      id: 'wamid.FAIL_QUEUE_TEST',
+                      timestamp: '1700000000',
+                      text: { body: 'Mensagem com falha de queue' },
+                      type: 'text',
+                    },
+                  ],
+                },
+                field: 'messages',
+              },
+            ],
+          },
+        ],
+      })
+
+      const sig = signPayload(payload)
+      const req = new Request('http://localhost/api/whatsapp/webhook', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-hub-signature-256': sig,
+        },
+        body: payload,
+      })
+
+      const res = await POST(req)
+      expect(res.status).toBe(500)
+      const json = await res.json()
+      expect(json.error).toBe('Queue persistence failed')
+    })
+
+    it('enqueues inbound text message to durable queue and acknowledges HTTP 200', async () => {
       const payload = JSON.stringify({
         object: 'whatsapp_business_account',
         entry: [
@@ -218,20 +281,9 @@ describe('Meta Webhook Route (/api/whatsapp/webhook)', () => {
       expect(res.status).toBe(200)
       const json = await res.json()
       expect(json.status).toBe('received')
-
-      if (afterPromise) await afterPromise
-
-      expect(mockMessages).toHaveLength(1)
-      expect(mockMessages[0]).toMatchObject({
-        conversation_id: 'conv-meta-1',
-        sender_type: 'customer',
-        content_type: 'text',
-        content_text: 'Olá via Meta',
-        message_id: 'wamid.TEST_INBOUND_1',
-      })
     })
 
-    it('processes status updates through normalized pipeline', async () => {
+    it('enqueues status updates to durable queue and acknowledges HTTP 200', async () => {
       const payload = JSON.stringify({
         entry: [
           {
@@ -267,14 +319,9 @@ describe('Meta Webhook Route (/api/whatsapp/webhook)', () => {
 
       const res = await POST(req)
       expect(res.status).toBe(200)
-
-      if (afterPromise) await afterPromise
-
-      expect(mockStatusUpdates).toHaveLength(1)
-      expect(mockStatusUpdates[0]).toMatchObject({ status: 'delivered' })
     })
 
-    it('handles reaction events through normalized pipeline', async () => {
+    it('enqueues reaction events to durable queue and acknowledges HTTP 200', async () => {
       const payload = JSON.stringify({
         entry: [
           {
@@ -311,11 +358,9 @@ describe('Meta Webhook Route (/api/whatsapp/webhook)', () => {
 
       const res = await POST(req)
       expect(res.status).toBe(200)
-
-      if (afterPromise) await afterPromise
     })
 
-    it('safely ignores unknown changes without crashing', async () => {
+    it('safely handles empty/unknown changes without crashing', async () => {
       const payload = JSON.stringify({
         entry: [
           {
@@ -344,10 +389,6 @@ describe('Meta Webhook Route (/api/whatsapp/webhook)', () => {
 
       const res = await POST(req)
       expect(res.status).toBe(200)
-
-      if (afterPromise) await afterPromise
-
-      expect(mockMessages).toHaveLength(0)
     })
   })
 })

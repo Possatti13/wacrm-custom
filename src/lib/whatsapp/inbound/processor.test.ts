@@ -338,4 +338,63 @@ describe('InboundProcessor Idempotency & Provenance Scoping', () => {
     expect(runAutomationsForTrigger).toHaveBeenCalledTimes(2) // 1 new_message_received, 1 first_inbound_message
     expect(dispatchInboundToAiReply).toHaveBeenCalledTimes(1)
   })
+
+  it('6. mensagem antiga processada após mensagem nova não regride last_message_at nem last_message_text', async () => {
+    const { db, store } = createMemoryDb()
+    const contactId = 'contact-ooo-1'
+    const conversationId = 'conv-ooo-1'
+
+    store.contacts.push({ id: contactId, account_id: 'account-1', phone: '+5511999999999' })
+    store.conversations.push({
+      id: conversationId,
+      account_id: 'account-1',
+      contact_id: contactId,
+      unread_count: 0,
+      last_message_at: null,
+      last_message_text: null,
+    })
+
+    // 1. Process recent message (timestamp = 2000)
+    const recentEvent: NormalizedInboundMessageEvent = {
+      type: 'message',
+      provider: 'meta',
+      accountId: 'account-1',
+      externalMessageId: 'wamid.RECENT_2000',
+      fromPhone: '5511999999999',
+      senderName: 'Cliente OOO',
+      timestamp: 2000,
+      fromMe: false,
+      content: { type: 'text', text: 'Mensagem Mais Recente' },
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await processNormalizedInboundEvent({ event: recentEvent, db: db as any })
+
+    const recentIso = new Date(2000 * 1000).toISOString()
+    expect(store.conversations[0].last_message_at).toBe(recentIso)
+    expect(store.conversations[0].last_message_text).toBe('Mensagem Mais Recente')
+    expect(store.conversations[0].unread_count).toBe(1)
+
+    // 2. Process delayed older message (timestamp = 1000)
+    const olderEvent: NormalizedInboundMessageEvent = {
+      type: 'message',
+      provider: 'meta',
+      accountId: 'account-1',
+      externalMessageId: 'wamid.OLDER_1000',
+      fromPhone: '5511999999999',
+      senderName: 'Cliente OOO',
+      timestamp: 1000,
+      fromMe: false,
+      content: { type: 'text', text: 'Mensagem Mais Antiga Atrasada' },
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await processNormalizedInboundEvent({ event: olderEvent, db: db as any })
+
+    // unread_count is incremented to 2, but last_message_at and last_message_text remain monotonic!
+    expect(store.conversations[0].unread_count).toBe(2)
+    expect(store.conversations[0].last_message_at).toBe(recentIso)
+    expect(store.conversations[0].last_message_text).toBe('Mensagem Mais Recente')
+    expect(store.messages).toHaveLength(2)
+  })
 })

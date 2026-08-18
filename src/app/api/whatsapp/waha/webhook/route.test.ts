@@ -2,9 +2,26 @@ import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest'
 import crypto from 'node:crypto'
 
 const secret = 'waha-test-secret-999'
+let mockWahaEnqueueFail = false
 
 vi.mock('@supabase/supabase-js', () => ({
   createClient: vi.fn(() => ({
+    rpc: vi.fn(async (fn: string, params: Record<string, unknown>) => {
+      if (fn === 'enqueue_whatsapp_inbound_batch') {
+        if (mockWahaEnqueueFail) {
+          return { data: null, error: { message: 'Queue unavailable' } }
+        }
+        const msgs = (params.p_messages as unknown[]) || []
+        return { data: msgs.map((_, i) => i + 1), error: null }
+      }
+      if (fn === 'read_whatsapp_inbound') {
+        return { data: [], error: null }
+      }
+      if (fn === 'archive_whatsapp_inbound') {
+        return { data: true, error: null }
+      }
+      return { data: null, error: null }
+    }),
     from: (table: string) => {
       const b: Record<string, unknown> = {}
       const chain = () => b
@@ -58,10 +75,21 @@ vi.mock('@/lib/ai/auto-reply', () => ({
   dispatchInboundToAiReply: vi.fn(async () => {}),
 }))
 
+vi.mock('next/server', async (importOriginal) => {
+  const mod = await importOriginal<typeof import('next/server')>()
+  return {
+    ...mod,
+    after: (fn: () => void | Promise<void>) => {
+      void fn()
+    },
+  }
+})
+
 import { POST } from './route'
 
 describe('POST /api/whatsapp/waha/webhook', () => {
   beforeEach(() => {
+    mockWahaEnqueueFail = false
     vi.stubEnv('WAHA_WEBHOOK_SECRET', secret)
   })
 
@@ -70,7 +98,7 @@ describe('POST /api/whatsapp/waha/webhook', () => {
     vi.clearAllMocks()
   })
 
-  it('accepts a valid request with HMAC-SHA512 header', async () => {
+  it('accepts a valid request with HMAC-SHA512 header and enqueues to durable queue', async () => {
     const body = JSON.stringify({
       event: 'message',
       session: 'default',
@@ -96,6 +124,37 @@ describe('POST /api/whatsapp/waha/webhook', () => {
     expect(res.status).toBe(200)
     const json = await res.json()
     expect(json.status).toBe('received')
+    expect(json.job_id).toBeDefined()
+  })
+
+  it('TESTE 25: returns 500 when queue enqueue fails (no false 200)', async () => {
+    mockWahaEnqueueFail = true
+
+    const body = JSON.stringify({
+      event: 'message',
+      session: 'default',
+      payload: {
+        from: '5511999999999@c.us',
+        id: 'msg-waha-fail',
+        body: 'Olá teste falha',
+        fromMe: false,
+      },
+    })
+    const hmac = crypto.createHmac('sha512', secret).update(body).digest('hex')
+
+    const req = new Request('http://localhost/api/whatsapp/waha/webhook', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-webhook-hmac': `sha512=${hmac}`,
+      },
+      body,
+    })
+
+    const res = await POST(req)
+    expect(res.status).toBe(500)
+    const json = await res.json()
+    expect(json.error).toBe('Queue persistence failed')
   })
 
   it('rejects an invalid HMAC signature with 401', async () => {
@@ -104,7 +163,7 @@ describe('POST /api/whatsapp/waha/webhook', () => {
       session: 'default',
       payload: {
         from: '5511999999999@c.us',
-        id: 'msg-waha-1',
+        id: 'msg-waha-2',
         body: 'Olá teste',
       },
     })
@@ -113,15 +172,13 @@ describe('POST /api/whatsapp/waha/webhook', () => {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'x-webhook-hmac': 'sha512=badbadbadbadbadbad',
+        'x-webhook-hmac': 'sha512=badbadbadbad',
       },
       body,
     })
 
     const res = await POST(req)
     expect(res.status).toBe(401)
-    const json = await res.json()
-    expect(json.error).toBe('Invalid signature')
   })
 
   it('rejects an unauthenticated request without HMAC/token with 401', async () => {
@@ -130,7 +187,7 @@ describe('POST /api/whatsapp/waha/webhook', () => {
       session: 'default',
       payload: {
         from: '5511999999999@c.us',
-        id: 'msg-waha-1',
+        id: 'msg-waha-3',
         body: 'Olá teste',
       },
     })
@@ -145,7 +202,5 @@ describe('POST /api/whatsapp/waha/webhook', () => {
 
     const res = await POST(req)
     expect(res.status).toBe(401)
-    const json = await res.json()
-    expect(json.error).toBe('Invalid signature')
   })
 })

@@ -195,14 +195,36 @@ async function processInboundMessage(
 
   const messageId = insertedMessage?.id || `msg-${Date.now()}`
 
-  // 7. Update conversation unread count & status
+  // 7. Update conversation unread count & status monotonically
+  const messageTimestampIso = event.timestamp
+    ? new Date(event.timestamp * 1000).toISOString()
+    : new Date().toISOString()
+
+  const previewText = event.content.text || `[${event.content.type}]`
+
+  const { data: currentConv } = await db
+    .from('conversations')
+    .select('unread_count, last_message_at, status')
+    .eq('id', conversation.id)
+    .maybeSingle()
+
+  const currentLastMessageAt = currentConv?.last_message_at || conversation.last_message_at
+  const currentUnread = currentConv?.unread_count ?? conversation.unread_count ?? 0
+  const isMoreRecent = !currentLastMessageAt || messageTimestampIso >= currentLastMessageAt
+
+  const convUpdatePayload: Record<string, unknown> = {
+    unread_count: currentUnread + 1,
+    status: conversation.status === 'closed' ? 'open' : conversation.status,
+  }
+
+  if (isMoreRecent) {
+    convUpdatePayload.last_message_at = messageTimestampIso
+    convUpdatePayload.last_message_text = previewText
+  }
+
   await db
     .from('conversations')
-    .update({
-      unread_count: (conversation.unread_count || 0) + 1,
-      last_message_at: new Date().toISOString(),
-      status: conversation.status === 'closed' ? 'open' : conversation.status,
-    })
+    .update(convUpdatePayload)
     .eq('id', conversation.id)
 
   // 8. Trigger Automations hook (Preserved frozen hook)
