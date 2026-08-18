@@ -150,8 +150,58 @@ export async function createCatalogItem(
   rawInput: CreateCatalogItemInput
 ): Promise<CatalogItemWithDetails> {
   const input = validateCreateCatalogItem(rawInput)
+  const canonicalNorm = normalizeCatalogTerm(input.name)
+  const sku = normalizeSku(input.sku)
 
-  // 1. If category_id is provided, verify it belongs to the same account
+  const aliasesPayload = (input.aliases || [])
+    .map((a) => ({
+      term: a.trim(),
+      normalized_term: normalizeCatalogTerm(a),
+    }))
+    .filter((a) => a.normalized_term.length > 0)
+
+  // 1. Transactional RPC execution (single Postgres transaction)
+  if (typeof db.rpc === 'function') {
+    const { data: rpcResult, error: rpcError } = await db.rpc(
+      'create_catalog_item_with_terms',
+      {
+        p_account_id: accountId,
+        p_category_id: input.category_id || null,
+        p_type: input.type,
+        p_name: input.name,
+        p_normalized_name: canonicalNorm,
+        p_description: input.description || null,
+        p_sku: sku || null,
+        p_status: input.status || 'active',
+        p_sort_order: input.sort_order ?? 0,
+        p_metadata: input.metadata || {},
+        p_aliases: aliasesPayload,
+      }
+    )
+
+    if (rpcError) {
+      if (rpcError.code === '23505' && rpcError.message?.includes('sku')) {
+        throw new CatalogValidationError(`An item with SKU "${input.sku}" already exists in this account`)
+      }
+      if (rpcError.code === '23505' && rpcError.message?.includes('normalized_term')) {
+        throw new CatalogValidationError(`A catalog term matching "${input.name}" already exists in this account`)
+      }
+      if (rpcError.code === '23503' || rpcError.message?.includes('Category')) {
+        throw new CatalogValidationError(`Category ${input.category_id} not found in this account`)
+      }
+      throw new Error(`createCatalogItem failed: ${rpcError.message}`)
+    }
+
+    const item = rpcResult.item as CatalogItem
+    const terms = (rpcResult.terms as CatalogItemTerm[]) || []
+
+    return {
+      ...item,
+      terms,
+    }
+  }
+
+  // Fallback direct execution (for environments where RPC is mocked or not bound)
   if (input.category_id) {
     const category = await getCategory(db, accountId, input.category_id)
     if (!category) {
@@ -159,9 +209,6 @@ export async function createCatalogItem(
     }
   }
 
-  const sku = normalizeSku(input.sku)
-
-  // 2. Insert item
   const { data: itemData, error: itemError } = await db
     .from('catalog_items')
     .insert({
@@ -188,8 +235,6 @@ export async function createCatalogItem(
   const item = itemData as CatalogItem
   const createdTerms: CatalogItemTerm[] = []
 
-  // 3. Atomically create Canonical Term
-  const canonicalNorm = normalizeCatalogTerm(item.name)
   const { data: canonicalTermData, error: canonicalTermError } = await db
     .from('catalog_item_terms')
     .insert({
@@ -203,7 +248,6 @@ export async function createCatalogItem(
     .single()
 
   if (canonicalTermError) {
-    // Rollback item insert if term conflicts
     await db.from('catalog_items').delete().eq('id', item.id)
     if (canonicalTermError.code === '23505') {
       throw new CatalogValidationError(
@@ -214,18 +258,6 @@ export async function createCatalogItem(
   }
 
   createdTerms.push(canonicalTermData as CatalogItemTerm)
-
-  // 4. Create initial aliases if provided
-  if (input.aliases && input.aliases.length > 0) {
-    for (const aliasText of input.aliases) {
-      try {
-        const aliasTerm = await addCatalogItemAlias(db, accountId, item.id, aliasText)
-        createdTerms.push(aliasTerm)
-      } catch (aliasErr) {
-        console.warn(`[catalog] Skipping invalid or duplicate alias "${aliasText}":`, aliasErr)
-      }
-    }
-  }
 
   return {
     ...item,
@@ -240,7 +272,45 @@ export async function updateCatalogItem(
   rawInput: UpdateCatalogItemInput
 ): Promise<CatalogItemWithDetails> {
   const input = validateUpdateCatalogItem(rawInput)
+  const canonicalNorm = input.name !== undefined ? normalizeCatalogTerm(input.name) : null
+  const sku = input.sku !== undefined ? normalizeSku(input.sku) : undefined
 
+  // 1. Transactional RPC execution (single Postgres transaction)
+  if (typeof db.rpc === 'function') {
+    const { error: rpcError } = await db.rpc('update_catalog_item_with_canonical', {
+      p_account_id: accountId,
+      p_item_id: itemId,
+      p_category_id: input.category_id ?? null,
+      p_type: input.type ?? null,
+      p_name: input.name ?? null,
+      p_normalized_name: canonicalNorm,
+      p_description: input.description ?? null,
+      p_sku: sku ?? null,
+      p_status: input.status ?? null,
+      p_sort_order: input.sort_order ?? null,
+      p_metadata: input.metadata ?? null,
+      p_update_name: input.name !== undefined,
+    })
+
+    if (rpcError) {
+      if (rpcError.code === '23505' && rpcError.message?.includes('sku')) {
+        throw new CatalogValidationError(`An item with SKU "${input.sku}" already exists in this account`)
+      }
+      if (rpcError.code === '23505' && rpcError.message?.includes('normalized_term')) {
+        throw new CatalogValidationError(
+          `A catalog term matching "${input.name}" already exists in this account`
+        )
+      }
+      if (rpcError.code === '23503' || rpcError.message?.includes('Category')) {
+        throw new CatalogValidationError(`Category ${input.category_id} not found in this account`)
+      }
+      throw new Error(`updateCatalogItem failed: ${rpcError.message}`)
+    }
+
+    return getCatalogItem(db, accountId, itemId) as Promise<CatalogItemWithDetails>
+  }
+
+  // Fallback direct execution
   if (input.category_id) {
     const category = await getCategory(db, accountId, input.category_id)
     if (!category) {
@@ -255,12 +325,11 @@ export async function updateCatalogItem(
   if (input.type !== undefined) payload.type = input.type
   if (input.category_id !== undefined) payload.category_id = input.category_id
   if (input.description !== undefined) payload.description = input.description
-  if (input.sku !== undefined) payload.sku = normalizeSku(input.sku)
+  if (input.sku !== undefined) payload.sku = sku
   if (input.status !== undefined) payload.status = input.status
   if (input.sort_order !== undefined) payload.sort_order = input.sort_order
   if (input.metadata !== undefined) payload.metadata = input.metadata
 
-  // 1. Update item row
   const { data: itemData, error: itemError } = await db
     .from('catalog_items')
     .update(payload)
@@ -279,14 +348,12 @@ export async function updateCatalogItem(
     throw new Error(`Catalog item not found or does not belong to this account`)
   }
 
-  // 2. If name was updated, atomically update its canonical term
-  if (input.name !== undefined) {
-    const newNorm = normalizeCatalogTerm(input.name)
+  if (input.name !== undefined && canonicalNorm) {
     const { error: termError } = await db
       .from('catalog_item_terms')
       .update({
         term: input.name,
-        normalized_term: newNorm,
+        normalized_term: canonicalNorm,
         updated_at: new Date().toISOString(),
       })
       .eq('catalog_item_id', itemId)
@@ -349,19 +416,17 @@ export async function getCatalogItem(
   }
   if (!item) return null
 
-  // Fetch category if linked
   let category: CatalogCategory | null = null
   if (item.category_id) {
     category = await getCategory(db, accountId, item.category_id)
   }
 
-  // Fetch terms
   const { data: terms, error: termsError } = await db
     .from('catalog_item_terms')
     .select('*')
     .eq('catalog_item_id', itemId)
     .eq('account_id', accountId)
-    .order('kind', { ascending: false }) // 'canonical' first
+    .order('kind', { ascending: false })
     .order('created_at', { ascending: true })
 
   if (termsError) {
@@ -435,13 +500,11 @@ export async function addCatalogItemAlias(
   const alias = validateAlias(rawAlias)
   const normalized = normalizeCatalogTerm(alias)
 
-  // 1. Verify item belongs to account
   const item = await getCatalogItem(db, accountId, itemId)
   if (!item) {
     throw new CatalogValidationError(`Catalog item ${itemId} not found in this account`)
   }
 
-  // 2. Insert alias term
   const { data, error } = await db
     .from('catalog_item_terms')
     .insert({
@@ -471,7 +534,6 @@ export async function removeCatalogItemAlias(
   accountId: string,
   termId: string
 ): Promise<boolean> {
-  // Only allow deleting alias terms (canonical terms cannot be removed via alias deletion)
   const { data: term, error: fetchErr } = await db
     .from('catalog_item_terms')
     .select('id, kind')
@@ -537,7 +599,6 @@ export async function resolveCatalogTerm(
   const normalized = normalizeCatalogTerm(rawTerm)
   if (normalized.length === 0) return null
 
-  // 1. Lookup term in catalog_item_terms within account
   const { data: termRow, error: termErr } = await db
     .from('catalog_item_terms')
     .select('*')
@@ -550,7 +611,6 @@ export async function resolveCatalogTerm(
   }
   if (!termRow) return null
 
-  // 2. Fetch associated catalog item
   const item = await getCatalogItem(db, accountId, termRow.catalog_item_id)
   if (!item || item.status === 'archived') {
     return null

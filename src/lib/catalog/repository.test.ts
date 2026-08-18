@@ -30,6 +30,146 @@ function createInMemoryCatalogDb() {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const client: any = {
     _state: { categories, items, terms },
+    rpc: async (fn: string, params: Record<string, unknown>) => {
+      if (fn === 'create_catalog_item_with_terms') {
+        const accountId = params.p_account_id as string
+        const categoryId = params.p_category_id as string | null
+        const name = params.p_name as string
+        const normName = params.p_normalized_name as string
+        const sku = params.p_sku as string | null
+        const aliases = (params.p_aliases as Array<{ term: string; normalized_term: string }>) || []
+
+        // Category check
+        if (categoryId) {
+          const catExists = categories.find((c) => c.id === categoryId && c.account_id === accountId)
+          if (!catExists) {
+            return { data: null, error: { code: '23503', message: `Category ${categoryId} not found in this account` } }
+          }
+        }
+        // SKU check
+        if (sku) {
+          const skuExists = items.find((i) => i.account_id === accountId && i.sku?.toLowerCase() === sku.toLowerCase())
+          if (skuExists) {
+            return { data: null, error: { code: '23505', message: `duplicate key value for sku` } }
+          }
+        }
+        // Canonical term uniqueness check
+        const termExists = terms.find((t) => t.account_id === accountId && t.normalized_term === normName)
+        if (termExists) {
+          return { data: null, error: { code: '23505', message: `duplicate key value for normalized_term` } }
+        }
+        // Aliases check
+        for (const a of aliases) {
+          const aliasExists = terms.find((t) => t.account_id === accountId && t.normalized_term === a.normalized_term)
+          if (aliasExists || a.normalized_term === normName) {
+            return { data: null, error: { code: '23505', message: `duplicate key value for normalized_term` } }
+          }
+        }
+
+        // All checks passed -> Transactionally create item & terms
+        const itemId = genId()
+        const newItem: CatalogItem = {
+          id: itemId,
+          account_id: accountId,
+          category_id: categoryId,
+          type: params.p_type as CatalogItem['type'],
+          name,
+          description: (params.p_description as string) || null,
+          sku,
+          status: (params.p_status as CatalogItem['status']) || 'active',
+          sort_order: (params.p_sort_order as number) || 0,
+          metadata: (params.p_metadata as Record<string, unknown>) || {},
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        }
+        items.push(newItem)
+
+        const createdTerms: CatalogItemTerm[] = []
+        const canonicalTerm: CatalogItemTerm = {
+          id: genId(),
+          account_id: accountId,
+          catalog_item_id: itemId,
+          term: name,
+          normalized_term: normName,
+          kind: 'canonical',
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        }
+        terms.push(canonicalTerm)
+        createdTerms.push(canonicalTerm)
+
+        for (const a of aliases) {
+          const aliasTerm: CatalogItemTerm = {
+            id: genId(),
+            account_id: accountId,
+            catalog_item_id: itemId,
+            term: a.term,
+            normalized_term: a.normalized_term,
+            kind: 'alias',
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          }
+          terms.push(aliasTerm)
+          createdTerms.push(aliasTerm)
+        }
+
+        return { data: { item: newItem, terms: createdTerms }, error: null }
+      }
+
+      if (fn === 'update_catalog_item_with_canonical') {
+        const accountId = params.p_account_id as string
+        const itemId = params.p_item_id as string
+        const categoryId = params.p_category_id as string | null
+        const name = params.p_name as string | null
+        const normName = params.p_normalized_name as string | null
+        const updateName = Boolean(params.p_update_name)
+
+        const item = items.find((i) => i.id === itemId && i.account_id === accountId)
+        if (!item) {
+          return { data: null, error: { code: 'P0002', message: 'Item not found' } }
+        }
+
+        if (categoryId) {
+          const catExists = categories.find((c) => c.id === categoryId && c.account_id === accountId)
+          if (!catExists) {
+            return { data: null, error: { code: '23503', message: `Category ${categoryId} not found in this account` } }
+          }
+        }
+
+        if (updateName && normName) {
+          const termExists = terms.find(
+            (t) => t.account_id === accountId && t.normalized_term === normName && t.catalog_item_id !== itemId
+          )
+          if (termExists) {
+            return { data: null, error: { code: '23505', message: 'duplicate key value for normalized_term' } }
+          }
+        }
+
+        // Apply updates
+        if (params.p_category_id !== undefined) item.category_id = categoryId
+        if (params.p_type) item.type = params.p_type as CatalogItem['type']
+        if (name) item.name = name
+        if (params.p_description !== undefined) item.description = params.p_description as string | null
+        if (params.p_sku !== undefined) item.sku = params.p_sku as string | null
+        if (params.p_status) item.status = params.p_status as CatalogItem['status']
+        if (params.p_sort_order !== undefined && params.p_sort_order !== null) item.sort_order = params.p_sort_order as number
+        if (params.p_metadata) item.metadata = params.p_metadata as Record<string, unknown>
+        item.updated_at = new Date().toISOString()
+
+        if (updateName && normName && name) {
+          const cTerm = terms.find((t) => t.catalog_item_id === itemId && t.kind === 'canonical')
+          if (cTerm) {
+            cTerm.term = name
+            cTerm.normalized_term = normName
+            cTerm.updated_at = new Date().toISOString()
+          }
+        }
+
+        return { data: item, error: null }
+      }
+
+      return { data: null, error: new Error(`Unknown RPC ${fn}`) }
+    },
     from: (table: string) => {
       const builder: Record<string, unknown> = {
         _table: table,
@@ -123,9 +263,10 @@ function createInMemoryCatalogDb() {
               row.updated_at = new Date().toISOString()
 
               if (table === 'catalog_categories') {
-                // Check uniqueness (account_id, name)
+                // Check uniqueness (account_id, lower(trim(name)))
+                const normName = String(row.name).trim().toLowerCase().replace(/\s+/g, ' ')
                 const exists = categories.find(
-                  (c) => c.account_id === row.account_id && c.name.toLowerCase() === String(row.name).toLowerCase()
+                  (c) => c.account_id === row.account_id && c.name.trim().toLowerCase().replace(/\s+/g, ' ') === normName
                 )
                 if (exists) {
                   return resolve({
@@ -344,11 +485,22 @@ describe('Products & Services Catalog Repository', () => {
       expect(listAfterDelete.length).toBe(0)
     })
 
-    it('rejects duplicate category name in the same account', async () => {
-      await createCategory(db, TENANT_A, { name: 'Seguros' })
-      await expect(createCategory(db, TENANT_A, { name: 'Seguros' })).rejects.toThrow(
+    it('rejects duplicate category name in the same account (including case and whitespace variations)', async () => {
+      await createCategory(db, TENANT_A, { name: 'Motos' })
+
+      // Same name with different casing
+      await expect(createCategory(db, TENANT_A, { name: 'MOTOS' })).rejects.toThrow(
         CatalogValidationError
       )
+
+      // Same name with leading/trailing spaces
+      await expect(createCategory(db, TENANT_A, { name: '  motos  ' })).rejects.toThrow(
+        CatalogValidationError
+      )
+
+      // Different tenant is allowed
+      const catB = await createCategory(db, TENANT_B, { name: 'motos' })
+      expect(catB.account_id).toBe(TENANT_B)
     })
   })
 
@@ -441,6 +593,54 @@ describe('Products & Services Catalog Repository', () => {
       const searchRes = await listCatalogItems(db, TENANT_A, { search: 'Preventiva' })
       expect(searchRes.length).toBe(1)
       expect(searchRes[0].name).toBe('Manutenção Preventiva')
+    })
+
+    it('rolls back completely when creating an item with a conflicting canonical term (0 items created)', async () => {
+      // 1. First item
+      await createCatalogItem(db, TENANT_A, {
+        name: 'X-13',
+        type: 'product',
+      })
+
+      // 2. Second item with identical canonical term name
+      await expect(
+        createCatalogItem(db, TENANT_A, {
+          name: 'x 13',
+          type: 'product',
+        })
+      ).rejects.toThrow(CatalogValidationError)
+
+      // Verify that ONLY 1 item exists in Tenant A (no orphaned second item)
+      const itemsList = await listCatalogItems(db, TENANT_A)
+      expect(itemsList.length).toBe(1)
+      expect(itemsList[0].name).toBe('X-13')
+    })
+
+    it('rolls back completely when renaming an item conflicts with another existing canonical term', async () => {
+      await createCatalogItem(db, TENANT_A, {
+        name: 'X-13',
+        type: 'product',
+      })
+      const item2 = await createCatalogItem(db, TENANT_A, {
+        name: 'X-14',
+        type: 'product',
+      })
+
+      // Attempting to rename item2 to "X-13" (which collides with item1's canonical term)
+      await expect(
+        updateCatalogItem(db, TENANT_A, item2.id, {
+          name: 'X-13',
+        })
+      ).rejects.toThrow(CatalogValidationError)
+
+      // Verify that item2's name and canonical term remained intact as 'X-14'
+      const item2Lookup = await getCatalogItem(db, TENANT_A, item2.id)
+      expect(item2Lookup?.name).toBe('X-14')
+
+      const terms2 = await listCatalogItemTerms(db, TENANT_A, item2.id)
+      const canonical2 = terms2.find((t) => t.kind === 'canonical')
+      expect(canonical2?.term).toBe('X-14')
+      expect(canonical2?.normalized_term).toBe('x 14')
     })
   })
 
