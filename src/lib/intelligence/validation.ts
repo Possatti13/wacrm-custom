@@ -183,6 +183,23 @@ export function resolveAndValidateObservation(
     ? Math.round(obs.confidence * 1000) / 1000
     : null
 
+  // Derive chronological observed_at from cited evidence messages
+  let observedAt: string | undefined = undefined
+  if (validatedEvidences.length > 0) {
+    let latestTs: number | null = null
+    for (const ev of validatedEvidences) {
+      for (const msg of ctx.messageRefMap.values()) {
+        if (msg.id === ev.message_id && msg.created_at) {
+          const ts = new Date(msg.created_at).getTime()
+          if (latestTs === null || ts > latestTs) {
+            latestTs = ts
+            observedAt = msg.created_at
+          }
+        }
+      }
+    }
+  }
+
   return {
     insight_type: type,
     value_text: valueText,
@@ -192,5 +209,6 @@ export function resolveAndValidateObservation(
     source: 'intelligence',
     dedupe_key: dedupeKey,
     evidence: validatedEvidences,
+    observed_at: observedAt,
   }
 }

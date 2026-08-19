@@ -132,6 +132,24 @@ export async function upsertLeadProfile(
     throw new Error(`upsertLeadProfile failed: ${error.message}`)
   }
 
+  // Update contact_lead_attribute_sources for provided attributes
+  if (input.attributes && typeof input.attributes === 'object') {
+    const attrSource = input.source || 'manual'
+    const attrEntries = Object.keys(input.attributes).map((key) => ({
+      account_id: validAccId,
+      contact_id: validContactId,
+      attribute_key: key,
+      source: attrSource,
+      updated_at: now,
+    }))
+
+    if (attrEntries.length > 0) {
+      await db
+        .from('contact_lead_attribute_sources')
+        .upsert(attrEntries, { onConflict: 'account_id,contact_id,attribute_key' })
+    }
+  }
+
   return data as ContactLeadProfile
 }
 
@@ -571,3 +589,68 @@ export async function getCommercialContext(
     objections,
   }
 }
+
+// ============================================================
+// 5. Attribute Sources (Phase 5B Hardening)
+// ============================================================
+
+export interface ContactLeadAttributeSourceRecord {
+  id: string
+  account_id: string
+  contact_id: string
+  attribute_key: string
+  source: InformationSource
+  created_at: string
+  updated_at: string
+}
+
+export async function getAttributeSources(
+  db: SupabaseClient,
+  accountId: string,
+  contactId: string
+): Promise<ContactLeadAttributeSourceRecord[]> {
+  const validAccId = validateUuid(accountId, 'accountId')
+  const validContactId = validateUuid(contactId, 'contactId')
+
+  const { data, error } = await db
+    .from('contact_lead_attribute_sources')
+    .select('*')
+    .eq('account_id', validAccId)
+    .eq('contact_id', validContactId)
+
+  if (error) {
+    throw new Error(`getAttributeSources failed: ${error.message}`)
+  }
+
+  return (data || []) as ContactLeadAttributeSourceRecord[]
+}
+
+export async function setAttributeSource(
+  db: SupabaseClient,
+  accountId: string,
+  contactId: string,
+  attributeKey: string,
+  source: InformationSource
+): Promise<void> {
+  const validAccId = validateUuid(accountId, 'accountId')
+  const validContactId = validateUuid(contactId, 'contactId')
+  const validSource = validateSource(source)
+
+  const { error } = await db
+    .from('contact_lead_attribute_sources')
+    .upsert(
+      {
+        account_id: validAccId,
+        contact_id: validContactId,
+        attribute_key: attributeKey,
+        source: validSource,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: 'account_id,contact_id,attribute_key' }
+    )
+
+  if (error) {
+    throw new Error(`setAttributeSource failed: ${error.message}`)
+  }
+}
+

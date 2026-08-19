@@ -72,6 +72,7 @@ export interface ValidatedObservation {
   source: InformationSource
   dedupe_key: string
   evidence: ValidatedEvidenceItem[]
+  observed_at?: string
 }
 
 // ============================================================
