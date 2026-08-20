@@ -4,7 +4,7 @@ import { executeConversationExtraction } from '@/lib/intelligence/extractor'
 import { OpenAiStructuredExtractor } from '@/lib/intelligence/providers/openai'
 import { AnthropicStructuredExtractor } from '@/lib/intelligence/providers/anthropic'
 import { MockStructuredExtractor } from '@/lib/intelligence/providers/mock'
-import { loadAiConfig } from '@/lib/ai/config'
+import { loadIntelligenceCredential } from '@/lib/intelligence/credentials'
 import { MAX_JOB_ATTEMPTS } from '../config'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -100,9 +100,8 @@ export async function processIntelligenceBatch(options?: {
         if (providerName === 'mock') {
           provider = new MockStructuredExtractor()
         } else {
-          const aiConfig = await loadAiConfig(db, accountId, { requireActive: false })
-          const apiKey = aiConfig?.apiKey
-          provider = resolveProviderForTenant(providerName, apiKey)
+          const cred = await loadIntelligenceCredential(db, accountId, providerName)
+          provider = resolveProviderForTenant(providerName, cred.apiKey)
         }
       }
 

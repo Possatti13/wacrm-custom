@@ -268,16 +268,9 @@ async function processInboundMessage(
     console.error('[inbound-processor] ai auto reply dispatch failed:', err)
   }
 
-  // 10. Durable Commercial Intelligence Enqueue (Feature-gated per tenant inside RPC)
-  try {
-    await db.rpc('enqueue_intelligence_extraction', {
-      p_account_id: event.accountId,
-      p_conversation_id: conversation.id,
-      p_trigger_message_id: messageId,
-    })
-  } catch (err) {
-    console.error('[inbound-processor] intelligence extraction enqueue failed:', err)
-  }
+  // 10. Commercial Intelligence Enqueue:
+  // Transactionally handled by PostgreSQL trigger trg_customer_message_enqueue_intelligence
+  // upon message INSERT (same ACID transaction, feature-gated per tenant in DB).
 
   return {
     processed: true,
