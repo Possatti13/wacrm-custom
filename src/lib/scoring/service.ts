@@ -60,56 +60,37 @@ export class LeadScoringService {
     nextCursor: string | null
     isObsolete: boolean
   }> {
-    const cfg = await getLeadScoringConfig(this.db, payload.accountId)
-    if (!cfg || !cfg.enabled || cfg.current_revision_id !== payload.targetRevisionId) {
-      // Target revision is no longer current -> obsolete job
-      return { processedCount: 0, nextCursor: null, isObsolete: true }
-    }
-
-    const batchSize = payload.batchSize || 50
-
-    let query = this.db
-      .from('contacts')
-      .select('id')
-      .eq('account_id', payload.accountId)
-      .order('id', { ascending: true })
-      .limit(batchSize)
-
-    if (payload.afterContactId) {
-      query = query.gt('id', payload.afterContactId)
-    }
-
-    const { data: contacts, error } = await query
+    const { data, error } = await this.db.rpc('recalculate_tenant_lead_scores_batch', {
+      p_account_id: payload.accountId,
+      p_target_revision_id: payload.targetRevisionId,
+      p_after_contact_id: payload.afterContactId || null,
+      p_batch_size: payload.batchSize || 50,
+    })
 
     if (error) {
-      throw new Error(`processTenantSweep fetch contacts failed: ${error.message}`)
+      throw new Error(`processTenantSweep failed: ${error.message}`)
     }
 
-    const contactList = contacts || []
-    for (const c of contactList) {
-      await calculateAndPersistContactScore(
-        this.db,
-        payload.accountId,
-        c.id as string,
-        'tenant_revision_recompute'
-      )
+    const res = data as {
+      outcome: string
+      processed_count: number
+      next_cursor: string | null
+      is_obsolete: boolean
     }
 
-    const nextCursor = contactList.length === batchSize ? (contactList[contactList.length - 1].id as string) : null
-
-    if (nextCursor) {
+    if (res.next_cursor) {
       await this.enqueueTenantSweep({
         accountId: payload.accountId,
         targetRevisionId: payload.targetRevisionId,
-        afterContactId: nextCursor,
-        batchSize,
+        afterContactId: res.next_cursor,
+        batchSize: payload.batchSize || 50,
       })
     }
 
     return {
-      processedCount: contactList.length,
-      nextCursor,
-      isObsolete: false,
+      processedCount: res.processed_count,
+      nextCursor: res.next_cursor,
+      isObsolete: res.is_obsolete,
     }
   }
 }
