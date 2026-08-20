@@ -157,6 +157,7 @@ async function processInboundMessage(
       message_id: event.externalMessageId || null,
       source_provider: event.provider || null,
       status: 'delivered',
+      occurred_at: event.timestamp ? new Date(event.timestamp * 1000).toISOString() : new Date().toISOString(),
     })
     .select('*')
     .single()
