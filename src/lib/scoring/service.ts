@@ -3,7 +3,6 @@ import type { LeadScoringRule, RecalculateTenantSweepJobPayload } from './types'
 import {
   saveLeadScoringConfiguration,
   calculateAndPersistContactScore,
-  getLeadScoringConfig,
 } from './repository'
 
 export class LeadScoringService {
