@@ -11,6 +11,7 @@ import {
   Save,
   RotateCcw,
   Sliders,
+  TrendingUp,
 } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 import { canEditSettings } from "@/lib/auth/roles";
@@ -34,7 +35,7 @@ import {
 } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { SettingsPanelHead } from "./settings-panel-head";
-import { cn } from "@/lib/utils";
+import type { InvocationMode, TenantCostStats } from "@/lib/intelligence/types";
 
 const MASKED_KEY = "••••••••••••••••";
 
@@ -47,12 +48,21 @@ export function CommercialIntelligenceSettings() {
 
   // Engine Settings
   const [enabled, setEnabled] = useState(false);
+  const [invocationMode, setInvocationMode] = useState<InvocationMode>("on_demand");
   const [provider, setProvider] = useState<string>("openai");
   const [model, setModel] = useState<string>("gpt-4o-mini");
   const [apiKey, setApiKey] = useState("");
   const [keyEdited, setKeyEdited] = useState(false);
   const [showKey, setShowKey] = useState(false);
   const [hasStoredKey, setHasStoredKey] = useState(false);
+
+  // Limits
+  const [maxDay, setMaxDay] = useState(1000);
+  const [maxMonth, setMaxMonth] = useState(25000);
+  const [budgetLimit, setBudgetLimit] = useState<string>("");
+
+  // Cost & Usage Stats
+  const [costStats, setCostStats] = useState<TenantCostStats | null>(null);
 
   // Scoring Weights
   const [baseScore, setBaseScore] = useState(10);
@@ -83,8 +93,16 @@ export function CommercialIntelligenceSettings() {
 
       if (data.settings) {
         setEnabled(!!data.settings.enabled);
+        setInvocationMode(data.settings.invocation_mode || "on_demand");
         setProvider(data.settings.provider || "openai");
         setModel(data.settings.model || "gpt-4o-mini");
+        setMaxDay(data.settings.max_ai_actions_per_day ?? 1000);
+        setMaxMonth(data.settings.max_ai_actions_per_month ?? 25000);
+        setBudgetLimit(data.settings.monthly_budget_limit_usd ? String(data.settings.monthly_budget_limit_usd) : "");
+      }
+
+      if (data.cost_stats) {
+        setCostStats(data.cost_stats);
       }
 
       setHasStoredKey(!!data.has_api_key);
@@ -162,8 +180,12 @@ export function CommercialIntelligenceSettings() {
       const payload: Record<string, unknown> = {
         settings: {
           enabled,
+          invocation_mode: invocationMode,
           provider,
           model,
+          max_ai_actions_per_day: Number(maxDay) || 1000,
+          max_ai_actions_per_month: Number(maxMonth) || 25000,
+          monthly_budget_limit_usd: budgetLimit ? Number(budgetLimit) : null,
         },
         scoringConfig: {
           enabled: true,
@@ -182,7 +204,7 @@ export function CommercialIntelligenceSettings() {
       };
 
       if (keyEdited && apiKey !== MASKED_KEY) {
-        payload.apiKey = apiKey.trim();
+        payload.apiKey = apiKey;
       }
 
       const res = await fetch("/api/ai/intelligence-settings", {
@@ -192,11 +214,11 @@ export function CommercialIntelligenceSettings() {
       });
 
       if (!res.ok) {
-        const errData = await res.json();
-        throw new Error(errData.error || "Falha ao salvar configurações");
+        const data = await res.json();
+        throw new Error(data.error || "Erro ao salvar configurações");
       }
 
-      toast.success("Configurações de Inteligência Comercial salvas com sucesso!");
+      toast.success("Configurações salvas com sucesso!");
       setKeyEdited(false);
       fetchSettings();
     } catch (err) {
@@ -225,24 +247,78 @@ export function CommercialIntelligenceSettings() {
     );
   }
 
+  const cacheRate = costStats && costStats.total_requests > 0
+    ? Math.round((costStats.cached_requests / costStats.total_requests) * 100)
+    : 0;
+
   return (
     <div className="space-y-6">
       <SettingsPanelHead
-        title="Inteligência Comercial & Lead Scoring"
-        description="Configure o motor de extração em tempo real e as regras determinísticas de pontuação de leads."
+        title="Inteligência Interna & Lead Scoring"
+        description="Configure o motor de IA interna sob demanda, limites de custo e as regras determinísticas de pontuação."
       />
 
-      {/* 1. EXTRACTION ENGINE CONTROL */}
+      {/* 1. USAGE & COST CONTROL DASHBOARD */}
+      {costStats && (
+        <Card className="border-primary/20 bg-primary/5">
+          <CardHeader className="pb-3">
+            <div className="flex items-center justify-between">
+              <div>
+                <CardTitle className="text-base flex items-center gap-2">
+                  <TrendingUp className="h-4 w-4 text-primary" />
+                  Métricas de Consumo & Economia de IA (Mês Atual)
+                </CardTitle>
+                <CardDescription className="text-xs">
+                  Acompanhamento de requisições internas, taxa de cache e estimativa de investimento.
+                </CardDescription>
+              </div>
+              <Badge variant="outline" className="font-mono text-xs">
+                {cacheRate}% Economizado via Cache
+              </Badge>
+            </div>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+              <div className="rounded-lg border bg-background p-3">
+                <div className="text-[11px] text-muted-foreground">Ações de IA Solicitadas</div>
+                <div className="text-xl font-bold font-mono mt-0.5">{costStats.total_requests}</div>
+                <div className="text-[10px] text-muted-foreground mt-0.5">{costStats.cached_requests} no cache</div>
+              </div>
+              <div className="rounded-lg border bg-background p-3">
+                <div className="text-[11px] text-muted-foreground">Chamadas Reais ao Provedor</div>
+                <div className="text-xl font-bold font-mono mt-0.5 text-primary">{costStats.provider_calls}</div>
+                <div className="text-[10px] text-muted-foreground mt-0.5">Executadas via LLM</div>
+              </div>
+              <div className="rounded-lg border bg-background p-3">
+                <div className="text-[11px] text-muted-foreground">Total de Tokens Processados</div>
+                <div className="text-xl font-bold font-mono mt-0.5">{costStats.total_tokens.toLocaleString()}</div>
+                <div className="text-[10px] text-muted-foreground mt-0.5">
+                  {costStats.total_prompt_tokens.toLocaleString()} in / {costStats.total_completion_tokens.toLocaleString()} out
+                </div>
+              </div>
+              <div className="rounded-lg border bg-background p-3">
+                <div className="text-[11px] text-muted-foreground">Custo Estimado (USD)</div>
+                <div className="text-xl font-bold font-mono mt-0.5 text-emerald-600 dark:text-emerald-400">
+                  ${Number(costStats.total_estimated_cost).toFixed(4)}
+                </div>
+                <div className="text-[10px] text-muted-foreground mt-0.5">Baseado na tabela oficial</div>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* 2. INVOCATION & ENGINE CONTROL */}
       <Card>
         <CardHeader className="pb-3">
           <div className="flex items-center justify-between">
             <div className="space-y-1">
               <CardTitle className="text-base flex items-center gap-2">
                 <Sparkles className="h-4 w-4 text-primary" />
-                Motor de Extração Contínua
+                Modo de Invocação da Inteligência
               </CardTitle>
               <CardDescription className="text-xs">
-                Analisa mensagens de clientes em background para extrair intenções, produtos e objeções.
+                Defina quando e como a IA interna deve ser acionada pelos usuários da empresa.
               </CardDescription>
             </div>
             <Switch
@@ -253,13 +329,31 @@ export function CommercialIntelligenceSettings() {
           </div>
         </CardHeader>
         <CardContent className="space-y-4 pt-1">
-          <div className="grid gap-4 sm:grid-cols-2">
+          <div className="grid gap-4 sm:grid-cols-3">
+            <div className="space-y-1.5">
+              <Label className="text-xs">Modo de Invocação</Label>
+              <Select
+                value={invocationMode}
+                onValueChange={(val) => val && setInvocationMode(val as InvocationMode)}
+                disabled={!canEdit || !enabled}
+              >
+                <SelectTrigger className="h-9 text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="on_demand">⚡ Sob Demanda (Recomendado)</SelectItem>
+                  <SelectItem value="automatic">⚙️ Automático (Toda Mensagem)</SelectItem>
+                  <SelectItem value="off">🚫 Desativado</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
             <div className="space-y-1.5">
               <Label className="text-xs">Provedor de IA</Label>
               <Select
                 value={provider}
                 onValueChange={(val) => val && setProvider(val)}
-                disabled={!canEdit}
+                disabled={!canEdit || !enabled}
               >
                 <SelectTrigger className="h-9 text-xs">
                   <SelectValue />
@@ -268,25 +362,86 @@ export function CommercialIntelligenceSettings() {
                   <SelectItem value="openai">OpenAI</SelectItem>
                   <SelectItem value="anthropic">Anthropic (Claude)</SelectItem>
                   <SelectItem value="xai">Grok / xAI</SelectItem>
+                  <SelectItem value="mock">Mock Simulator (Testes)</SelectItem>
                 </SelectContent>
               </Select>
             </div>
 
             <div className="space-y-1.5">
-              <Label className="text-xs">Modelo de Extração</Label>
+              <Label className="text-xs">Modelo de IA</Label>
               <Select
                 value={model}
                 onValueChange={(val) => val && setModel(val)}
-                disabled={!canEdit}
+                disabled={!canEdit || !enabled}
               >
                 <SelectTrigger className="h-9 text-xs font-mono">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="gpt-4o-mini">gpt-4o-mini (Recomendado para velocidade e custo)</SelectItem>
-                  <SelectItem value="gpt-4o">gpt-4o (Máxima capacidade analítica)</SelectItem>
+                  <SelectItem value="gpt-4o-mini">gpt-4o-mini (Custo-Benefício)</SelectItem>
+                  <SelectItem value="gpt-4o">gpt-4o (Alta Capacidade)</SelectItem>
+                  <SelectItem value="claude-3-5-sonnet-20241022">claude-3-5-sonnet</SelectItem>
+                  <SelectItem value="mock-model-v1">mock-model-v1</SelectItem>
                 </SelectContent>
               </Select>
+            </div>
+          </div>
+
+          {/* Mode Explanatory Notice */}
+          <div className="rounded-lg border bg-muted/40 p-3 text-xs text-muted-foreground space-y-1">
+            {invocationMode === "on_demand" && (
+              <p>
+                💡 <strong>Modo Sob Demanda:</strong> 10.000 mensagens recebidas no WhatsApp geram <strong>0 chamadas de IA</strong>. A IA só é acionada quando um vendedor ou gestor clicar em &quot;Analisar&quot;, &quot;Resumir&quot; ou consultar o Copilot.
+              </p>
+            )}
+            {invocationMode === "automatic" && (
+              <p>
+                ⚠️ <strong>Modo Automático:</strong> Toda mensagem recebida é enviada para fila de extração em segundo plano. Recomendado apenas para fluxos de alto volume onde o custo contínuo é desejado.
+              </p>
+            )}
+            {invocationMode === "off" && (
+              <p>
+                🚫 <strong>Modo Desativado:</strong> Todos os recursos de IA interna estão desligados.
+              </p>
+            )}
+          </div>
+
+          {/* Limits */}
+          <div className="grid gap-4 sm:grid-cols-3 pt-2">
+            <div className="space-y-1.5">
+              <Label className="text-xs">Limite de Ações/Dia</Label>
+              <Input
+                type="number"
+                min={0}
+                value={maxDay}
+                onChange={(e) => setMaxDay(Number(e.target.value))}
+                disabled={!canEdit || !enabled}
+                className="h-9 text-xs font-mono"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-xs">Limite de Ações/Mês</Label>
+              <Input
+                type="number"
+                min={0}
+                value={maxMonth}
+                onChange={(e) => setMaxMonth(Number(e.target.value))}
+                disabled={!canEdit || !enabled}
+                className="h-9 text-xs font-mono"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-xs">Teto de Orçamento Mensal (USD)</Label>
+              <Input
+                type="number"
+                min={0}
+                step="0.01"
+                placeholder="Opcional (ex: 50.00)"
+                value={budgetLimit}
+                onChange={(e) => setBudgetLimit(e.target.value)}
+                disabled={!canEdit || !enabled}
+                className="h-9 text-xs font-mono"
+              />
             </div>
           </div>
 
@@ -297,234 +452,219 @@ export function CommercialIntelligenceSettings() {
               Chave de API do Provedor
               {hasStoredKey && (
                 <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-normal">
-                  (Chave configurada e criptografada)
+                  (Chave configurada e criptografada com AES-256-GCM)
                 </span>
               )}
             </Label>
             <div className="relative">
               <Input
                 type={showKey ? "text" : "password"}
+                placeholder="sk-..."
                 value={apiKey}
                 onChange={(e) => {
                   setApiKey(e.target.value);
                   setKeyEdited(true);
                 }}
-                placeholder={hasStoredKey ? MASKED_KEY : "sk-..."}
-                disabled={!canEdit}
-                className="h-9 text-xs font-mono pr-10"
+                disabled={!canEdit || !enabled}
+                className="pr-10 font-mono text-xs h-9"
               />
-              <button
+              <Button
                 type="button"
+                variant="ghost"
+                size="sm"
+                className="absolute right-0 top-0 h-9 w-9 px-0 text-muted-foreground"
                 onClick={() => setShowKey(!showKey)}
-                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
               >
-                {showKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-              </button>
+                {showKey ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+              </Button>
             </div>
           </div>
         </CardContent>
       </Card>
 
-      {/* 2. LEAD SCORING DETERMINISTIC RULES */}
+      {/* 3. DETERMINISTIC LEAD SCORING CONFIGURATION */}
       <Card>
         <CardHeader className="pb-3">
           <div className="flex items-center justify-between">
-            <div className="space-y-1">
+            <div>
               <CardTitle className="text-base flex items-center gap-2">
                 <Flame className="h-4 w-4 text-emerald-500" />
-                Regras de Pontuação do Lead (0 a 100)
+                Regras Determinísticas de Lead Scoring
               </CardTitle>
               <CardDescription className="text-xs">
-                A pontuação é 100% determinística, auditável e recalculada a cada sinal factual.
+                A pontuação (0 a 100) é calculada de forma 100% determinística a partir dos dados do perfil comercial.
               </CardDescription>
             </div>
             <Button
               variant="outline"
               size="sm"
+              className="h-8 text-xs gap-1.5"
               onClick={handleResetWeights}
               disabled={!canEdit}
-              className="text-xs gap-1 h-8"
             >
-              <RotateCcw className="h-3 w-3" />
-              Restaurar Padrões
+              <RotateCcw className="h-3.5 w-3.5" />
+              Restaurar Padrão
             </Button>
           </div>
         </CardHeader>
-        <CardContent className="space-y-4 pt-1">
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            <div className="space-y-1.5 rounded-lg border border-border p-3 bg-muted/20">
-              <Label className="text-xs font-medium">Pontuação Base</Label>
+        <CardContent className="space-y-4">
+          <div className="grid gap-4 sm:grid-cols-3">
+            <div className="space-y-1.5">
+              <Label className="text-xs">Pontuação Base (Novo Lead)</Label>
               <Input
                 type="number"
                 value={baseScore}
                 onChange={(e) => setBaseScore(Number(e.target.value))}
                 disabled={!canEdit}
-                className="h-8 text-xs font-mono"
+                className="h-9 text-xs font-mono"
               />
-              <p className="text-[10px] text-muted-foreground">Pontos de partida ao iniciar conversa.</p>
             </div>
-
-            <div className="space-y-1.5 rounded-lg border border-border p-3 bg-muted/20">
-              <Label className="text-xs font-medium text-emerald-600">Bônus: Intenção de Compra</Label>
+            <div className="space-y-1.5">
+              <Label className="text-xs">Bônus: Intenção de Compra</Label>
               <Input
                 type="number"
                 value={intentBonus}
                 onChange={(e) => setIntentBonus(Number(e.target.value))}
                 disabled={!canEdit}
-                className="h-8 text-xs font-mono text-emerald-600"
+                className="h-9 text-xs font-mono"
               />
-              <p className="text-[10px] text-muted-foreground">Adicionado quando cliente quer comprar.</p>
             </div>
-
-            <div className="space-y-1.5 rounded-lg border border-border p-3 bg-muted/20">
-              <Label className="text-xs font-medium text-emerald-600">Bônus: Alta Urgência</Label>
+            <div className="space-y-1.5">
+              <Label className="text-xs">Bônus: Alta Urgência</Label>
               <Input
                 type="number"
                 value={urgencyHighBonus}
                 onChange={(e) => setUrgencyHighBonus(Number(e.target.value))}
                 disabled={!canEdit}
-                className="h-8 text-xs font-mono text-emerald-600"
+                className="h-9 text-xs font-mono"
               />
-              <p className="text-[10px] text-muted-foreground">Adicionado quando o prazo é imediato.</p>
             </div>
-
-            <div className="space-y-1.5 rounded-lg border border-border p-3 bg-muted/20">
-              <Label className="text-xs font-medium text-emerald-600">Bônus: Interesse no Catálogo</Label>
+            <div className="space-y-1.5">
+              <Label className="text-xs">Bônus: Interesse no Catálogo</Label>
               <Input
                 type="number"
                 value={catalogBonus}
                 onChange={(e) => setCatalogBonus(Number(e.target.value))}
                 disabled={!canEdit}
-                className="h-8 text-xs font-mono text-emerald-600"
+                className="h-9 text-xs font-mono"
               />
-              <p className="text-[10px] text-muted-foreground">Adicionado ao citar item do catálogo.</p>
             </div>
-
-            <div className="space-y-1.5 rounded-lg border border-border p-3 bg-muted/20">
-              <Label className="text-xs font-medium text-emerald-600">Bônus: Orçamento Adequado</Label>
+            <div className="space-y-1.5">
+              <Label className="text-xs">Bônus: Orçamento Compatível</Label>
               <Input
                 type="number"
                 value={budgetBonus}
                 onChange={(e) => setBudgetBonus(Number(e.target.value))}
                 disabled={!canEdit}
-                className="h-8 text-xs font-mono text-emerald-600"
+                className="h-9 text-xs font-mono"
               />
-              <p className="text-[10px] text-muted-foreground">Adicionado se o cliente tem orçamento.</p>
             </div>
-
-            <div className="space-y-1.5 rounded-lg border border-border p-3 bg-muted/20">
-              <Label className="text-xs font-medium text-rose-600">Penalidade: Objeção Ativa</Label>
+            <div className="space-y-1.5">
+              <Label className="text-xs">Penalidade: Objeção Aberta</Label>
               <Input
                 type="number"
                 value={objectionPenalty}
                 onChange={(e) => setObjectionPenalty(Number(e.target.value))}
                 disabled={!canEdit}
-                className="h-8 text-xs font-mono text-rose-600"
+                className="h-9 text-xs font-mono text-rose-500"
               />
-              <p className="text-[10px] text-muted-foreground">Subtraído enquanto houver objeção em aberto.</p>
             </div>
           </div>
         </CardContent>
       </Card>
 
-      {/* 3. INTERACTIVE SIMULATOR */}
-      <Card className="border-primary/30 bg-primary/[0.02]">
+      {/* 4. LIVE SIMULATOR */}
+      <Card className="border-border">
         <CardHeader className="pb-3">
           <CardTitle className="text-base flex items-center gap-2">
             <Sliders className="h-4 w-4 text-primary" />
-            Simulador de Qualificação em Tempo Real
+            Simulador de Lead Scoring em Tempo Real
           </CardTitle>
           <CardDescription className="text-xs">
-            Teste os pesos configurados acima simulando diferentes perfis de clientes.
+            Teste interativamente como os pesos configurados acima impactam o score final do cliente.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="grid gap-4 md:grid-cols-2">
-            {/* Simulation Inputs */}
-            <div className="space-y-3 rounded-xl border border-border bg-background p-3.5">
-              <h4 className="text-xs font-semibold text-foreground">Sinais do Cliente</h4>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="space-y-3">
+              <div className="space-y-1.5">
+                <Label className="text-xs">Intenção Simulada</Label>
+                <Select value={simIntent} onValueChange={(v) => setSimIntent(v || 'purchase')}>
+                  <SelectTrigger className="h-9 text-xs">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="purchase">Compra Declarada</SelectItem>
+                    <SelectItem value="support">Suporte / Dúvida Operacional</SelectItem>
+                    <SelectItem value="unknown">Indeterminado</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
 
-              <div className="space-y-2">
-                <div className="flex items-center justify-between text-xs">
-                  <span>Intenção de Compra</span>
-                  <Switch
-                    checked={simIntent === "purchase"}
-                    onCheckedChange={(c) => setSimIntent(c ? "purchase" : "support")}
-                  />
-                </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs">Urgência Simulada</Label>
+                <Select value={simUrgency} onValueChange={(v) => setSimUrgency(v || 'high')}>
+                  <SelectTrigger className="h-9 text-xs">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="high">Alta (Compra Imediata / Esta Semana)</SelectItem>
+                    <SelectItem value="medium">Média (Planejando Compra)</SelectItem>
+                    <SelectItem value="low">Baixa (Apenas Pesquisando)</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
 
-                <div className="flex items-center justify-between text-xs">
-                  <span>Alta Urgência (Imediato)</span>
-                  <Switch
-                    checked={simUrgency === "high"}
-                    onCheckedChange={(c) => setSimUrgency(c ? "high" : "low")}
-                  />
-                </div>
-
-                <div className="flex items-center justify-between text-xs">
-                  <span>Interesse em Item do Catálogo</span>
-                  <Switch
+              <div className="flex flex-wrap gap-4 pt-1">
+                <label className="flex items-center gap-2 text-xs cursor-pointer">
+                  <input
+                    type="checkbox"
                     checked={simInterest}
-                    onCheckedChange={setSimInterest}
+                    onChange={(e) => setSimInterest(e.target.checked)}
+                    className="rounded border-border text-primary"
                   />
-                </div>
-
-                <div className="flex items-center justify-between text-xs">
-                  <span>Orçamento Compatível</span>
-                  <Switch
+                  <span>Interesse em Item do Catálogo</span>
+                </label>
+                <label className="flex items-center gap-2 text-xs cursor-pointer">
+                  <input
+                    type="checkbox"
                     checked={simBudget}
-                    onCheckedChange={setSimBudget}
+                    onChange={(e) => setSimBudget(e.target.checked)}
+                    className="rounded border-border text-primary"
                   />
-                </div>
-
-                <div className="flex items-center justify-between text-xs text-rose-600 font-medium">
-                  <span>Possui Objeção Não Resolvida</span>
-                  <Switch
+                  <span>Orçamento Compatível</span>
+                </label>
+                <label className="flex items-center gap-2 text-xs cursor-pointer text-rose-500">
+                  <input
+                    type="checkbox"
                     checked={simObjection}
-                    onCheckedChange={setSimObjection}
+                    onChange={(e) => setSimObjection(e.target.checked)}
+                    className="rounded border-border text-rose-500"
                   />
-                </div>
+                  <span>Objeção Ativa Aberta</span>
+                </label>
               </div>
             </div>
 
-            {/* Simulation Output Gauge */}
+            {/* Result Preview */}
             {simResult && (
-              <div className="flex flex-col justify-between rounded-xl border border-border bg-background p-3.5 space-y-3">
+              <div className="rounded-xl border bg-muted/30 p-4 flex flex-col justify-between">
                 <div>
                   <div className="flex items-center justify-between">
-                    <span className="text-xs text-muted-foreground">Lead Score Resultante</span>
-                    <Badge
-                      variant="outline"
-                      className="font-semibold text-xs"
-                    >
-                      {simResult.qualification}
+                    <span className="text-xs font-semibold text-muted-foreground">Score Resultante</span>
+                    <Badge variant="outline" className="font-mono text-sm font-bold">
+                      {simResult.score} / 100
                     </Badge>
                   </div>
-                  <div className="mt-2 flex items-baseline gap-2">
-                    <span className="text-3xl font-bold font-mono text-primary">
-                      {simResult.score}
-                    </span>
-                    <span className="text-xs text-muted-foreground">/ 100 pontos</span>
+                  <div className="mt-2 text-sm font-semibold text-foreground">
+                    {simResult.qualification}
                   </div>
-                </div>
-
-                {/* Breakdown List */}
-                <div className="space-y-1 pt-2 border-t border-border/80">
-                  <span className="text-[11px] font-semibold text-foreground">Composição da Pontuação:</span>
-                  <div className="space-y-1">
-                    {Object.entries(simResult.breakdown).map(([key, item]) => (
-                      <div
-                        key={key}
-                        className="flex items-center justify-between text-[11px]"
-                      >
-                        <span className="text-muted-foreground truncate">{item.rule}</span>
-                        <span
-                          className={cn(
-                            "font-mono font-semibold ml-2",
-                            item.points >= 0 ? "text-emerald-600" : "text-rose-600"
-                          )}
-                        >
-                          {item.points >= 0 ? `+${item.points}` : item.points}
+                  <div className="mt-3 space-y-1 font-mono text-xs">
+                    {Object.entries(simResult.breakdown).map(([k, v]) => (
+                      <div key={k} className="flex justify-between text-muted-foreground">
+                        <span>{v.rule}:</span>
+                        <span className={v.points >= 0 ? "text-emerald-600 dark:text-emerald-400 font-bold" : "text-rose-500 font-bold"}>
+                          {v.points >= 0 ? `+${v.points}` : v.points}
                         </span>
                       </div>
                     ))}
@@ -536,16 +676,12 @@ export function CommercialIntelligenceSettings() {
         </CardContent>
       </Card>
 
-      {/* Save Action */}
+      {/* Save Button */}
       {canEdit && (
         <div className="flex justify-end pt-2">
-          <Button
-            onClick={handleSave}
-            disabled={saving}
-            className="gap-2 shadow-sm"
-          >
+          <Button onClick={handleSave} disabled={saving} className="gap-2">
             <Save className="h-4 w-4" />
-            {saving ? "Salvando..." : "Salvar Configurações de Inteligência"}
+            {saving ? "Salvando..." : "Salvar Configurações"}
           </Button>
         </div>
       )}

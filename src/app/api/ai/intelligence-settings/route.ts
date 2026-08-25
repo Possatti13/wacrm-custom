@@ -7,6 +7,7 @@ import {
 import {
   getTenantIntelligenceSettings,
   saveTenantIntelligenceSettings,
+  getTenantAiCostStats,
 } from '@/lib/intelligence/settings';
 import {
   getLeadScoringConfig,
@@ -18,9 +19,10 @@ export async function GET() {
   try {
     const { supabase, accountId } = await getCurrentAccount();
 
-    const [intelSettings, scoringConfig] = await Promise.all([
+    const [intelSettings, scoringConfig, costStats] = await Promise.all([
       getTenantIntelligenceSettings(supabase, accountId),
       getLeadScoringConfig(supabase, accountId).catch(() => null),
+      getTenantAiCostStats(supabase, accountId).catch(() => null),
     ]);
 
     // Check if ai_configs has an API key stored (never return the plaintext key)
@@ -34,15 +36,20 @@ export async function GET() {
       settings: intelSettings || {
         account_id: accountId,
         enabled: false,
+        invocation_mode: 'on_demand',
         provider: 'openai',
         model: 'gpt-4o-mini',
         extractor_version: 'v1',
         prompt_version: 'v1',
         temperature: 0.1,
         timeout_ms: 25000,
+        max_ai_actions_per_day: 1000,
+        max_ai_actions_per_month: 25000,
+        monthly_budget_limit_usd: null,
       },
       has_api_key: !!aiConfig?.api_key,
       scoring: scoringConfig,
+      cost_stats: costStats,
     });
   } catch (err) {
     return toErrorResponse(err);
@@ -86,34 +93,32 @@ export async function POST(req: Request) {
         accountId,
         {
           enabled: !!settings.enabled,
+          invocation_mode: settings.invocation_mode || 'on_demand',
           provider: settings.provider || 'openai',
           model: settings.model || 'gpt-4o-mini',
           extractor_version: settings.extractor_version || 'v1',
           prompt_version: settings.prompt_version || 'v1',
           temperature: typeof settings.temperature === 'number' ? settings.temperature : 0.1,
           timeout_ms: typeof settings.timeout_ms === 'number' ? settings.timeout_ms : 25000,
+          max_ai_actions_per_day: settings.max_ai_actions_per_day,
+          max_ai_actions_per_month: settings.max_ai_actions_per_month,
+          monthly_budget_limit_usd: settings.monthly_budget_limit_usd,
         }
       );
     }
 
     // 3. Save Lead Scoring Rules (if provided)
     let updatedScoring = null;
-    if (scoringConfig && Array.isArray(scoringRules)) {
+    if (scoringConfig && scoringRules) {
       updatedScoring = await saveLeadScoringConfiguration(
         supabase,
         accountId,
-        {
-          enabled: scoringConfig.enabled !== false,
-          base_score: scoringConfig.base_score ?? 10,
-          min_score: scoringConfig.min_score ?? 0,
-          max_score: scoringConfig.max_score ?? 100,
-        },
+        scoringConfig,
         scoringRules
       );
     }
 
     return NextResponse.json({
-      success: true,
       settings: updatedSettings,
       scoring: updatedScoring,
     });

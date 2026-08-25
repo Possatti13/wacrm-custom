@@ -1,9 +1,62 @@
 // ============================================================
-// Intelligence Extraction Engine Types (Phase 5A)
+// Intelligence Extraction Engine Types (Phase 5A & Phase 16)
 // ============================================================
 
 import type { InsightType, InformationSource } from '@/lib/insights/types'
 import type { CanonicalConfigSnapshot } from '@/lib/commercial-config/types'
+
+export type InvocationMode = 'off' | 'on_demand' | 'automatic'
+
+export type ActionType =
+  | 'summarize_conversation'
+  | 'analyze_conversation'
+  | 'identify_objections'
+  | 'analyze_purchase_intent'
+  | 'suggest_next_action'
+  | 'explain_lead_score'
+  | 'copilot_query'
+
+export type InternalAiRequestStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cached'
+
+export interface InternalAiRequest {
+  id: string
+  account_id: string
+  requested_by_user_id: string | null
+  target_type: 'conversation' | 'contact' | 'account' | 'query'
+  target_id: string | null
+  action_type: ActionType | string
+  status: InternalAiRequestStatus
+  input_fingerprint: string
+  message_boundary_id: string | null
+  message_count: number
+  cached_from_request_id: string | null
+  provider: string
+  model: string
+  result_json: Record<string, unknown> | null
+  result_text: string | null
+  input_tokens: number
+  output_tokens: number
+  total_tokens: number
+  estimated_cost: number
+  latency_ms: number | null
+  error_code: string | null
+  error_message: string | null
+  created_at: string
+  updated_at: string
+  completed_at: string | null
+}
+
+export interface TenantCostStats {
+  account_id: string
+  month_start: string
+  total_requests: number
+  cached_requests: number
+  provider_calls: number
+  total_prompt_tokens: number
+  total_completion_tokens: number
+  total_tokens: number
+  total_estimated_cost: number
+}
 
 // ============================================================
 // Catalog Context & Pinned Context Models
@@ -49,7 +102,9 @@ export interface RawModelObservation {
 }
 
 export interface RawStructuredExtractionOutput {
+  summary?: string
   observations: RawModelObservation[]
+  next_recommended_action?: string
 }
 
 // ============================================================

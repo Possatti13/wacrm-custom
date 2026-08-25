@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 import type { Contact, Deal, ContactNote, Tag } from "@/types";
 import type { ConversationInsightWithEvidence } from "@/lib/insights/types";
 import type { ContactLeadProfile, ContactCatalogInterestWithItem, ContactObjection } from "@/lib/leads/types";
+import type { ActionType } from "@/lib/intelligence/types";
 import {
   Copy,
   Check,
@@ -20,6 +21,10 @@ import {
   StickyNote,
   Plus,
   Briefcase,
+  RefreshCw,
+  FileText,
+  Lightbulb,
+  ShieldAlert,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -81,6 +86,14 @@ export function IntelligenceSidebar({
   const [insights, setInsights] = useState<ConversationInsightWithEvidence[]>([]);
   const [loadingIntel, setLoadingIntel] = useState(false);
 
+  // On-Demand AI Execution & Freshness State
+  const [freshness, setFreshness] = useState<"not_analyzed" | "fresh" | "stale">("not_analyzed");
+  const [messageDeltaCount, setMessageDeltaCount] = useState(0);
+  const [lastAnalysisAt, setLastAnalysisAt] = useState<string | null>(null);
+  const [executingAiAction, setExecutingAiAction] = useState<string | null>(null);
+  const [aiActionResultText, setAiActionResultText] = useState<string | null>(null);
+  const [aiActionTitle, setAiActionTitle] = useState<string | null>(null);
+
   // Evidence Dialog State
   const [selectedInsightForEvidence, setSelectedInsightForEvidence] =
     useState<ConversationInsightWithEvidence | null>(null);
@@ -98,35 +111,46 @@ export function IntelligenceSidebar({
     if (!contact || !accountId) return;
     const supabase = createClient();
 
-    const [dealsRes, notesRes, tagsRes] = await Promise.all([
-      supabase
-        .from("deals")
-        .select("*, stage:pipeline_stages(*)")
-        .eq("account_id", accountId)
-        .eq("contact_id", contact.id)
-        .order("created_at", { ascending: false }),
-      supabase
-        .from("contact_notes")
-        .select("*")
-        .eq("account_id", accountId)
-        .eq("contact_id", contact.id)
-        .order("created_at", { ascending: false }),
-      supabase
-        .from("contact_tags")
-        .select("id, tag_id, tags(*)")
-        .eq("contact_id", contact.id),
-    ]);
+    try {
+      const [dealsRes, notesRes, tagsRes] = await Promise.all([
+        supabase
+          .from("deals")
+          .select("*, pipeline_stages(name)")
+          .eq("account_id", accountId)
+          .eq("contact_id", contact.id)
+          .order("created_at", { ascending: false }),
+        supabase
+          .from("contact_notes")
+          .select("*, profiles:user_id(name)")
+          .eq("account_id", accountId)
+          .eq("contact_id", contact.id)
+          .order("created_at", { ascending: false }),
+        supabase
+          .from("contact_tag_assignments")
+          .select("id, tag_id, tags(*)")
+          .eq("account_id", accountId)
+          .eq("contact_id", contact.id),
+      ]);
 
-    if (dealsRes.data) setDeals(dealsRes.data);
-    if (notesRes.data) setNotes(notesRes.data);
-    if (tagsRes.data) {
-      const mapped = tagsRes.data
-        .filter((ct: Record<string, unknown>) => ct.tags)
-        .map((ct: Record<string, unknown>) => ({
-          ...(ct.tags as Tag),
-          contact_tag_id: ct.id as string,
-        }));
-      setTags(mapped);
+      if (dealsRes.data) setDeals(dealsRes.data as unknown as Deal[]);
+      if (notesRes.data) setNotes(notesRes.data as unknown as ContactNote[]);
+      if (tagsRes.data) {
+        interface TagJoinRow {
+          id: string;
+          tag_id: string;
+          tags: Tag | null;
+        }
+        const rows = tagsRes.data as unknown as TagJoinRow[];
+        const flattened = rows
+          .filter((t): t is TagJoinRow & { tags: Tag } => Boolean(t.tags))
+          .map((t) => ({
+            ...t.tags,
+            contact_tag_id: t.id,
+          }));
+        setTags(flattened);
+      }
+    } catch (err) {
+      console.error("Failed to load CRM data:", err);
     }
   }, [contact, accountId]);
 
@@ -175,25 +199,59 @@ export function IntelligenceSidebar({
       if (objectionsRes.data) setObjections(objectionsRes.data as ContactObjection[]);
       else setObjections([]);
 
-      // Fetch active conversation insights with evidence if conversationId is present
+      // Check conversation message count & last analysis boundary
       if (conversationId) {
-        const { data: insightsData } = await supabase
-          .from("conversation_insights")
-          .select(`
-            *,
-            catalog_items:catalog_item_id (
-              id,
-              name,
-              type,
-              sku,
-              status
-            )
-          `)
-          .eq("account_id", accountId)
-          .eq("conversation_id", conversationId)
-          .eq("status", "active")
-          .order("observed_at", { ascending: false });
+        const [msgsRes, lastReqRes, insightsDataRes] = await Promise.all([
+          supabase
+            .from("messages")
+            .select("id, created_at", { count: "exact" })
+            .eq("account_id", accountId)
+            .eq("conversation_id", conversationId),
+          supabase
+            .from("internal_ai_requests")
+            .select("id, created_at, message_count, status")
+            .eq("account_id", accountId)
+            .eq("target_type", "conversation")
+            .eq("target_id", conversationId)
+            .eq("action_type", "analyze_conversation")
+            .eq("status", "completed")
+            .order("created_at", { ascending: false })
+            .limit(1)
+            .maybeSingle(),
+          supabase
+            .from("conversation_insights")
+            .select(`
+              *,
+              catalog_items:catalog_item_id (
+                id,
+                name,
+                type,
+                sku,
+                status
+              )
+            `)
+            .eq("account_id", accountId)
+            .eq("conversation_id", conversationId)
+            .eq("status", "active")
+            .order("observed_at", { ascending: false }),
+        ]);
 
+        const totalMsgs = msgsRes.count || 0;
+        const lastReq = lastReqRes.data;
+
+        if (!lastReq) {
+          setFreshness("not_analyzed");
+          setMessageDeltaCount(totalMsgs);
+          setLastAnalysisAt(null);
+        } else {
+          setLastAnalysisAt(lastReq.created_at);
+          const analyzedCount = lastReq.message_count || 0;
+          const delta = Math.max(0, totalMsgs - analyzedCount);
+          setMessageDeltaCount(delta);
+          setFreshness(delta === 0 ? "fresh" : "stale");
+        }
+
+        const insightsData = insightsDataRes.data;
         if (insightsData && insightsData.length > 0) {
           const insightIds = insightsData.map((i: { id: string }) => i.id);
           const { data: evidenceData } = await supabase
@@ -223,6 +281,44 @@ export function IntelligenceSidebar({
     fetchCrmData();
     fetchIntelligenceData();
   }, [fetchCrmData, fetchIntelligenceData]);
+
+  // Execute explicit On-Demand AI action
+  const handleTriggerAiAction = async (actionType: ActionType, label: string) => {
+    if (!conversationId || !accountId) return;
+    setExecutingAiAction(actionType);
+    setAiActionTitle(label);
+
+    try {
+      const res = await fetch("/api/ai/on-demand", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          targetType: "conversation",
+          targetId: conversationId,
+          actionType,
+        }),
+      });
+
+      if (!res.ok) {
+        const errJson = await res.json();
+        throw new Error(errJson.error || "Erro ao executar ação de IA");
+      }
+
+      const data = await res.json();
+      setAiActionResultText(data.request?.result_text || "Análise concluída com sucesso.");
+      toast.success(
+        data.cached
+          ? `Resultado obtido instantaneamente do cache!`
+          : `Inteligência executada com sucesso!`
+      );
+      fetchIntelligenceData();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Erro desconhecido";
+      toast.error(`Falha na inteligência: ${msg}`);
+    } finally {
+      setExecutingAiAction(null);
+    }
+  };
 
   const handleCopyPhone = useCallback(async () => {
     if (!contact?.phone) return;
@@ -375,6 +471,102 @@ export function IntelligenceSidebar({
         <TabsContent value="intelligence" className="flex-1 min-h-0 m-0">
           <ScrollArea className="h-full">
             <div className="p-3.5 space-y-4">
+              {/* ON-DEMAND CONTROL & FRESHNESS BANNER */}
+              <div className="rounded-xl border border-border bg-background p-3 shadow-sm space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                    Status da Análise
+                  </span>
+                  {freshness === "fresh" && (
+                    <Badge variant="outline" className="text-[10px] text-emerald-600 dark:text-emerald-400 border-emerald-500/30 bg-emerald-50/50 dark:bg-emerald-950/20">
+                      ✓ Em dia
+                    </Badge>
+                  )}
+                  {freshness === "stale" && (
+                    <Badge variant="outline" className="text-[10px] text-amber-600 dark:text-amber-400 border-amber-500/30 bg-amber-50/50 dark:bg-amber-950/20">
+                      ⚠️ {messageDeltaCount} nova(s) msg(s)
+                    </Badge>
+                  )}
+                  {freshness === "not_analyzed" && (
+                    <Badge variant="outline" className="text-[10px] text-muted-foreground">
+                      Não analisado
+                    </Badge>
+                  )}
+                </div>
+
+                {lastAnalysisAt && (
+                  <div className="text-[10px] text-muted-foreground">
+                    Última análise: {format(new Date(lastAnalysisAt), "dd/MM 'às' HH:mm", { locale: ptBR })}
+                  </div>
+                )}
+
+                {/* Primary Action Button */}
+                <Button
+                  size="sm"
+                  className="w-full h-8 text-xs gap-1.5"
+                  disabled={executingAiAction !== null}
+                  onClick={() => handleTriggerAiAction("analyze_conversation", "Extração Completa")}
+                >
+                  <RefreshCw className={cn("h-3.5 w-3.5", executingAiAction === "analyze_conversation" && "animate-spin")} />
+                  {freshness === "stale" ? "Atualizar Análise do Lead" : "Analisar Conversa Agora"}
+                </Button>
+
+                {/* Secondary Quick Actions */}
+                <div className="grid grid-cols-3 gap-1.5 pt-1">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-7 text-[10px] px-1 gap-1"
+                    disabled={executingAiAction !== null}
+                    onClick={() => handleTriggerAiAction("summarize_conversation", "Resumo Executivo")}
+                  >
+                    <FileText className="h-3 w-3" />
+                    Resumir
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-7 text-[10px] px-1 gap-1"
+                    disabled={executingAiAction !== null}
+                    onClick={() => handleTriggerAiAction("suggest_next_action", "Próximo Passo")}
+                  >
+                    <Lightbulb className="h-3 w-3" />
+                    Próx. Ação
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-7 text-[10px] px-1 gap-1"
+                    disabled={executingAiAction !== null}
+                    onClick={() => handleTriggerAiAction("identify_objections", "Mapeamento de Objeções")}
+                  >
+                    <ShieldAlert className="h-3 w-3" />
+                    Objeções
+                  </Button>
+                </div>
+              </div>
+
+              {/* On-Demand Result Box (When generated) */}
+              {aiActionResultText && (
+                <div className="rounded-xl border border-primary/20 bg-primary/5 p-3 text-xs space-y-2">
+                  <div className="flex items-center justify-between text-primary font-semibold text-[11px]">
+                    <span className="flex items-center gap-1.5">
+                      <Sparkles className="h-3.5 w-3.5" />
+                      {aiActionTitle || "Resultado da IA"}
+                    </span>
+                    <button
+                      onClick={() => setAiActionResultText(null)}
+                      className="text-muted-foreground hover:text-foreground text-[10px]"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                  <div className="whitespace-pre-wrap text-foreground font-sans leading-relaxed text-[11px]">
+                    {aiActionResultText}
+                  </div>
+                </div>
+              )}
+
               {/* Lead Score Widget */}
               <div className="rounded-xl border border-border bg-background p-3.5 shadow-sm space-y-3">
                 <div className="flex items-center justify-between">
@@ -650,35 +842,42 @@ export function IntelligenceSidebar({
                   <TagIcon className="h-3 w-3" />
                   Tags do Contato ({tags.length})
                 </div>
-                <div className="flex flex-wrap gap-1">
-                  {tags.length === 0 ? (
-                    <p className="text-xs text-muted-foreground">Nenhuma tag vinculada</p>
-                  ) : (
-                    tags.map((tag) => (
-                      <span
-                        key={tag.contact_tag_id}
-                        className="rounded-full px-2 py-0.5 text-[10px] font-medium"
+                {tags.length === 0 ? (
+                  <div className="rounded-lg border border-dashed border-border p-3 text-center text-xs text-muted-foreground">
+                    Nenhuma tag vinculada
+                  </div>
+                ) : (
+                  <div className="flex flex-wrap gap-1.5">
+                    {tags.map((tag) => (
+                      <Badge
+                        key={tag.id}
+                        variant="secondary"
+                        className="text-xs"
                         style={{
-                          backgroundColor: `${tag.color}20`,
-                          color: tag.color,
+                          backgroundColor: tag.color ? `${tag.color}20` : undefined,
+                          color: tag.color || undefined,
+                          borderColor: tag.color ? `${tag.color}40` : undefined,
                         }}
                       >
                         {tag.name}
-                      </span>
-                    ))
-                  )}
-                </div>
+                      </Badge>
+                    ))}
+                  </div>
+                )}
               </div>
 
-              {/* Deals / Negócios */}
+              {/* Deals */}
               <div className="space-y-2">
-                <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-                  <DollarSign className="h-3 w-3" />
-                  Negócios no Pipeline ({deals.length})
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                    <DollarSign className="h-3 w-3 text-emerald-500" />
+                    Oportunidades ({deals.length})
+                  </div>
                 </div>
+
                 {deals.length === 0 ? (
                   <div className="rounded-lg border border-dashed border-border p-3 text-center text-xs text-muted-foreground">
-                    Nenhum negócio ativo
+                    Nenhum negócio associado
                   </div>
                 ) : (
                   <div className="space-y-2">
@@ -687,19 +886,15 @@ export function IntelligenceSidebar({
                         key={deal.id}
                         className="rounded-lg border border-border bg-background p-2.5 text-xs space-y-1"
                       >
-                        <div className="font-semibold text-foreground truncate">{deal.title}</div>
-                        <div className="flex items-center justify-between text-muted-foreground">
-                          <span>
-                            {new Intl.NumberFormat("pt-BR", {
-                              style: "currency",
-                              currency: "BRL",
-                            }).format(deal.value)}
+                        <div className="flex items-center justify-between font-medium">
+                          <span className="text-foreground">{deal.title}</span>
+                          <span className="font-mono text-emerald-600 dark:text-emerald-400">
+                            {deal.value ? `R$ ${Number(deal.value).toLocaleString("pt-BR")}` : "R$ 0"}
                           </span>
-                          {deal.stage && (
-                            <Badge variant="outline" className="text-[10px]">
-                              {deal.stage.name}
-                            </Badge>
-                          )}
+                        </div>
+                        <div className="flex items-center justify-between text-[10px] text-muted-foreground">
+                          <span>{(deal as Deal & { pipeline_stages?: { name: string } | null }).pipeline_stages?.name || "Etapa padrão"}</span>
+                          <span className="capitalize">{deal.status}</span>
                         </div>
                       </div>
                     ))}
@@ -710,42 +905,50 @@ export function IntelligenceSidebar({
               {/* Internal Notes */}
               <div className="space-y-2">
                 <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-                  <StickyNote className="h-3 w-3" />
+                  <StickyNote className="h-3 w-3 text-amber-500" />
                   Notas Internas ({notes.length})
                 </div>
 
                 <div className="space-y-2">
-                  <textarea
-                    value={newNote}
-                    onChange={(e) => setNewNote(e.target.value)}
-                    placeholder="Adicionar nota interna privada..."
-                    className="w-full rounded-md border border-input bg-background p-2 text-xs placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring resize-none h-16"
-                  />
-                  <Button
-                    size="sm"
-                    className="w-full h-7 text-xs gap-1"
-                    disabled={addingNote || !newNote.trim()}
-                    onClick={handleAddNote}
-                  >
-                    <Plus className="h-3 w-3" />
-                    {addingNote ? "Salvando..." : "Salvar Nota"}
-                  </Button>
-                </div>
-
-                <div className="space-y-2 pt-2">
-                  {notes.map((note) => (
-                    <div
-                      key={note.id}
-                      className="rounded-lg border border-border bg-background p-2.5 text-xs space-y-1"
+                  <div className="flex gap-1.5">
+                    <input
+                      type="text"
+                      placeholder="Adicionar nota..."
+                      value={newNote}
+                      onChange={(e) => setNewNote(e.target.value)}
+                      onKeyDown={(e) => e.key === "Enter" && handleAddNote()}
+                      className="flex-1 rounded-md border border-border bg-background px-2.5 py-1 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                    />
+                    <Button
+                      size="sm"
+                      className="h-7 px-2.5 text-xs"
+                      onClick={handleAddNote}
+                      disabled={addingNote || !newNote.trim()}
                     >
-                      <p className="text-foreground whitespace-pre-wrap leading-relaxed">
-                        {note.note_text}
-                      </p>
-                      <div className="text-[10px] text-muted-foreground text-right">
-                        {format(new Date(note.created_at), "dd/MM/yyyy HH:mm", { locale: ptBR })}
-                      </div>
+                      Salvar
+                    </Button>
+                  </div>
+
+                  {notes.length === 0 ? (
+                    <div className="rounded-lg border border-dashed border-border p-3 text-center text-xs text-muted-foreground">
+                      Nenhuma nota registrada
                     </div>
-                  ))}
+                  ) : (
+                    <div className="space-y-2">
+                      {notes.map((note) => (
+                        <div
+                          key={note.id}
+                          className="rounded-lg border border-border bg-background p-2.5 text-xs space-y-1"
+                        >
+                          <p className="text-foreground whitespace-pre-wrap">{note.note_text}</p>
+                          <div className="flex items-center justify-between text-[10px] text-muted-foreground">
+                            <span>{(note as ContactNote & { profiles?: { name: string } | null }).profiles?.name || "Atendente"}</span>
+                            <span>{format(new Date(note.created_at), "dd/MM HH:mm", { locale: ptBR })}</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
@@ -753,24 +956,24 @@ export function IntelligenceSidebar({
         </TabsContent>
       </Tabs>
 
-      {/* Interactive Evidence Dialog */}
+      {/* Evidence Dialog */}
       <EvidenceDialog
-        insight={selectedInsightForEvidence}
         open={evidenceDialogOpen}
         onOpenChange={setEvidenceDialogOpen}
+        insight={selectedInsightForEvidence}
         onJumpToMessage={onJumpToMessage}
       />
 
-      {/* Task Creation Dialog from AI Suggestion */}
+      {/* Task Creation Dialog */}
       <TaskFormDialog
         open={taskDialogOpen}
         onOpenChange={setTaskDialogOpen}
-        onSubmit={handleCreateTask}
         initialSuggestion={{
-          actionText: taskActionText,
+          actionText: taskActionText ? `Follow-up: ${taskActionText}` : "",
           contactId: contact.id,
           conversationId: conversationId || undefined,
         }}
+        onSubmit={handleCreateTask}
       />
     </div>
   );
