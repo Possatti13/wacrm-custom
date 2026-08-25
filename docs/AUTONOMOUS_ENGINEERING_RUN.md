@@ -57,7 +57,7 @@ graph TD
 ## 3. Database Migrations (Canonical Chain: 001 $\rightarrow$ 059)
 
 * `056_security_search_path_and_privilege_hardening.sql`: Security advisor hardening, locked `search_path`, revoked public execution.
-* `057_fix_intelligence_settings_rls_recursion.sql`: Fixed self-referential RLS recursion on `tenant_intelligence_settings`.
+* `057_performance_indexing_and_rls_initplan.sql`: Performance indexing and RLS initplan optimization.
 * `058_tasks_and_followup_system.sql`: Multi-tenant `tasks` table with composite foreign keys `(account_id, contact_id)`, `(account_id, conversation_id)`, RLS, and AI provenance.
 * `059_pipeline_intelligence_stage_suggestions.sql`: Multi-tenant `deal_stage_suggestions` table, covering indexes, and atomic RPCs (`apply_deal_stage_suggestion`, `dismiss_deal_stage_suggestion`).
 

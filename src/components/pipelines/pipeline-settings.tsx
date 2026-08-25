@@ -112,6 +112,7 @@ export function PipelineSettings({
     // latency-scaled linearly with stage count.
     const stageRows = localStages.map((s, i) => ({
       id: s.id,
+      account_id: s.account_id || pipeline.account_id,
       pipeline_id: s.pipeline_id,
       name: s.name,
       color: s.color,
@@ -145,6 +146,7 @@ export function PipelineSettings({
     const { data, error } = await supabase
       .from("pipeline_stages")
       .insert({
+        account_id: pipeline.account_id,
         pipeline_id: pipeline.id,
         name: trimmed,
         color: newStageColor,

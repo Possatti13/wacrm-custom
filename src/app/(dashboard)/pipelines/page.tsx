@@ -130,6 +130,7 @@ export default function PipelinesPage() {
     }
 
     const stagesPayload = SPEC_DEFAULT_STAGES.map((s) => ({
+      account_id: accountId,
       pipeline_id: pipeline.id,
       name: s.name,
       color: s.color,
@@ -280,6 +281,7 @@ export default function PipelinesPage() {
     }
 
     const stagesPayload = SPEC_DEFAULT_STAGES.map((s) => ({
+      account_id: accountId,
       pipeline_id: pipeline.id,
       name: s.name,
       color: s.color,

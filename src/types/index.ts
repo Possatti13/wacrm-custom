@@ -358,12 +358,14 @@ export interface MessageTemplate {
 export interface Pipeline {
   id: string;
   user_id: string;
+  account_id?: string;
   name: string;
   created_at: string;
 }
 
 export interface PipelineStage {
   id: string;
+  account_id?: string;
   pipeline_id: string;
   name: string;
   position: number;
