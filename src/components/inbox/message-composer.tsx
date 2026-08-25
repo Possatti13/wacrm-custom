@@ -118,6 +118,7 @@ interface MessageComposerProps {
   onOpenTemplates: () => void;
   replyTo?: ReplyDraft | null;
   onClearReply?: () => void;
+  prefilledText?: string;
 }
 
 function formatDuration(seconds: number): string {
@@ -140,6 +141,7 @@ export function MessageComposer({
   onOpenTemplates,
   replyTo,
   onClearReply,
+  prefilledText,
 }: MessageComposerProps) {
   const t = useTranslations("Inbox.composer");
 
@@ -147,6 +149,13 @@ export function MessageComposer({
   const [sending, setSending] = useState(false);
   const [drafting, setDrafting] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    if (prefilledText) {
+      setText(prefilledText);
+      textareaRef.current?.focus();
+    }
+  }, [prefilledText]);
 
   // Interactive-message builder dialog + quick-reply picker.
   const [interactiveOpen, setInteractiveOpen] = useState(false);

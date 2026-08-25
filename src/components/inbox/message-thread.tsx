@@ -27,6 +27,7 @@ import {
   RefreshCw,
   PanelRightOpen,
   PanelRightClose,
+  Sparkles,
 } from "lucide-react";
 import { format, isToday, isYesterday, differenceInHours } from "date-fns";
 import { useTranslations } from "next-intl";
@@ -38,7 +39,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { MessageBubble } from "./message-bubble";
 import { MessageActions } from "./message-actions";
 import {
@@ -49,6 +49,7 @@ import {
 import { deleteAccountMedia } from "@/lib/storage/upload-media";
 import { TemplatePicker } from "./template-picker";
 import { AiThreadBanner } from "./ai-thread-banner";
+import { CopilotSheet } from "./copilot-sheet";
 import { buildReplyPreview } from "./reply-quote";
 import { toast } from "sonner";
 
@@ -202,6 +203,8 @@ export function MessageThread({
     }, 700);
   }, [isRefreshing, onRefresh]);
   const [replyTo, setReplyTo] = useState<ReplyDraft | null>(null);
+  const [copilotOpen, setCopilotOpen] = useState(false);
+  const [prefilledText, setPrefilledText] = useState<string>("");
 
   // Profiles are bounded by RLS to rows the current user is allowed to
   // see — today that's just the current user, but the dropdown keeps the
@@ -965,6 +968,17 @@ export function MessageThread({
             </button>
           )}
 
+          {/* Copilot button */}
+          <button
+            type="button"
+            onClick={() => setCopilotOpen(true)}
+            className="inline-flex items-center gap-1.5 h-7 px-2.5 text-xs font-semibold rounded-md border border-primary/40 bg-primary/10 text-primary hover:bg-primary/20 transition-colors shadow-sm"
+            title="Abrir Copiloto Comercial"
+          >
+            <Sparkles className="h-3.5 w-3.5" />
+            <span className="hidden sm:inline">Copiloto</span>
+          </button>
+
           {/* Status dropdown */}
           <DropdownMenu>
             <DropdownMenuTrigger className={cn(
@@ -1160,12 +1174,21 @@ export function MessageThread({
         onOpenTemplates={handleOpenTemplates}
         replyTo={replyTo}
         onClearReply={() => setReplyTo(null)}
+        prefilledText={prefilledText}
       />
 
       <TemplatePicker
         open={templateModalOpen}
         onOpenChange={setTemplateModalOpen}
         onSelect={handleSendTemplate}
+      />
+
+      <CopilotSheet
+        open={copilotOpen}
+        onOpenChange={setCopilotOpen}
+        conversationId={conversation.id}
+        contactId={contact.id}
+        onInsertText={(text) => setPrefilledText(text)}
       />
     </div>
   );
