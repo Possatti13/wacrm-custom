@@ -278,6 +278,57 @@ describe('Phase 16 — Internal On-Demand AI Economics & Invocation Tests', () =
 
     // Create Supabase client shim for PGlite
     const dbShim: any = {
+      rpc: async (fn: string, args: any) => {
+        if (fn === 'claim_internal_ai_request') {
+          const res = await db.query(
+            `SELECT public.claim_internal_ai_request($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) as res;`,
+            [
+              args.p_account_id,
+              args.p_user_id || null,
+              args.p_target_type,
+              args.p_target_id || null,
+              args.p_action_type,
+              args.p_input_fingerprint,
+              args.p_message_boundary_id || null,
+              args.p_message_count || 0,
+              Boolean(args.p_force_refresh),
+              args.p_query_text || null,
+            ]
+          );
+          return { data: res.rows[0]?.res, error: null };
+        }
+        if (fn === 'complete_internal_ai_request') {
+          const res = await db.query(
+            `SELECT public.complete_internal_ai_request($1, $2, $3, $4, $5, $6, $7, $8, $9) as res;`,
+            [
+              args.p_account_id,
+              args.p_request_id,
+              JSON.stringify(args.p_result_json),
+              args.p_result_text,
+              args.p_input_tokens,
+              args.p_output_tokens,
+              args.p_total_tokens,
+              args.p_estimated_cost,
+              args.p_latency_ms,
+            ]
+          );
+          return { data: res.rows[0]?.res, error: null };
+        }
+        if (fn === 'fail_internal_ai_request') {
+          const res = await db.query(
+            `SELECT public.fail_internal_ai_request($1, $2, $3, $4, $5) as res;`,
+            [
+              args.p_account_id,
+              args.p_request_id,
+              args.p_error_code,
+              args.p_error_message,
+              args.p_latency_ms,
+            ]
+          );
+          return { data: res.rows[0]?.res, error: null };
+        }
+        return { data: null, error: null };
+      },
       from: (table: string) => ({
         select: (cols = '*') => ({
           eq: (f1: string, v1: any) => ({
