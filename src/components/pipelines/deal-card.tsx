@@ -1,7 +1,8 @@
 "use client";
 
 import type { Deal, PipelineStage } from "@/types";
-import { Calendar, Check, X } from "lucide-react";
+import type { DealStageSuggestion } from "@/types/pipeline-intelligence";
+import { Calendar, Check, X, Sparkles } from "lucide-react";
 import { formatCurrency } from "@/lib/currency";
 import { useTranslations } from "next-intl";
 
@@ -10,6 +11,9 @@ interface DealCardProps {
   stage: PipelineStage | null;
   onEdit: (deal: Deal) => void;
   isOverlay?: boolean;
+  suggestion?: DealStageSuggestion | null;
+  onApplySuggestion?: (suggestion: DealStageSuggestion) => void;
+  onDismissSuggestion?: (suggestion: DealStageSuggestion) => void;
 }
 
 function formatDate(dateStr: string) {
@@ -26,7 +30,15 @@ function initials(name?: string, fallback?: string) {
   return source.charAt(0).toUpperCase();
 }
 
-export function DealCard({ deal, stage, onEdit, isOverlay }: DealCardProps) {
+export function DealCard({
+  deal,
+  stage,
+  onEdit,
+  isOverlay,
+  suggestion,
+  onApplySuggestion,
+  onDismissSuggestion,
+}: DealCardProps) {
   const t = useTranslations("Pipelines.card");
   const contactLabel = deal.contact?.name || deal.contact?.phone || t("noContact");
   const assigneeLabel = deal.assignee?.full_name || null;
@@ -100,6 +112,43 @@ export function DealCard({ deal, stage, onEdit, isOverlay }: DealCardProps) {
           >
             {initials(assigneeLabel)}
           </span>
+        </div>
+      )}
+
+      {/* AI Stage Transition Recommendation */}
+      {suggestion && (
+        <div
+          onClick={(e) => e.stopPropagation()}
+          className="mt-2.5 rounded-lg border border-primary/30 bg-primary/10 p-2 text-xs space-y-1.5"
+        >
+          <div className="flex items-center gap-1 font-semibold text-primary text-[11px]">
+            <Sparkles className="h-3 w-3" />
+            <span>Sugerido: {suggestion.suggested_stage?.name || "Avançar Etapa"}</span>
+          </div>
+          <p className="text-[11px] text-muted-foreground line-clamp-2 italic">
+            &ldquo;{suggestion.reason}&rdquo;
+          </p>
+          <div className="flex items-center gap-1.5 pt-0.5">
+            {onApplySuggestion && (
+              <button
+                type="button"
+                onClick={() => onApplySuggestion(suggestion)}
+                className="flex-1 rounded bg-primary px-2 py-1 text-[10px] font-semibold text-primary-foreground hover:bg-primary/90 transition-colors"
+              >
+                Avançar Etapa ✓
+              </button>
+            )}
+            {onDismissSuggestion && (
+              <button
+                type="button"
+                onClick={() => onDismissSuggestion(suggestion)}
+                className="rounded border border-border bg-background px-2 py-1 text-[10px] text-muted-foreground hover:text-foreground transition-colors"
+                title="Ignorar recomendação"
+              >
+                ✕
+              </button>
+            )}
+          </div>
         </div>
       )}
     </button>

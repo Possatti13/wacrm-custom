@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect, useCallback } from "react";
 import {
   DndContext,
   DragOverlay,
@@ -15,12 +15,20 @@ import {
   type DragStartEvent,
 } from "@dnd-kit/core";
 import type { Deal, PipelineStage } from "@/types";
+import type { DealStageSuggestion } from "@/types/pipeline-intelligence";
+import {
+  listPendingStageSuggestions,
+  applyStageSuggestion,
+  dismissStageSuggestion,
+} from "@/lib/pipelines/intelligence-repository";
+import { createClient } from "@/lib/supabase/client";
 import { DealCard } from "./deal-card";
 import { Button } from "@/components/ui/button";
 import { Plus } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 import { formatCurrency } from "@/lib/currency";
 import { useTranslations } from "next-intl";
+import { toast } from "sonner";
 
 interface PipelineBoardProps {
   stages: PipelineStage[];
@@ -37,8 +45,65 @@ export function PipelineBoard({
   onAddDeal,
   onEditDeal,
 }: PipelineBoardProps) {
-  const { defaultCurrency } = useAuth();
+  const { accountId, defaultCurrency } = useAuth();
   const [activeDealId, setActiveDealId] = useState<string | null>(null);
+  const [suggestions, setSuggestions] = useState<DealStageSuggestion[]>([]);
+
+  useEffect(() => {
+    let isMounted = true;
+    if (!accountId || deals.length === 0) {
+      return;
+    }
+    const supabase = createClient();
+    listPendingStageSuggestions(supabase, accountId)
+      .then((data) => {
+        if (isMounted) setSuggestions(data);
+      })
+      .catch((err) => {
+        console.error("Failed to load stage suggestions:", err);
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [accountId, deals.length]);
+
+  const suggestionsByDealId = useMemo(() => {
+    const map = new Map<string, DealStageSuggestion>();
+    for (const s of suggestions) {
+      map.set(s.deal_id, s);
+    }
+    return map;
+  }, [suggestions]);
+
+  const handleApplySuggestion = async (suggestion: DealStageSuggestion) => {
+    if (!accountId) return;
+    const supabase = createClient();
+    try {
+      await applyStageSuggestion(supabase, accountId, suggestion.id);
+      onDealMoved(suggestion.deal_id, suggestion.suggested_stage_id);
+      setSuggestions((prev) => prev.filter((s) => s.id !== suggestion.id));
+      toast.success(
+        `Negócio avançado para ${suggestion.suggested_stage?.name || "nova etapa"}!`
+      );
+    } catch (err) {
+      console.error("Failed to apply stage suggestion:", err);
+      toast.error("Erro ao aplicar sugestão de etapa.");
+    }
+  };
+
+  const handleDismissSuggestion = async (suggestion: DealStageSuggestion) => {
+    if (!accountId) return;
+    const supabase = createClient();
+    try {
+      await dismissStageSuggestion(supabase, accountId, suggestion.id);
+      setSuggestions((prev) => prev.filter((s) => s.id !== suggestion.id));
+      toast.info("Sugestão de etapa ignorada.");
+    } catch (err) {
+      console.error("Failed to dismiss stage suggestion:", err);
+      toast.error("Erro ao dispensar sugestão.");
+    }
+  };
 
   const sortedStages = useMemo(
     () => [...stages].sort((a, b) => a.position - b.position),
@@ -117,6 +182,9 @@ export function PipelineBoard({
               deals={stageDeals}
               totalValue={totalValue}
               currency={defaultCurrency}
+              suggestionsByDealId={suggestionsByDealId}
+              onApplySuggestion={handleApplySuggestion}
+              onDismissSuggestion={handleDismissSuggestion}
               onAddDeal={onAddDeal}
               onEditDeal={onEditDeal}
             />
@@ -191,6 +259,9 @@ function StageColumn({
   deals,
   totalValue,
   currency,
+  suggestionsByDealId,
+  onApplySuggestion,
+  onDismissSuggestion,
   onAddDeal,
   onEditDeal,
 }: {
@@ -198,6 +269,9 @@ function StageColumn({
   deals: Deal[];
   totalValue: number;
   currency: string;
+  suggestionsByDealId: Map<string, DealStageSuggestion>;
+  onApplySuggestion: (suggestion: DealStageSuggestion) => void;
+  onDismissSuggestion: (suggestion: DealStageSuggestion) => void;
   onAddDeal: (stageId: string) => void;
   onEditDeal: (deal: Deal) => void;
 }) {
@@ -247,6 +321,9 @@ function StageColumn({
               key={deal.id}
               deal={deal}
               stage={stage}
+              suggestion={suggestionsByDealId.get(deal.id) ?? null}
+              onApplySuggestion={onApplySuggestion}
+              onDismissSuggestion={onDismissSuggestion}
               onEdit={onEditDeal}
             />
           ))
@@ -269,10 +346,16 @@ function StageColumn({
 function DraggableDealCard({
   deal,
   stage,
+  suggestion,
+  onApplySuggestion,
+  onDismissSuggestion,
   onEdit,
 }: {
   deal: Deal;
   stage: PipelineStage;
+  suggestion?: DealStageSuggestion | null;
+  onApplySuggestion?: (suggestion: DealStageSuggestion) => void;
+  onDismissSuggestion?: (suggestion: DealStageSuggestion) => void;
   onEdit: (deal: Deal) => void;
 }) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
@@ -286,7 +369,14 @@ function DraggableDealCard({
       {...attributes}
       style={{ opacity: isDragging ? 0.3 : 1, touchAction: "none" }}
     >
-      <DealCard deal={deal} stage={stage} onEdit={onEdit} />
+      <DealCard
+        deal={deal}
+        stage={stage}
+        suggestion={suggestion}
+        onApplySuggestion={onApplySuggestion}
+        onDismissSuggestion={onDismissSuggestion}
+        onEdit={onEdit}
+      />
     </div>
   );
 }
