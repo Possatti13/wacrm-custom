@@ -26,6 +26,9 @@ import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { EvidenceDialog } from "./evidence-dialog";
+import { TaskFormDialog } from "@/components/tasks/task-form-dialog";
+import { createTask } from "@/lib/tasks/repository";
+import type { CreateTaskInput } from "@/types/tasks";
 import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import { toast } from "sonner";
@@ -59,7 +62,7 @@ export function IntelligenceSidebar({
   onJumpToMessage,
   onCreateTaskFromAction,
 }: IntelligenceSidebarProps) {
-  const { accountId } = useAuth();
+  const { accountId, user } = useAuth();
   const [activeTab, setActiveTab] = useState<"intelligence" | "crm">("intelligence");
   const [copied, setCopied] = useState(false);
 
@@ -82,6 +85,10 @@ export function IntelligenceSidebar({
   const [selectedInsightForEvidence, setSelectedInsightForEvidence] =
     useState<ConversationInsightWithEvidence | null>(null);
   const [evidenceDialogOpen, setEvidenceDialogOpen] = useState(false);
+
+  // Task creation from AI suggestion
+  const [taskDialogOpen, setTaskDialogOpen] = useState(false);
+  const [taskActionText, setTaskActionText] = useState("");
 
   // Score breakdown expansion toggle
   const [showScoreBreakdown, setShowScoreBreakdown] = useState(false);
@@ -273,6 +280,21 @@ export function IntelligenceSidebar({
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Erro desconhecido";
       toast.error(`Erro ao retratar: ${msg}`);
+    }
+  };
+
+  const handleCreateTask = async (input: CreateTaskInput) => {
+    if (!accountId) return;
+    const supabase = createClient();
+    try {
+      await createTask(supabase, accountId, {
+        ...input,
+        created_by_user_id: user?.id,
+      });
+      toast.success("Tarefa de follow-up criada com sucesso!");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Erro desconhecido";
+      toast.error(`Erro ao criar tarefa: ${msg}`);
     }
   };
 
@@ -533,17 +555,22 @@ export function IntelligenceSidebar({
                   <p className="text-xs text-foreground leading-relaxed">
                     {leadProfile.next_action}
                   </p>
-                  {onCreateTaskFromAction && (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="w-full h-7 text-xs gap-1.5 mt-1 border-primary/30 text-primary hover:bg-primary/10"
-                      onClick={() => onCreateTaskFromAction(leadProfile.next_action!)}
-                    >
-                      <Plus className="h-3 w-3" />
-                      Criar Tarefa de Follow-up
-                    </Button>
-                  )}
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="w-full h-7 text-xs gap-1.5 mt-1 border-primary/30 text-primary hover:bg-primary/10"
+                    onClick={() => {
+                      if (onCreateTaskFromAction) {
+                        onCreateTaskFromAction(leadProfile.next_action!);
+                      } else {
+                        setTaskActionText(leadProfile.next_action!);
+                        setTaskDialogOpen(true);
+                      }
+                    }}
+                  >
+                    <Plus className="h-3 w-3" />
+                    Criar Tarefa de Follow-up
+                  </Button>
                 </div>
               )}
 
@@ -732,6 +759,18 @@ export function IntelligenceSidebar({
         open={evidenceDialogOpen}
         onOpenChange={setEvidenceDialogOpen}
         onJumpToMessage={onJumpToMessage}
+      />
+
+      {/* Task Creation Dialog from AI Suggestion */}
+      <TaskFormDialog
+        open={taskDialogOpen}
+        onOpenChange={setTaskDialogOpen}
+        onSubmit={handleCreateTask}
+        initialSuggestion={{
+          actionText: taskActionText,
+          contactId: contact.id,
+          conversationId: conversationId || undefined,
+        }}
       />
     </div>
   );

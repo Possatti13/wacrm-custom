@@ -1,7 +1,7 @@
 "use client";
 
 import { cn } from "@/lib/utils";
-import { Flame, MessageCircle, Clock, Calendar, CheckCircle2, ListFilter } from "lucide-react";
+import { Flame, MessageCircle, Clock, CheckCircle2, ListFilter } from "lucide-react";
 
 export type InboxViewType =
   | "all"
