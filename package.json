@@ -38,7 +38,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "staging:preflight": "node scripts/staging-preflight.mjs",
-    "staging:smoke": "node scripts/staging-smoke.mjs"
+    "staging:smoke": "node scripts/staging-smoke.mjs",
+    "simulator": "node scripts/commercial-simulator.mjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.6.0",
