@@ -36,7 +36,9 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "staging:preflight": "node scripts/staging-preflight.mjs",
+    "staging:smoke": "node scripts/staging-smoke.mjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.6.0",
