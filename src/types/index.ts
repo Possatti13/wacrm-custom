@@ -113,6 +113,21 @@ export interface Contact {
   /** Hydrated by queries that embed `contact_tags(tags(*))` (e.g. the
    *  Inbox conversation list, for tag filtering). Absent otherwise. */
   tags?: Tag[];
+  /** Commercial Intelligence profile for this contact. */
+  lead_profile?: {
+    current_intent?: string | null;
+    urgency?: "low" | "medium" | "high" | null;
+    sentiment?: "positive" | "neutral" | "negative" | null;
+    lead_score?: number | null;
+    summary?: string | null;
+    next_action?: string | null;
+  } | null;
+  /** Deterministic Lead Scoring state and points breakdown. */
+  lead_score?: {
+    score: number;
+    scoring_revision_number?: number;
+    breakdown?: Record<string, unknown>;
+  } | null;
 }
 
 export interface Tag {

@@ -1,0 +1,738 @@
+"use client";
+
+import { useState, useEffect, useCallback } from "react";
+import { createClient } from "@/lib/supabase/client";
+import { useAuth } from "@/hooks/use-auth";
+import { cn } from "@/lib/utils";
+import type { Contact, Deal, ContactNote, Tag } from "@/types";
+import type { ConversationInsightWithEvidence } from "@/lib/insights/types";
+import type { ContactLeadProfile, ContactCatalogInterestWithItem, ContactObjection } from "@/lib/leads/types";
+import {
+  Copy,
+  Check,
+  Sparkles,
+  Flame,
+  AlertCircle,
+  HelpCircle,
+  ShoppingBag,
+  Tag as TagIcon,
+  DollarSign,
+  StickyNote,
+  Plus,
+  Briefcase,
+} from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { EvidenceDialog } from "./evidence-dialog";
+import { format } from "date-fns";
+import { ptBR } from "date-fns/locale";
+import { toast } from "sonner";
+
+interface IntelligenceSidebarProps {
+  contact: Contact | null;
+  conversationId?: string | null;
+  onJumpToMessage?: (messageId: string) => void;
+  onCreateTaskFromAction?: (actionText: string) => void;
+}
+
+interface LeadScoreRecord {
+  score: number;
+  scoring_revision_number?: number;
+  breakdown: {
+    base_score?: number;
+    rule_results?: Array<{
+      rule_key: string;
+      label?: string;
+      matched: boolean;
+      points: number;
+      explanation?: string;
+    }>;
+  };
+  calculated_at: string;
+}
+
+export function IntelligenceSidebar({
+  contact,
+  conversationId,
+  onJumpToMessage,
+  onCreateTaskFromAction,
+}: IntelligenceSidebarProps) {
+  const { accountId } = useAuth();
+  const [activeTab, setActiveTab] = useState<"intelligence" | "crm">("intelligence");
+  const [copied, setCopied] = useState(false);
+
+  // CRM Data
+  const [deals, setDeals] = useState<Deal[]>([]);
+  const [notes, setNotes] = useState<ContactNote[]>([]);
+  const [tags, setTags] = useState<(Tag & { contact_tag_id: string })[]>([]);
+  const [newNote, setNewNote] = useState("");
+  const [addingNote, setAddingNote] = useState(false);
+
+  // Commercial Intelligence Data
+  const [leadProfile, setLeadProfile] = useState<ContactLeadProfile | null>(null);
+  const [leadScore, setLeadScore] = useState<LeadScoreRecord | null>(null);
+  const [interests, setInterests] = useState<ContactCatalogInterestWithItem[]>([]);
+  const [objections, setObjections] = useState<ContactObjection[]>([]);
+  const [insights, setInsights] = useState<ConversationInsightWithEvidence[]>([]);
+  const [loadingIntel, setLoadingIntel] = useState(false);
+
+  // Evidence Dialog State
+  const [selectedInsightForEvidence, setSelectedInsightForEvidence] =
+    useState<ConversationInsightWithEvidence | null>(null);
+  const [evidenceDialogOpen, setEvidenceDialogOpen] = useState(false);
+
+  // Score breakdown expansion toggle
+  const [showScoreBreakdown, setShowScoreBreakdown] = useState(false);
+
+  // 1. Fetch CRM & Contact Details
+  const fetchCrmData = useCallback(async () => {
+    if (!contact || !accountId) return;
+    const supabase = createClient();
+
+    const [dealsRes, notesRes, tagsRes] = await Promise.all([
+      supabase
+        .from("deals")
+        .select("*, stage:pipeline_stages(*)")
+        .eq("account_id", accountId)
+        .eq("contact_id", contact.id)
+        .order("created_at", { ascending: false }),
+      supabase
+        .from("contact_notes")
+        .select("*")
+        .eq("account_id", accountId)
+        .eq("contact_id", contact.id)
+        .order("created_at", { ascending: false }),
+      supabase
+        .from("contact_tags")
+        .select("id, tag_id, tags(*)")
+        .eq("contact_id", contact.id),
+    ]);
+
+    if (dealsRes.data) setDeals(dealsRes.data);
+    if (notesRes.data) setNotes(notesRes.data);
+    if (tagsRes.data) {
+      const mapped = tagsRes.data
+        .filter((ct: Record<string, unknown>) => ct.tags)
+        .map((ct: Record<string, unknown>) => ({
+          ...(ct.tags as Tag),
+          contact_tag_id: ct.id as string,
+        }));
+      setTags(mapped);
+    }
+  }, [contact, accountId]);
+
+  // 2. Fetch Commercial Intelligence & Lead Scoring Data
+  const fetchIntelligenceData = useCallback(async () => {
+    if (!contact || !accountId) return;
+    setLoadingIntel(true);
+    const supabase = createClient();
+
+    try {
+      const [profileRes, scoreRes, interestsRes, objectionsRes] = await Promise.all([
+        supabase
+          .from("contact_lead_profiles")
+          .select("*")
+          .eq("account_id", accountId)
+          .eq("contact_id", contact.id)
+          .maybeSingle(),
+        supabase
+          .from("contact_lead_scores")
+          .select("*")
+          .eq("account_id", accountId)
+          .eq("contact_id", contact.id)
+          .maybeSingle(),
+        supabase
+          .from("contact_catalog_interests")
+          .select("*, catalog_item:catalog_items(*)")
+          .eq("account_id", accountId)
+          .eq("contact_id", contact.id),
+        supabase
+          .from("contact_objections")
+          .select("*")
+          .eq("account_id", accountId)
+          .eq("contact_id", contact.id)
+          .order("created_at", { ascending: false }),
+      ]);
+
+      if (profileRes.data) setLeadProfile(profileRes.data as ContactLeadProfile);
+      else setLeadProfile(null);
+
+      if (scoreRes.data) setLeadScore(scoreRes.data as LeadScoreRecord);
+      else setLeadScore(null);
+
+      if (interestsRes.data) setInterests(interestsRes.data as unknown as ContactCatalogInterestWithItem[]);
+      else setInterests([]);
+
+      if (objectionsRes.data) setObjections(objectionsRes.data as ContactObjection[]);
+      else setObjections([]);
+
+      // Fetch active conversation insights with evidence if conversationId is present
+      if (conversationId) {
+        const { data: insightsData } = await supabase
+          .from("conversation_insights")
+          .select(`
+            *,
+            catalog_items:catalog_item_id (
+              id,
+              name,
+              type,
+              sku,
+              status
+            )
+          `)
+          .eq("account_id", accountId)
+          .eq("conversation_id", conversationId)
+          .eq("status", "active")
+          .order("observed_at", { ascending: false });
+
+        if (insightsData && insightsData.length > 0) {
+          const insightIds = insightsData.map((i: { id: string }) => i.id);
+          const { data: evidenceData } = await supabase
+            .from("conversation_insight_evidence")
+            .select("*")
+            .eq("account_id", accountId)
+            .eq("conversation_id", conversationId)
+            .in("insight_id", insightIds);
+
+          const joined = insightsData.map((ins) => ({
+            ...ins,
+            evidence: evidenceData?.filter((e) => e.insight_id === ins.id) || [],
+          }));
+          setInsights(joined as unknown as ConversationInsightWithEvidence[]);
+        } else {
+          setInsights([]);
+        }
+      }
+    } catch (err) {
+      console.error("Failed to load commercial intelligence:", err);
+    } finally {
+      setLoadingIntel(false);
+    }
+  }, [contact, accountId, conversationId]);
+
+  useEffect(() => {
+    fetchCrmData();
+    fetchIntelligenceData();
+  }, [fetchCrmData, fetchIntelligenceData]);
+
+  const handleCopyPhone = useCallback(async () => {
+    if (!contact?.phone) return;
+    await navigator.clipboard.writeText(contact.phone);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  }, [contact]);
+
+  const handleAddNote = useCallback(async () => {
+    if (!contact || !newNote.trim() || !accountId) return;
+    setAddingNote(true);
+
+    const supabase = createClient();
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+
+    const { data, error } = await supabase
+      .from("contact_notes")
+      .insert({
+        contact_id: contact.id,
+        account_id: accountId,
+        user_id: session?.user?.id,
+        note_text: newNote.trim(),
+      })
+      .select()
+      .single();
+
+    if (!error && data) {
+      setNotes((prev) => [data, ...prev]);
+      setNewNote("");
+      toast.success("Nota interna adicionada.");
+    }
+    setAddingNote(false);
+  }, [contact, newNote, accountId]);
+
+  const handleOpenEvidence = (insight: ConversationInsightWithEvidence) => {
+    setSelectedInsightForEvidence(insight);
+    setEvidenceDialogOpen(true);
+  };
+
+  const handleRetractInsight = async (insightId: string) => {
+    if (!accountId || !conversationId) return;
+    const supabase = createClient();
+    try {
+      const { error } = await supabase.rpc("retract_conversation_insight", {
+        p_account_id: accountId,
+        p_conversation_id: conversationId,
+        p_insight_id: insightId,
+        p_retracted_reason: "Retratado manualmente pelo atendente via Inbox",
+      });
+      if (error) throw error;
+      toast.success("Insight retratado com sucesso.");
+      fetchIntelligenceData();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Erro desconhecido";
+      toast.error(`Erro ao retratar: ${msg}`);
+    }
+  };
+
+  if (!contact) {
+    return (
+      <div className="flex h-full w-80 items-center justify-center border-l border-border bg-card p-4 text-center">
+        <p className="text-sm text-muted-foreground">Selecione uma conversa para visualizar a inteligência</p>
+      </div>
+    );
+  }
+
+  const displayName = contact.name || contact.phone;
+  const initials = displayName.charAt(0).toUpperCase();
+
+  // Score Visual Properties
+  const scoreVal = leadScore?.score ?? null;
+  const isHot = scoreVal !== null && scoreVal >= 70;
+  const isWarm = scoreVal !== null && scoreVal >= 40 && scoreVal < 70;
+  const isCold = scoreVal !== null && scoreVal < 40;
+
+  return (
+    <div className="flex h-full w-80 flex-col border-l border-border bg-card select-none">
+      {/* Contact Summary Header */}
+      <div className="p-3.5 border-b border-border/80 bg-muted/20">
+        <div className="flex items-center gap-3">
+          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-primary/10 text-sm font-semibold text-primary">
+            {contact.avatar_url ? (
+              <img
+                src={contact.avatar_url}
+                alt={displayName}
+                className="h-11 w-11 rounded-full object-cover"
+              />
+            ) : (
+              initials
+            )}
+          </div>
+          <div className="min-w-0 flex-1">
+            <h3 className="truncate text-sm font-semibold text-foreground leading-tight">
+              {displayName}
+            </h3>
+            <p className="truncate text-xs text-muted-foreground mt-0.5">
+              {contact.company || contact.phone}
+            </p>
+          </div>
+        </div>
+
+        {/* Quick Phone / Copy Button */}
+        <div className="mt-2.5 flex items-center gap-1.5">
+          <button
+            onClick={handleCopyPhone}
+            className="flex flex-1 items-center justify-between rounded-md border border-border bg-background px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted"
+          >
+            <span className="truncate">{contact.phone}</span>
+            {copied ? <Check className="h-3 w-3 text-primary" /> : <Copy className="h-3 w-3" />}
+          </button>
+        </div>
+      </div>
+
+      {/* Tabs Navigation */}
+      <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as "intelligence" | "crm")} className="flex-1 flex flex-col min-h-0">
+        <div className="px-3 pt-2 border-b border-border">
+          <TabsList className="grid w-full grid-cols-2 h-8">
+            <TabsTrigger value="intelligence" className="text-xs gap-1.5 py-1">
+              <Sparkles className="h-3.5 w-3.5 text-primary" />
+              <span>Inteligência</span>
+              {loadingIntel && <div className="h-2.5 w-2.5 animate-spin rounded-full border-2 border-primary border-t-transparent" />}
+            </TabsTrigger>
+            <TabsTrigger value="crm" className="text-xs gap-1.5 py-1">
+              <Briefcase className="h-3.5 w-3.5" />
+              CRM
+            </TabsTrigger>
+          </TabsList>
+        </div>
+
+        {/* ============================================================ */}
+        {/* TAB 1: COMMERCIAL INTELLIGENCE */}
+        {/* ============================================================ */}
+        <TabsContent value="intelligence" className="flex-1 min-h-0 m-0">
+          <ScrollArea className="h-full">
+            <div className="p-3.5 space-y-4">
+              {/* Lead Score Widget */}
+              <div className="rounded-xl border border-border bg-background p-3.5 shadow-sm space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5">
+                    <Flame className={cn("h-4 w-4", isHot ? "text-emerald-500" : isWarm ? "text-amber-500" : "text-slate-400")} />
+                    <span className="text-xs font-semibold text-foreground">Lead Score Comercial</span>
+                  </div>
+                  {scoreVal !== null ? (
+                    <Badge
+                      className={cn(
+                        "font-mono text-xs px-2 py-0.5",
+                        isHot && "bg-emerald-500 text-white hover:bg-emerald-600",
+                        isWarm && "bg-amber-500 text-white hover:bg-amber-600",
+                        isCold && "bg-slate-500 text-white hover:bg-slate-600"
+                      )}
+                    >
+                      {scoreVal} / 100
+                    </Badge>
+                  ) : (
+                    <Badge variant="outline" className="text-[10px]">Sem cálculo</Badge>
+                  )}
+                </div>
+
+                {/* Score Level Description */}
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-muted-foreground">Classificação:</span>
+                  <span className="font-medium">
+                    {isHot ? "🔥 Alta Propensão (Quente)" : isWarm ? "⚡ Média Propensão (Morno)" : isCold ? "❄️ Baixa Propensão (Frio)" : "Não avaliado"}
+                  </span>
+                </div>
+
+                {/* Score Breakdown Toggle */}
+                {leadScore?.breakdown?.rule_results && leadScore.breakdown.rule_results.length > 0 && (
+                  <div className="pt-1 border-t border-border/60">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="w-full h-6 text-[11px] text-muted-foreground hover:text-primary justify-between px-1"
+                      onClick={() => setShowScoreBreakdown(!showScoreBreakdown)}
+                    >
+                      <span>Composição dos Pontos</span>
+                      <span>{showScoreBreakdown ? "▲ Ocultar" : "▼ Detalhes"}</span>
+                    </Button>
+
+                    {showScoreBreakdown && (
+                      <div className="mt-2 space-y-1.5 text-xs bg-muted/40 rounded-lg p-2 font-mono">
+                        <div className="flex justify-between text-[11px] text-muted-foreground">
+                          <span>Pontuação Base:</span>
+                          <span>{leadScore.breakdown.base_score ?? 0} pts</span>
+                        </div>
+                        {leadScore.breakdown.rule_results.map((rule, idx) => (
+                          <div key={idx} className="flex items-center justify-between text-[11px]">
+                            <span className="truncate pr-2 text-foreground">{rule.label || rule.rule_key}:</span>
+                            <span className={cn("font-bold shrink-0", rule.points >= 0 ? "text-emerald-600" : "text-rose-600")}>
+                              {rule.points >= 0 ? `+${rule.points}` : rule.points}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* Signals: Intent & Urgency */}
+              <div className="space-y-2">
+                <div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  Intenção & Urgência
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="rounded-lg border border-border/80 bg-background p-2.5">
+                    <div className="text-[10px] text-muted-foreground">Intenção</div>
+                    <div className="mt-1 flex items-center justify-between">
+                      <span className="text-xs font-semibold capitalize text-foreground">
+                        {leadProfile?.current_intent || "Não detectada"}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="rounded-lg border border-border/80 bg-background p-2.5">
+                    <div className="text-[10px] text-muted-foreground">Urgência</div>
+                    <div className="mt-1 flex items-center justify-between">
+                      <span className={cn(
+                        "text-xs font-semibold capitalize",
+                        leadProfile?.urgency === "high" ? "text-rose-600" : leadProfile?.urgency === "medium" ? "text-amber-600" : "text-muted-foreground"
+                      )}>
+                        {leadProfile?.urgency === "high" ? "Alta" : leadProfile?.urgency === "medium" ? "Média" : leadProfile?.urgency === "low" ? "Baixa" : "Normal"}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Catalog Interests */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                    <ShoppingBag className="h-3 w-3 text-primary" />
+                    Interesses no Catálogo ({interests.length})
+                  </div>
+                </div>
+
+                {interests.length === 0 ? (
+                  <div className="rounded-lg border border-dashed border-border p-3 text-center text-xs text-muted-foreground">
+                    Nenhum produto/serviço identificado
+                  </div>
+                ) : (
+                  <div className="space-y-1.5">
+                    {interests.map((item) => (
+                      <div
+                        key={item.id}
+                        className="flex items-center justify-between rounded-lg border border-border bg-background px-2.5 py-2 text-xs"
+                      >
+                        <div className="min-w-0 flex-1">
+                          <div className="font-medium text-foreground truncate">
+                            {item.item?.name || "Produto/Serviço"}
+                          </div>
+                          {item.item?.sku && (
+                            <div className="text-[10px] text-muted-foreground font-mono">
+                              SKU: {item.item.sku}
+                            </div>
+                          )}
+                        </div>
+                        <Badge variant="outline" className="text-[10px] capitalize ml-2 shrink-0">
+                          {item.status}
+                        </Badge>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Objections */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                    <AlertCircle className="h-3 w-3 text-amber-500" />
+                    Objeções Detectadas ({objections.length})
+                  </div>
+                </div>
+
+                {objections.length === 0 ? (
+                  <div className="rounded-lg border border-dashed border-border p-3 text-center text-xs text-muted-foreground">
+                    Nenhuma objeção em aberto
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {objections.map((obj) => (
+                      <div
+                        key={obj.id}
+                        className="rounded-lg border border-border bg-background p-2.5 text-xs space-y-1.5"
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="font-medium text-foreground">{obj.objection}</span>
+                          <Badge
+                            variant={obj.status === "open" ? "destructive" : "secondary"}
+                            className="text-[10px] uppercase"
+                          >
+                            {obj.status === "open" ? "Aberta" : obj.status}
+                          </Badge>
+                        </div>
+                        <div className="text-[10px] text-muted-foreground">
+                          Detectada em {format(new Date(obj.created_at), "dd/MM/yyyy", { locale: ptBR })}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Suggested Next Action */}
+              {leadProfile?.next_action && (
+                <div className="rounded-xl border border-primary/20 bg-primary/5 p-3.5 space-y-2">
+                  <div className="flex items-center gap-1.5 text-xs font-semibold text-primary">
+                    <Sparkles className="h-3.5 w-3.5" />
+                    Próxima Ação Sugerida
+                  </div>
+                  <p className="text-xs text-foreground leading-relaxed">
+                    {leadProfile.next_action}
+                  </p>
+                  {onCreateTaskFromAction && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="w-full h-7 text-xs gap-1.5 mt-1 border-primary/30 text-primary hover:bg-primary/10"
+                      onClick={() => onCreateTaskFromAction(leadProfile.next_action!)}
+                    >
+                      <Plus className="h-3 w-3" />
+                      Criar Tarefa de Follow-up
+                    </Button>
+                  )}
+                </div>
+              )}
+
+              {/* Interactive Evidence List ("Por quê?") */}
+              <div className="space-y-2 pt-2 border-t border-border">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                    Sinais Fatuais da Conversa ({insights.length})
+                  </span>
+                </div>
+
+                {insights.length === 0 ? (
+                  <div className="rounded-lg border border-dashed border-border p-3 text-center text-xs text-muted-foreground">
+                    Nenhum sinal extraído nesta conversa ainda.
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {insights.map((ins) => (
+                      <div
+                        key={ins.id}
+                        className="rounded-lg border border-border bg-background p-2.5 text-xs space-y-1.5 hover:border-primary/40 transition-colors"
+                      >
+                        <div className="flex items-start justify-between gap-1">
+                          <div>
+                            <span className="font-semibold text-foreground capitalize">
+                              {ins.insight_type.replace("_", " ")}:
+                            </span>{" "}
+                            <span className="text-muted-foreground">
+                              {ins.value_text || (ins as unknown as { catalog_items?: { name?: string } }).catalog_items?.name || "Detectado"}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-1 shrink-0">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-5 px-1.5 text-[10px] text-primary gap-1 shrink-0"
+                              onClick={() => handleOpenEvidence(ins)}
+                            >
+                              <HelpCircle className="h-3 w-3" />
+                              Por quê?
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-5 w-5 p-0 text-[10px] text-muted-foreground hover:text-rose-600 shrink-0"
+                              title="Retratar este sinal"
+                              onClick={() => handleRetractInsight(ins.id)}
+                            >
+                              ✕
+                            </Button>
+                          </div>
+                        </div>
+
+                        {ins.evidence && ins.evidence.length > 0 && (
+                          <div className="text-[11px] text-muted-foreground italic truncate bg-muted/40 p-1.5 rounded">
+                            &ldquo;{ins.evidence[0].snippet || "Evidência citada"}&rdquo;
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          </ScrollArea>
+        </TabsContent>
+
+        {/* ============================================================ */}
+        {/* TAB 2: CRM DETAILS, DEALS & NOTES */}
+        {/* ============================================================ */}
+        <TabsContent value="crm" className="flex-1 min-h-0 m-0">
+          <ScrollArea className="h-full">
+            <div className="p-3.5 space-y-4">
+              {/* Tags */}
+              <div className="space-y-2">
+                <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  <TagIcon className="h-3 w-3" />
+                  Tags do Contato ({tags.length})
+                </div>
+                <div className="flex flex-wrap gap-1">
+                  {tags.length === 0 ? (
+                    <p className="text-xs text-muted-foreground">Nenhuma tag vinculada</p>
+                  ) : (
+                    tags.map((tag) => (
+                      <span
+                        key={tag.contact_tag_id}
+                        className="rounded-full px-2 py-0.5 text-[10px] font-medium"
+                        style={{
+                          backgroundColor: `${tag.color}20`,
+                          color: tag.color,
+                        }}
+                      >
+                        {tag.name}
+                      </span>
+                    ))
+                  )}
+                </div>
+              </div>
+
+              {/* Deals / Negócios */}
+              <div className="space-y-2">
+                <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  <DollarSign className="h-3 w-3" />
+                  Negócios no Pipeline ({deals.length})
+                </div>
+                {deals.length === 0 ? (
+                  <div className="rounded-lg border border-dashed border-border p-3 text-center text-xs text-muted-foreground">
+                    Nenhum negócio ativo
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {deals.map((deal) => (
+                      <div
+                        key={deal.id}
+                        className="rounded-lg border border-border bg-background p-2.5 text-xs space-y-1"
+                      >
+                        <div className="font-semibold text-foreground truncate">{deal.title}</div>
+                        <div className="flex items-center justify-between text-muted-foreground">
+                          <span>
+                            {new Intl.NumberFormat("pt-BR", {
+                              style: "currency",
+                              currency: "BRL",
+                            }).format(deal.value)}
+                          </span>
+                          {deal.stage && (
+                            <Badge variant="outline" className="text-[10px]">
+                              {deal.stage.name}
+                            </Badge>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Internal Notes */}
+              <div className="space-y-2">
+                <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  <StickyNote className="h-3 w-3" />
+                  Notas Internas ({notes.length})
+                </div>
+
+                <div className="space-y-2">
+                  <textarea
+                    value={newNote}
+                    onChange={(e) => setNewNote(e.target.value)}
+                    placeholder="Adicionar nota interna privada..."
+                    className="w-full rounded-md border border-input bg-background p-2 text-xs placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring resize-none h-16"
+                  />
+                  <Button
+                    size="sm"
+                    className="w-full h-7 text-xs gap-1"
+                    disabled={addingNote || !newNote.trim()}
+                    onClick={handleAddNote}
+                  >
+                    <Plus className="h-3 w-3" />
+                    {addingNote ? "Salvando..." : "Salvar Nota"}
+                  </Button>
+                </div>
+
+                <div className="space-y-2 pt-2">
+                  {notes.map((note) => (
+                    <div
+                      key={note.id}
+                      className="rounded-lg border border-border bg-background p-2.5 text-xs space-y-1"
+                    >
+                      <p className="text-foreground whitespace-pre-wrap leading-relaxed">
+                        {note.note_text}
+                      </p>
+                      <div className="text-[10px] text-muted-foreground text-right">
+                        {format(new Date(note.created_at), "dd/MM/yyyy HH:mm", { locale: ptBR })}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </ScrollArea>
+        </TabsContent>
+      </Tabs>
+
+      {/* Interactive Evidence Dialog */}
+      <EvidenceDialog
+        insight={selectedInsightForEvidence}
+        open={evidenceDialogOpen}
+        onOpenChange={setEvidenceDialogOpen}
+        onJumpToMessage={onJumpToMessage}
+      />
+    </div>
+  );
+}

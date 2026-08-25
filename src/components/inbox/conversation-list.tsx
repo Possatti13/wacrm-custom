@@ -22,6 +22,9 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { ScrollArea } from "@/components/ui/scroll-area";
 
+import { InboxViewsBar, type InboxViewType } from "./inbox-views-bar";
+import { Flame } from "lucide-react";
+
 interface ConversationListProps {
   activeConversationId: string | null;
   onSelect: (conversation: Conversation) => void;
@@ -41,8 +44,6 @@ const STATUS_COLORS: Record<ConversationStatus, string> = {
   pending: "bg-amber-500",
   closed: "bg-muted-foreground",
 };
-
-
 
 type InboxFilter = ConversationStatus | "all" | "unread";
 
@@ -65,6 +66,7 @@ export function ConversationList({
 
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<InboxFilter>("all");
+  const [activeView, setActiveView] = useState<InboxViewType>("all");
   const [loading, setLoading] = useState(true);
   // Contact-based filters (issue #272). Tags use OR logic (a conversation
   // matches if its contact carries any selected tag), consistent with
@@ -158,8 +160,52 @@ export function ConversationList({
     return m;
   }, [tags]);
 
+  const viewCounts = useMemo(() => {
+    let priority = 0;
+    let needs_reply = 0;
+    let waiting_customer = 0;
+    let closed = 0;
+
+    for (const c of conversations) {
+      const score = c.contact?.lead_score?.score ?? c.contact?.lead_profile?.lead_score ?? null;
+      const urgency = c.contact?.lead_profile?.urgency;
+      if ((score !== null && score >= 70) || urgency === "high") {
+        priority++;
+      }
+      if (c.unread_count > 0 || c.status === "open") {
+        needs_reply++;
+      } else if (c.status === "pending") {
+        waiting_customer++;
+      } else if (c.status === "closed") {
+        closed++;
+      }
+    }
+
+    return {
+      all: conversations.length,
+      priority,
+      needs_reply,
+      waiting_customer,
+      closed,
+    };
+  }, [conversations]);
+
   const filtered = useMemo(() => {
     let result = conversations;
+
+    if (activeView === "priority") {
+      result = result.filter((c) => {
+        const score = c.contact?.lead_score?.score ?? c.contact?.lead_profile?.lead_score ?? null;
+        const urgency = c.contact?.lead_profile?.urgency;
+        return (score !== null && score >= 70) || urgency === "high";
+      });
+    } else if (activeView === "needs_reply") {
+      result = result.filter((c) => c.unread_count > 0 || c.status === "open");
+    } else if (activeView === "waiting_customer") {
+      result = result.filter((c) => c.status === "pending");
+    } else if (activeView === "closed") {
+      result = result.filter((c) => c.status === "closed");
+    }
 
     if (filter === "unread") {
       result = result.filter((c) => c.unread_count > 0);
@@ -188,7 +234,7 @@ export function ConversationList({
     }
 
     return result;
-  }, [conversations, filter, search, selectedTagIds, selectedCompany]);
+  }, [conversations, activeView, filter, search, selectedTagIds, selectedCompany]);
 
   const toggleTag = useCallback((id: string) => {
     setSelectedTagIds((prev) =>
@@ -224,6 +270,13 @@ export function ConversationList({
     // the single pane showing; fixed 320px on desktop where it shares the
     // row with the thread + contact sidebar.
     <div className="flex h-full w-full flex-col border-r border-border bg-card lg:w-80">
+      {/* Smart Views Navigation Bar */}
+      <InboxViewsBar
+        activeView={activeView}
+        onViewChange={setActiveView}
+        counts={viewCounts}
+      />
+
       {/* Search + Filter */}
       <div className="space-y-2 border-b border-border p-3">
         <div className="relative">
@@ -450,6 +503,12 @@ function ConversationItem({
       })
     : "";
 
+  const score = contact?.lead_score?.score ?? contact?.lead_profile?.lead_score ?? null;
+  const isHot = score !== null && score >= 70;
+  const isWarm = score !== null && score >= 40 && score < 70;
+  const intent = contact?.lead_profile?.current_intent;
+  const urgency = contact?.lead_profile?.urgency;
+
   return (
     <button
       onClick={handleClick}
@@ -459,7 +518,7 @@ function ConversationItem({
       )}
     >
       {/* Avatar */}
-      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-muted text-sm font-medium text-foreground">
+      <div className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-muted text-sm font-medium text-foreground">
         {contact?.avatar_url ? (
           <img
             src={contact.avatar_url}
@@ -479,7 +538,38 @@ function ConversationItem({
           </span>
           <span className="shrink-0 text-[10px] text-muted-foreground">{timeAgo}</span>
         </div>
-        <div className="mt-0.5 flex items-center justify-between gap-2">
+
+        {/* Commercial Signals Pill Bar */}
+        {(score !== null || intent || urgency === "high") && (
+          <div className="mt-1 flex items-center gap-1.5 flex-wrap">
+            {score !== null && (
+              <span
+                className={cn(
+                  "inline-flex items-center gap-0.5 rounded px-1.5 py-0.2 text-[10px] font-mono font-bold",
+                  isHot
+                    ? "bg-emerald-500/15 text-emerald-600 border border-emerald-500/30"
+                    : isWarm
+                    ? "bg-amber-500/15 text-amber-600 border border-amber-500/30"
+                    : "bg-slate-200 text-slate-700 dark:bg-slate-800 dark:text-slate-300"
+                )}
+              >
+                {isHot ? "🔥" : ""} {score}
+              </span>
+            )}
+            {intent && (
+              <span className="rounded bg-primary/10 px-1.5 py-0.2 text-[10px] font-medium text-primary capitalize">
+                {intent}
+              </span>
+            )}
+            {urgency === "high" && (
+              <span className="rounded bg-rose-500/15 text-rose-600 border border-rose-500/30 px-1 py-0.2 text-[9px] font-bold uppercase">
+                Urgente
+              </span>
+            )}
+          </div>
+        )}
+
+        <div className="mt-1 flex items-center justify-between gap-2">
           <p className="truncate text-xs text-muted-foreground">
             {conversation.last_message_text || t("noMessagesYet")}
           </p>

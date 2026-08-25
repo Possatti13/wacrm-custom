@@ -12,7 +12,7 @@ import type { Conversation, Message, Contact, ConversationStatus } from "@/types
 import { useRealtime } from "@/hooks/use-realtime";
 import { ConversationList } from "@/components/inbox/conversation-list";
 import { MessageThread } from "@/components/inbox/message-thread";
-import { ContactSidebar } from "@/components/inbox/contact-sidebar";
+import { IntelligenceSidebar } from "@/components/inbox/intelligence-sidebar";
 import { toast } from "sonner";
 import { WifiOff } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -543,6 +543,19 @@ export default function InboxPage() {
     [activeConversation]
   );
 
+  const handleJumpToMessage = useCallback((messageId: string) => {
+    const el = document.getElementById(`msg-${messageId}`);
+    if (el) {
+      el.scrollIntoView({ behavior: "smooth", block: "center" });
+      el.classList.add("ring-2", "ring-primary", "rounded-lg");
+      setTimeout(() => {
+        el.classList.remove("ring-2", "ring-primary");
+      }, 3000);
+    } else {
+      toast.info("Mensagem citada fora do histórico recente carregado.");
+    }
+  }, []);
+
   // On mobile (<lg) we show a SINGLE pane — either the list or the
   // thread — rather than cramming both side-by-side. Selecting a
   // conversation slides the thread in; the thread's back button pops
@@ -621,7 +634,11 @@ export default function InboxPage() {
             toggle — which is itself desktop-only — never affects it. */}
         {contactPanelOpen && (
           <div className="hidden lg:block">
-            <ContactSidebar contact={activeContact} />
+            <IntelligenceSidebar
+              contact={activeContact}
+              conversationId={activeConversation?.id}
+              onJumpToMessage={handleJumpToMessage}
+            />
           </div>
         )}
       </div>
