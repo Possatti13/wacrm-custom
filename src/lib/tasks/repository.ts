@@ -1,6 +1,65 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { Task, CreateTaskInput, UpdateTaskInput, TaskFilter } from '@/types/tasks';
 
+/**
+ * Enriches tasks with assigned user profile data scoped strictly to the current account.
+ * Since `tasks.assigned_user_id` and `tasks.created_by_user_id` reference `auth.users(id)`
+ * rather than a direct PostgREST FK to `public.profiles`, we load matching profiles
+ * in a tenant-isolated secondary query to avoid PGRST200 schema cache lookup failures.
+ */
+async function attachTaskProfiles(
+  db: SupabaseClient,
+  accountId: string,
+  tasks: Array<Record<string, unknown>>
+): Promise<Task[]> {
+  if (!tasks || tasks.length === 0) return [];
+
+  const userIds = Array.from(
+    new Set(
+      tasks
+        .flatMap((t) => [t.assigned_user_id, t.created_by_user_id])
+        .filter((id): id is string => typeof id === 'string' && id.trim().length > 0)
+    )
+  );
+
+  if (userIds.length === 0) {
+    return tasks.map((t) => ({
+      ...t,
+      assigned_user: null,
+    })) as unknown as Task[];
+  }
+
+  // Fetch profiles belonging to the same account
+  const { data: profileRows, error } = await db
+    .from('profiles')
+    .select('id, user_id, full_name, email, avatar_url')
+    .eq('account_id', accountId)
+    .in('user_id', userIds);
+
+  const profileMap = new Map<
+    string,
+    { id: string; full_name: string; email: string | null; avatar_url?: string | null }
+  >();
+
+  if (!error && profileRows) {
+    for (const p of profileRows) {
+      const profileObj = {
+        id: p.id,
+        full_name: p.full_name,
+        email: p.email,
+        avatar_url: p.avatar_url,
+      };
+      if (p.user_id) profileMap.set(p.user_id, profileObj);
+      if (p.id) profileMap.set(p.id, profileObj);
+    }
+  }
+
+  return tasks.map((t) => ({
+    ...t,
+    assigned_user: typeof t.assigned_user_id === 'string' ? profileMap.get(t.assigned_user_id) || null : null,
+  })) as unknown as Task[];
+}
+
 export async function listTasks(
   db: SupabaseClient,
   accountId: string,
@@ -10,8 +69,7 @@ export async function listTasks(
     .from('tasks')
     .select(`
       *,
-      contact:contacts(id, name, phone, avatar_url),
-      assigned_user:profiles!tasks_assigned_user_id_fkey(id, full_name, email, avatar_url)
+      contact:contacts(id, name, phone, avatar_url)
     `)
     .eq('account_id', accountId);
 
@@ -68,7 +126,7 @@ export async function listTasks(
     throw new Error(`listTasks failed: ${error.message}`);
   }
 
-  return (data || []) as unknown as Task[];
+  return attachTaskProfiles(db, accountId, data || []);
 }
 
 export async function getTaskById(
@@ -80,8 +138,7 @@ export async function getTaskById(
     .from('tasks')
     .select(`
       *,
-      contact:contacts(id, name, phone, avatar_url),
-      assigned_user:profiles!tasks_assigned_user_id_fkey(id, full_name, email, avatar_url)
+      contact:contacts(id, name, phone, avatar_url)
     `)
     .eq('account_id', accountId)
     .eq('id', taskId)
@@ -91,7 +148,10 @@ export async function getTaskById(
     throw new Error(`getTaskById failed: ${error.message}`);
   }
 
-  return (data as unknown as Task) || null;
+  if (!data) return null;
+
+  const [enriched] = await attachTaskProfiles(db, accountId, [data]);
+  return enriched || null;
 }
 
 export async function createTask(
@@ -120,8 +180,7 @@ export async function createTask(
     .insert(payload)
     .select(`
       *,
-      contact:contacts(id, name, phone, avatar_url),
-      assigned_user:profiles!tasks_assigned_user_id_fkey(id, full_name, email, avatar_url)
+      contact:contacts(id, name, phone, avatar_url)
     `)
     .single();
 
@@ -129,7 +188,8 @@ export async function createTask(
     throw new Error(`createTask failed: ${error.message}`);
   }
 
-  return data as unknown as Task;
+  const [enriched] = await attachTaskProfiles(db, accountId, [data]);
+  return enriched;
 }
 
 export async function updateTask(
@@ -164,8 +224,7 @@ export async function updateTask(
     .eq('id', taskId)
     .select(`
       *,
-      contact:contacts(id, name, phone, avatar_url),
-      assigned_user:profiles!tasks_assigned_user_id_fkey(id, full_name, email, avatar_url)
+      contact:contacts(id, name, phone, avatar_url)
     `)
     .single();
 
@@ -173,7 +232,8 @@ export async function updateTask(
     throw new Error(`updateTask failed: ${error.message}`);
   }
 
-  return data as unknown as Task;
+  const [enriched] = await attachTaskProfiles(db, accountId, [data]);
+  return enriched;
 }
 
 export async function deleteTask(

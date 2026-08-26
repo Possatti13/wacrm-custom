@@ -121,7 +121,7 @@ export function IntelligenceSidebar({
           .order("created_at", { ascending: false }),
         supabase
           .from("contact_notes")
-          .select("*, profiles:user_id(name)")
+          .select("*")
           .eq("account_id", accountId)
           .eq("contact_id", contact.id)
           .order("created_at", { ascending: false }),
@@ -132,8 +132,42 @@ export function IntelligenceSidebar({
           .eq("contact_id", contact.id),
       ]);
 
+      if (dealsRes.error) console.error("Failed to load deals:", dealsRes.error);
       if (dealsRes.data) setDeals(dealsRes.data as unknown as Deal[]);
-      if (notesRes.data) setNotes(notesRes.data as unknown as ContactNote[]);
+
+      if (notesRes.error) {
+        console.error("Failed to load contact notes:", notesRes.error);
+      } else if (notesRes.data) {
+        const rawNotes = notesRes.data as unknown as ContactNote[];
+        const userIds = Array.from(
+          new Set(rawNotes.map((n) => n.user_id).filter((id): id is string => Boolean(id)))
+        );
+
+        const profileNameMap = new Map<string, string>();
+        if (userIds.length > 0) {
+          const { data: profs, error: profError } = await supabase
+            .from("profiles")
+            .select("user_id, full_name")
+            .eq("account_id", accountId)
+            .in("user_id", userIds);
+
+          if (profError) {
+            console.error("Failed to load note author profiles:", profError);
+          } else if (profs) {
+            for (const p of profs) {
+              if (p.user_id) profileNameMap.set(p.user_id, p.full_name);
+            }
+          }
+        }
+
+        const enrichedNotes = rawNotes.map((n) => ({
+          ...n,
+          profiles: { name: profileNameMap.get(n.user_id) || "Atendente" },
+        }));
+        setNotes(enrichedNotes as ContactNote[]);
+      }
+
+      if (tagsRes.error) console.error("Failed to load tags:", tagsRes.error);
       if (tagsRes.data) {
         interface TagJoinRow {
           id: string;
@@ -348,9 +382,16 @@ export function IntelligenceSidebar({
       .single();
 
     if (!error && data) {
-      setNotes((prev) => [data, ...prev]);
+      const enrichedNote = {
+        ...data,
+        profiles: { name: (session?.user?.user_metadata?.full_name as string) || "Você" },
+      };
+      setNotes((prev) => [enrichedNote as unknown as ContactNote, ...prev]);
       setNewNote("");
       toast.success("Nota interna adicionada.");
+    } else if (error) {
+      console.error("Failed to add contact note:", error);
+      toast.error("Erro ao adicionar nota interna.");
     }
     setAddingNote(false);
   }, [contact, newNote, accountId]);
