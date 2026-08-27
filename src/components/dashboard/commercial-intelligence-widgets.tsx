@@ -2,16 +2,15 @@
 
 import { useEffect, useState } from "react";
 import {
-  Sparkles,
+  Eye,
   Flame,
   Shield,
   ShoppingBag,
   ListTodo,
-  TrendingUp,
   AlertTriangle,
   CheckCircle2,
 } from "lucide-react";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import type { CommercialAnalyticsSummary } from "@/types/analytics";
 import { loadCommercialAnalytics } from "@/lib/analytics/commercial";
@@ -65,18 +64,18 @@ export function CommercialIntelligenceWidgets() {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h3 className="text-sm font-semibold flex items-center gap-1.5 text-foreground">
-          <Sparkles className="h-4 w-4 text-primary" />
-          Inteligência Comercial & Sinais de Conversão
+        <h3 className="text-sm font-semibold flex items-center gap-2 text-foreground font-sans">
+          <Eye className="h-4 w-4 text-[#D16A3A]" />
+          Sinais Comerciais Extraídos
         </h3>
-        <Badge variant="outline" className="text-[11px] font-normal">
-          Atualizado em tempo real
+        <Badge variant="outline" className="text-[11px] font-normal border-border text-muted-foreground">
+          Baseado em conversas analisadas
         </Badge>
       </div>
 
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
         {/* 1. LEAD SCORING PULSE */}
-        <Card className="border-border/60 shadow-sm">
+        <Card className="border-border/80 bg-card shadow-sm">
           <CardHeader className="p-4 pb-2">
             <div className="flex items-center justify-between">
               <CardTitle className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
@@ -101,7 +100,7 @@ export function CommercialIntelligenceWidgets() {
                 <span>⚡ Warm ({leadScores.warmCount})</span>
                 <span>❄️ Cold ({leadScores.coldCount})</span>
               </div>
-              <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+              <div className="h-1.5 w-full overflow-hidden rounded-full bg-secondary">
                 <div
                   className="h-full bg-emerald-500 rounded-full transition-all"
                   style={{ width: `${hotPct}%` }}
@@ -112,13 +111,13 @@ export function CommercialIntelligenceWidgets() {
         </Card>
 
         {/* 2. TOP OBJECTIONS MATRIX */}
-        <Card className="border-border/60 shadow-sm">
+        <Card className="border-border/80 bg-card shadow-sm">
           <CardHeader className="p-4 pb-2">
             <div className="flex items-center justify-between">
               <CardTitle className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
                 Principais Objeções
               </CardTitle>
-              <Shield className="h-4 w-4 text-amber-500" />
+              <Shield className="h-4 w-4 text-[#D16A3A]" />
             </div>
           </CardHeader>
           <CardContent className="p-4 pt-1">
@@ -131,7 +130,7 @@ export function CommercialIntelligenceWidgets() {
                     <span className="truncate max-w-[130px] font-medium text-foreground">
                       {obj.objection}
                     </span>
-                    <Badge variant="outline" className="text-[10px] font-mono">
+                    <Badge variant="outline" className="text-[10px] font-mono border-border">
                       {obj.resolutionRate}% resolvidas
                     </Badge>
                   </div>
@@ -142,13 +141,13 @@ export function CommercialIntelligenceWidgets() {
         </Card>
 
         {/* 3. TOP CATALOG DEMAND */}
-        <Card className="border-border/60 shadow-sm">
+        <Card className="border-border/80 bg-card shadow-sm">
           <CardHeader className="p-4 pb-2">
             <div className="flex items-center justify-between">
               <CardTitle className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
                 Catálogo em Alta
               </CardTitle>
-              <ShoppingBag className="h-4 w-4 text-blue-500" />
+              <ShoppingBag className="h-4 w-4 text-[#1E3A5F] dark:text-[#5B8EC2]" />
             </div>
           </CardHeader>
           <CardContent className="p-4 pt-1">
@@ -172,7 +171,7 @@ export function CommercialIntelligenceWidgets() {
         </Card>
 
         {/* 4. TASKS & FOLLOW-UP */}
-        <Card className="border-border/60 shadow-sm">
+        <Card className="border-border/80 bg-card shadow-sm">
           <CardHeader className="p-4 pb-2">
             <div className="flex items-center justify-between">
               <CardTitle className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
@@ -187,14 +186,14 @@ export function CommercialIntelligenceWidgets() {
               <span className="font-mono font-bold text-sm text-foreground">{tasks.pending}</span>
             </div>
             {tasks.overdue > 0 && (
-              <div className="flex items-center justify-between text-xs text-rose-600 font-medium">
+              <div className="flex items-center justify-between text-xs text-rose-600 dark:text-rose-400 font-medium">
                 <span className="flex items-center gap-1">
                   <AlertTriangle className="h-3 w-3" /> Atrasadas:
                 </span>
                 <span className="font-mono font-bold">{tasks.overdue}</span>
               </div>
             )}
-            <div className="flex items-center justify-between text-xs text-emerald-600 font-medium">
+            <div className="flex items-center justify-between text-xs text-emerald-600 dark:text-emerald-400 font-medium">
               <span className="flex items-center gap-1">
                 <CheckCircle2 className="h-3 w-3" /> Concluídas Hoje:
               </span>

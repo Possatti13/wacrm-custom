@@ -1,7 +1,7 @@
 import { TasksView } from "@/components/tasks/tasks-view";
 
 export const metadata = {
-  title: "Tarefas & Follow-up | Ziron CRM",
+  title: "Tarefas & Follow-up | Ciclopes",
   description: "Gerenciamento de tarefas, follow-ups e recomendações comerciais inteligentes.",
 };
 

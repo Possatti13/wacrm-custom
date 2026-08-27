@@ -14,6 +14,7 @@
  */
 
 export const THEME_IDS = [
+  "aegean",
   "violet",
   "emerald",
   "cobalt",
@@ -23,29 +24,25 @@ export const THEME_IDS = [
 
 export type ThemeId = (typeof THEME_IDS)[number];
 
-export const DEFAULT_THEME: ThemeId = "violet";
+export const DEFAULT_THEME: ThemeId = "aegean";
 
-export const STORAGE_KEY = "wacrm.theme";
+export const STORAGE_KEY = "ciclopes.theme";
 
 /**
  * MODE — the light/dark dimension, orthogonal to the accent theme.
  *
  * The CSS variables live in `src/app/globals.css` under
- * `html[data-mode="..."]` blocks (neutral surfaces only). Applied
- * at runtime via `document.documentElement.dataset.mode`. Dark is
- * the historical default and stays the app's identity; light is the
- * opt-in eye-strain-friendly alternative.
- *
- * Persisted under its own localStorage key so it composes freely
- * with the accent choice (you can run Violet-light or Violet-dark).
+ * `html[data-mode="..."]` blocks. Light mode (Marble White #F7F3EC)
+ * is the primary brand identity, with full Dark Mode (Deep Aegean #0D1B2A)
+ * supported seamlessly.
  */
 export const MODES = ["light", "dark"] as const;
 
 export type Mode = (typeof MODES)[number];
 
-export const DEFAULT_MODE: Mode = "dark";
+export const DEFAULT_MODE: Mode = "light";
 
-export const MODE_STORAGE_KEY = "wacrm.mode";
+export const MODE_STORAGE_KEY = "ciclopes.mode";
 
 export function isMode(value: unknown): value is Mode {
   return (
@@ -67,6 +64,12 @@ export interface ThemeMeta {
 }
 
 export const THEMES: ReadonlyArray<ThemeMeta> = [
+  {
+    id: "aegean",
+    name: "Aegean (Ciclopes)",
+    tagline: "Canônica Ciclopes — Helênico Contemporâneo, sóbrio e estratégico.",
+    swatch: "#1E3A5F",
+  },
   {
     id: "violet",
     name: "Violet",

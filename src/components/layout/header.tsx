@@ -21,13 +21,17 @@ import { ModeToggle } from "@/components/layout/mode-toggle";
 const pageTitles: Record<string, string> = {
   "/dashboard": "dashboard",
   "/inbox": "inbox",
-  "/notifications": "notifications",
+  "/tasks": "tasks",
   "/contacts": "contacts",
   "/pipelines": "pipelines",
+  "/catalog": "catalog",
+  "/intelligence": "intelligence",
+  "/reports": "reports",
+  "/settings": "settings",
+  "/notifications": "notifications",
   "/broadcasts": "broadcasts",
   "/automations": "automations",
   "/agents": "aiAgents",
-  "/settings": "settings",
 };
 
 function getPageTitleKey(pathname: string): string {

@@ -22,21 +22,33 @@ export default function Icon() {
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
-          background: "#7c3aed", // primary (Hostinger-aligned purple)
-          borderRadius: 6,
+          background: "#1E3A5F", // Aegean Blue
+          borderRadius: 8,
         }}
       >
         <svg
-          width="20"
-          height="20"
-          viewBox="0 0 24 24"
+          width="22"
+          height="22"
+          viewBox="0 0 100 100"
           fill="none"
-          stroke="#ffffff"
-          strokeWidth="2.5"
-          strokeLinecap="round"
-          strokeLinejoin="round"
         >
-          <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+          {/* Axis Line */}
+          <line x1="50" y1="12" x2="50" y2="88" stroke="#F7F3EC" strokeWidth="4" strokeLinecap="round" />
+          {/* Eye Almond Contour */}
+          <path
+            d="M 12 50 C 26 26, 74 26, 88 50 C 74 74, 26 74, 12 50 Z"
+            stroke="#F7F3EC"
+            strokeWidth="5"
+            strokeLinejoin="round"
+            strokeLinecap="round"
+          />
+          {/* Focus Ring */}
+          <circle cx="50" cy="50" r="17.5" stroke="#F7F3EC" strokeWidth="4" />
+          {/* Pupil */}
+          <circle cx="50" cy="50" r="7" fill="#F7F3EC" />
+          {/* Terracotta Accent Dots */}
+          <circle cx="50" cy="11" r="5" fill="#D16A3A" />
+          <circle cx="50" cy="89" r="5" fill="#D16A3A" />
         </svg>
       </div>
     ),
