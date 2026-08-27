@@ -110,15 +110,11 @@ export function normalizeWahaInbound(
   // 3. Message event
   if (event === 'message' || event === 'message.any' || !event) {
     const fromMe = Boolean(payload.fromMe ?? data.fromMe ?? idObj.fromMe)
-    const rawFrom =
-      str(payload.from) ??
-      str(data.from) ??
-      str(idObj.remote) ??
-      str(payload.chatId) ??
-      str(data.chatId) ??
-      ''
+    const rawContactId = fromMe
+      ? (str(idObj.remote) ?? str(payload.chatId) ?? str(data.chatId) ?? str(payload.to) ?? str(data.to) ?? str(payload.from) ?? str(data.from) ?? '')
+      : (str(payload.from) ?? str(data.from) ?? str(idObj.remote) ?? str(payload.chatId) ?? str(data.chatId) ?? '')
 
-    const phone = normalizePhone(rawFrom.replace(/@.+$/, ''))
+    const phone = normalizePhone(rawContactId.replace(/@.+$/, ''))
     const messageId =
       str(payload.id) ??
       str(data.id) ??
@@ -156,7 +152,7 @@ export function normalizeWahaInbound(
       provider: 'waha',
       accountId,
       externalMessageId: messageId,
-      externalChatId: rawFrom,
+      externalChatId: rawContactId,
       fromPhone: phone,
       senderName,
       timestamp: Number.isFinite(timestamp) ? timestamp : Math.floor(Date.now() / 1000),

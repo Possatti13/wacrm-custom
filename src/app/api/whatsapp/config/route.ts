@@ -289,6 +289,27 @@ export async function POST(request: Request) {
         )
       }
 
+      // Auto-configure WAHA webhook
+      try {
+        const { configureWahaWebhook } = await import('@/lib/whatsapp/waha-api')
+        const webhookHost =
+          process.env.WAHA_WEBHOOK_BASE_URL ||
+          process.env.NEXT_PUBLIC_APP_URL ||
+          'http://host.docker.internal:3000'
+        const webhookUrl = `${webhookHost.replace(/\/+$/, '')}/api/whatsapp/waha/webhook`
+        await configureWahaWebhook(
+          {
+            baseUrl: String(waha_base_url),
+            apiKey: String(waha_api_key),
+            session: String(waha_session_name),
+          },
+          webhookUrl,
+          process.env.WAHA_WEBHOOK_SECRET || String(waha_api_key)
+        )
+      } catch (whErr) {
+        console.warn('[whatsapp/config POST] Could not auto-configure WAHA webhook:', whErr)
+      }
+
       const baseRow = {
         provider: 'waha',
         phone_number_id: null,

@@ -68,9 +68,7 @@ async function processInboundMessage(
   db: any,
   fallbackUserId?: string | null
 ): Promise<ProcessInboundResult> {
-  if (event.fromMe) {
-    return { processed: true }
-  }
+  const isOutboundFromMe = Boolean(event.fromMe)
 
   if (!event.fromPhone) {
     return { processed: false, error: 'missing_from_phone' }
@@ -150,7 +148,7 @@ async function processInboundMessage(
     .from('messages')
     .insert({
       conversation_id: conversation.id,
-      sender_type: 'customer',
+      sender_type: isOutboundFromMe ? 'agent' : 'customer',
       content_type: event.content.type === 'unknown' ? 'text' : event.content.type,
       content_text: event.content.text || null,
       media_url: event.content.mediaUrl || null,
@@ -214,7 +212,8 @@ async function processInboundMessage(
   const isMoreRecent = !currentLastMessageAt || messageTimestampIso >= currentLastMessageAt
 
   const convUpdatePayload: Record<string, unknown> = {
-    unread_count: currentUnread + 1,
+    // Increment unread count only for customer incoming messages, not for outbound fromMe messages
+    unread_count: isOutboundFromMe ? currentUnread : currentUnread + 1,
     status: conversation.status === 'closed' ? 'open' : conversation.status,
   }
 
@@ -228,44 +227,45 @@ async function processInboundMessage(
     .update(convUpdatePayload)
     .eq('id', conversation.id)
 
-  // 8. Trigger Automations hook (Preserved frozen hook)
-  try {
-    await runAutomationsForTrigger({
-      triggerType: 'new_message_received',
-      accountId: event.accountId,
-      contactId: contact.id,
-      context: {
-        message_text: event.content.text,
-        conversation_id: conversation.id,
-        interactive_reply_id: event.content.interactiveReply?.id,
-      },
-    })
-
-    if (isFirstInboundMessage) {
+  // 8. Trigger Automations & AI hook only for customer messages (never for outbound agent replies)
+  if (!isOutboundFromMe) {
+    try {
       await runAutomationsForTrigger({
-        triggerType: 'first_inbound_message',
+        triggerType: 'new_message_received',
         accountId: event.accountId,
         contactId: contact.id,
         context: {
           message_text: event.content.text,
           conversation_id: conversation.id,
+          interactive_reply_id: event.content.interactiveReply?.id,
         },
       })
-    }
-  } catch (err) {
-    console.error('[inbound-processor] automation dispatch failed:', err)
-  }
 
-  // 9. Trigger AI Auto Reply hook (Preserved frozen hook)
-  try {
-    await dispatchInboundToAiReply({
-      accountId: event.accountId,
-      conversationId: conversation.id,
-      contactId: contact.id,
-      configOwnerUserId: userId || '00000000-0000-0000-0000-000000000000',
-    })
-  } catch (err) {
-    console.error('[inbound-processor] ai auto reply dispatch failed:', err)
+      if (isFirstInboundMessage) {
+        await runAutomationsForTrigger({
+          triggerType: 'first_inbound_message',
+          accountId: event.accountId,
+          contactId: contact.id,
+          context: {
+            message_text: event.content.text,
+            conversation_id: conversation.id,
+          },
+        })
+      }
+    } catch (err) {
+      console.error('[inbound-processor] automation dispatch failed:', err)
+    }
+
+    try {
+      await dispatchInboundToAiReply({
+        accountId: event.accountId,
+        conversationId: conversation.id,
+        contactId: contact.id,
+        configOwnerUserId: userId || '00000000-0000-0000-0000-000000000000',
+      })
+    } catch (err) {
+      console.error('[inbound-processor] ai auto reply dispatch failed:', err)
+    }
   }
 
   // 10. Commercial Intelligence Enqueue:

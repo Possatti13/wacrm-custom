@@ -95,3 +95,39 @@ export async function POST() {
     return NextResponse.json({ provider: 'waha', connected: false, error: message }, { status: 502 })
   }
 }
+
+export async function PUT() {
+  const loaded = await loadWahaConfig()
+  if ('error' in loaded) return loaded.error
+
+  try {
+    // Restart session cleanly (stop then start)
+    try {
+      const { stopWahaSession } = await import('@/lib/whatsapp/waha-api')
+      await stopWahaSession(loaded.config)
+    } catch {
+      // Best effort stop
+    }
+    const session = await startWahaSession(loaded.config)
+    return NextResponse.json({ provider: 'waha', connected: session.status === 'WORKING', session })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Failed to restart WAHA session'
+    console.error('[waha/session] restart failed:', message)
+    return NextResponse.json({ provider: 'waha', connected: false, error: message }, { status: 502 })
+  }
+}
+
+export async function DELETE() {
+  const loaded = await loadWahaConfig()
+  if ('error' in loaded) return loaded.error
+
+  try {
+    const { logoutWahaSession } = await import('@/lib/whatsapp/waha-api')
+    await logoutWahaSession(loaded.config)
+    return NextResponse.json({ provider: 'waha', loggedOut: true })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Failed to logout WAHA session'
+    console.error('[waha/session] logout failed:', message)
+    return NextResponse.json({ provider: 'waha', error: message }, { status: 502 })
+  }
+}

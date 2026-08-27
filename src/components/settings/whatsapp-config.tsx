@@ -16,6 +16,11 @@ import {
   RefreshCw,
   RotateCcw,
   Smartphone,
+  Server,
+  Cloud,
+  Clock,
+  ShieldCheck,
+  Radio,
 } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
 import { useAuth } from '@/hooks/use-auth';
@@ -25,6 +30,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { Badge } from '@/components/ui/badge';
 import { SettingsPanelHead } from './settings-panel-head';
 import {
   Accordion,
@@ -36,6 +42,7 @@ import type { WhatsAppConfig as WhatsAppConfigType } from '@/types';
 
 const MASKED_TOKEN = '••••••••••••••••';
 
+type ActiveProvider = 'waha' | 'meta';
 type ConnectionStatus = 'connected' | 'disconnected' | 'unknown';
 type ResetReason = 'token_corrupted' | 'meta_api_error' | null;
 
@@ -44,20 +51,40 @@ interface WahaSessionState {
   connected: boolean;
   session?: {
     name: string;
-    status: string;
+    status: 'STOPPED' | 'STARTING' | 'SCAN_QR_CODE' | 'WORKING' | 'FAILED' | string;
     me?: { id?: string; pushName?: string } | null;
   };
   error?: string;
 }
 
+interface WahaSyncState {
+  last_sync_status: 'idle' | 'syncing' | 'success' | 'error';
+  last_sync_completed_at?: string | null;
+  last_sync_error?: string | null;
+  sync_stats?: {
+    messagesDiscovered?: number;
+    messagesInserted?: number;
+    duplicatesIgnored?: number;
+    durationMs?: number;
+    chatsScanned?: number;
+  } | null;
+}
+
+function formatPhoneDisplay(rawId?: string | null): string {
+  if (!rawId) return '';
+  const digits = rawId.replace(/\D/g, '');
+  if (digits.length === 13 && digits.startsWith('55')) {
+    return `+55 (${digits.slice(2, 4)}) ${digits.slice(4, 9)}-${digits.slice(9)}`;
+  }
+  if (digits.length === 12 && digits.startsWith('55')) {
+    return `+55 (${digits.slice(2, 4)}) ${digits.slice(4, 8)}-${digits.slice(8)}`;
+  }
+  return digits ? `+${digits}` : rawId;
+}
+
 export function WhatsAppConfig() {
   const t = useTranslations('Settings.whatsapp');
   const supabase = createClient();
-  // After multi-user, whatsapp_config is one-row-per-account, not
-  // one-row-per-user. We pull `accountId` straight off the auth
-  // context and key every read off it — so a teammate who just
-  // joined an account sees the inviter's saved config without
-  // having to re-enter anything.
   const { user, accountId, loading: authLoading, profileLoading } = useAuth();
 
   const [loading, setLoading] = useState(true);
@@ -66,17 +93,13 @@ export function WhatsAppConfig() {
   const [resetting, setResetting] = useState(false);
   const [showToken, setShowToken] = useState(false);
   const [config, setConfig] = useState<WhatsAppConfigType | null>(null);
+  const [selectedProvider, setSelectedProvider] = useState<ActiveProvider>('waha');
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('unknown');
   const [resetReason, setResetReason] = useState<ResetReason>(null);
   const [statusMessage, setStatusMessage] = useState<string>('');
-  // Guards against re-hydrating the form when the load effect below
-  // re-runs for reasons unrelated to actually switching accounts —
-  // e.g. Supabase's onAuthStateChange fires a token refresh (new
-  // `user` object, profileLoading flips true/false) when the browser
-  // tab regains focus. Without this, that churn calls fetchConfig()
-  // again and overwrites whatever the user typed but hadn't saved yet.
   const loadedAccountIdRef = useRef<string | null>(null);
 
+  // Meta Form States
   const [phoneNumberId, setPhoneNumberId] = useState('');
   const [wabaId, setWabaId] = useState('');
   const [accessToken, setAccessToken] = useState('');
@@ -84,39 +107,25 @@ export function WhatsAppConfig() {
   const [pin, setPin] = useState('');
   const [tokenEdited, setTokenEdited] = useState(false);
 
-  // True once /register has succeeded on Meta's side (timestamp set
-  // in the row). When false, the saved config is metadata-only and
-  // Meta will silently drop every inbound event — that's the
-  // multi-number bug that prompted this work.
-  const isRegistered = Boolean(config?.registered_at);
-  const lastRegistrationError = config?.last_registration_error ?? null;
-
-  const [verifyingRegistration, setVerifyingRegistration] = useState(false);
-  type RegistrationProbe = {
-    live: boolean;
-    checks: Record<string, boolean | null>;
-    errors?: string[];
-    last_registration_error?: string | null;
-    registered_at?: string | null;
-    subscribed_apps_at?: string | null;
-  };
-  const [registrationProbe, setRegistrationProbe] =
-    useState<RegistrationProbe | null>(null);
+  // WAHA Form States
+  const [wahaBaseUrl, setWahaBaseUrl] = useState('http://localhost:3001');
+  const [wahaApiKey, setWahaApiKey] = useState('wacrm-local-dev-key');
+  const [wahaSessionName, setWahaSessionName] = useState('wacrm');
+  const [wahaInitialSyncHours, setWahaInitialSyncHours] = useState<number>(0);
 
   const webhookUrl =
     typeof window !== 'undefined'
       ? `${window.location.origin}/api/whatsapp/webhook`
       : '';
 
+  const wahaWebhookUrl =
+    typeof window !== 'undefined'
+      ? `${window.location.origin}/api/whatsapp/waha/webhook`
+      : '';
+
   const fetchConfig = useCallback(async (acctId: string) => {
     setLoading(true);
     try {
-      // Load form values from Supabase (shows what's in DB).
-      // Switched from `user_id` (which would only match the row's
-      // original author) to `account_id` so every member of the
-      // account sees the same saved configuration. UNIQUE(account_id)
-      // on the table guarantees the .maybeSingle() return type
-      // remains accurate.
       const { data, error } = await supabase
         .from('whatsapp_config')
         .select('*')
@@ -129,14 +138,27 @@ export function WhatsAppConfig() {
 
       if (data) {
         setConfig(data);
-        setPhoneNumberId(data.phone_number_id || '');
-        setWabaId(data.waba_id || '');
-        setAccessToken(MASKED_TOKEN);
-        setVerifyToken('');
-        setPin('');
-        setTokenEdited(false);
+        const prov = (data.provider as ActiveProvider) || 'waha';
+        setSelectedProvider(prov);
+
+        if (prov === 'waha') {
+          setWahaBaseUrl(data.waha_base_url || 'http://localhost:3001');
+          setWahaSessionName(data.waha_session_name || 'wacrm');
+          setWahaApiKey(MASKED_TOKEN);
+        } else {
+          setPhoneNumberId(data.phone_number_id || '');
+          setWabaId(data.waba_id || '');
+          setAccessToken(MASKED_TOKEN);
+          setVerifyToken('');
+          setPin('');
+          setTokenEdited(false);
+        }
       } else {
         setConfig(null);
+        setSelectedProvider('waha');
+        setWahaBaseUrl('http://localhost:3001');
+        setWahaSessionName(`ciclopes_${acctId.replace(/-/g, '').slice(0, 8)}`);
+        setWahaApiKey('wacrm-local-dev-key');
         setPhoneNumberId('');
         setWabaId('');
         setAccessToken('');
@@ -144,10 +166,8 @@ export function WhatsAppConfig() {
         setPin('');
         setTokenEdited(false);
       }
-      // Clear any stale probe result when reloading the row.
-      setRegistrationProbe(null);
 
-      // Then verify health via the API (decrypts token + pings Meta)
+      // Verify health via the API
       if (data) {
         try {
           const res = await fetch('/api/whatsapp/config', { method: 'GET' });
@@ -159,7 +179,13 @@ export function WhatsAppConfig() {
             setStatusMessage('');
           } else {
             setConnectionStatus('disconnected');
-            setResetReason(payload.needs_reset ? 'token_corrupted' : payload.reason === 'meta_api_error' ? 'meta_api_error' : null);
+            setResetReason(
+              payload.needs_reset
+                ? 'token_corrupted'
+                : payload.reason === 'meta_api_error'
+                  ? 'meta_api_error'
+                  : null
+            );
             setStatusMessage(payload.message || '');
           }
         } catch (err) {
@@ -180,11 +206,6 @@ export function WhatsAppConfig() {
   }, [supabase]);
 
   useEffect(() => {
-    // Need both the auth session (`!authLoading`) AND the profile
-    // (`!profileLoading`, which carries `accountId`). Without the
-    // second guard, the effect would fire with `accountId === null`
-    // for the first render window and bail without ever retrying
-    // once the profile arrives.
     if (authLoading || profileLoading) return;
     if (!user || !accountId) {
       loadedAccountIdRef.current = null;
@@ -196,7 +217,7 @@ export function WhatsAppConfig() {
     fetchConfig(accountId);
   }, [authLoading, profileLoading, user?.id, accountId, fetchConfig]);
 
-  async function handleSave() {
+  async function handleSaveMeta() {
     if (!phoneNumberId.trim()) {
       toast.error('Phone Number ID is required');
       return;
@@ -208,28 +229,17 @@ export function WhatsAppConfig() {
 
     try {
       setSaving(true);
-
-      // Always POST through the API — it verifies with Meta and encrypts
-      // the access_token server-side with ENCRYPTION_KEY. Skipping this
-      // and writing direct to Supabase stores the token in plaintext,
-      // which then fails decryption on every subsequent health check.
       const payload: Record<string, unknown> = {
+        provider: 'meta',
         phone_number_id: phoneNumberId.trim(),
         waba_id: wabaId.trim() || null,
         verify_token: verifyToken.trim() || null,
-        // Optional — only sent when the user filled it in. The server
-        // requires it on first save or when changing numbers; for a
-        // simple token rotation, leaving it blank skips re-register.
         pin: pin.trim() || null,
       };
 
       if (tokenEdited && accessToken !== MASKED_TOKEN && accessToken.trim()) {
         payload.access_token = accessToken.trim();
       } else if (config) {
-        // Existing config — reuse stored encrypted token by decrypting on the
-        // server. But our POST handler requires an access_token to verify
-        // with Meta. If the user didn't change the token, we need to signal
-        // that. Simplest: require token re-entry if they're updating.
         toast.error('Please re-enter the Access Token to save changes');
         setSaving(false);
         return;
@@ -242,46 +252,17 @@ export function WhatsAppConfig() {
       });
 
       const data = await res.json();
-
       if (!res.ok) {
         toast.error(data.error || 'Failed to save configuration');
-        setSaving(false);
         return;
       }
 
-      // The route now returns a structured outcome:
-      //   * registered=true   → number is live, events will flow
-      //   * registered=false  → credentials saved but /register
-      //                         failed; UI shows the specific error
-      //                         and a retry path. registration_error
-      //                         is human-readable from Meta.
-      if (data.registered === false && data.registration_error) {
-        toast.error(
-          `Saved, but Meta couldn't register the number: ${data.registration_error}`,
-          { duration: 12000 },
-        );
-      } else if (data.registration_skipped) {
-        // Credentials saved + verified, but /register was skipped
-        // because no PIN was supplied (e.g. a Meta test number).
-        // Don't claim the number is "Live" — point at the
-        // Registration status banner instead.
-        toast.success(
-          'Credentials saved and verified. Inbound registration was skipped (no PIN) — see Registration status below.',
-          { duration: 10000 },
-        );
-        setPin('');
-      } else {
-        toast.success(
-          data.phone_info?.verified_name
-            ? `Live — ${data.phone_info.verified_name} can now receive events.`
-            : 'WhatsApp connected. Events will start flowing within a minute.',
-        );
-        // Clear the PIN so subsequent saves don't accidentally
-        // re-register (which would void the active subscription if
-        // the PIN became stale).
-        setPin('');
-      }
-
+      toast.success(
+        data.phone_info?.verified_name
+          ? `Live — ${data.phone_info.verified_name} can now receive events.`
+          : 'WhatsApp connected.'
+      );
+      setPin('');
       if (accountId) await fetchConfig(accountId);
     } catch (err) {
       console.error('Save error:', err);
@@ -291,7 +272,48 @@ export function WhatsAppConfig() {
     }
   }
 
-  async function handleTestConnection() {
+  async function handleSaveWaha() {
+    if (!wahaBaseUrl.trim() || !wahaSessionName.trim()) {
+      toast.error('WAHA URL and session name are required');
+      return;
+    }
+    if (!config && (!wahaApiKey.trim() || wahaApiKey === MASKED_TOKEN)) {
+      toast.error('WAHA API Key is required for initial setup');
+      return;
+    }
+
+    try {
+      setSaving(true);
+      const payload: Record<string, unknown> = {
+        provider: 'waha',
+        waha_base_url: wahaBaseUrl.trim(),
+        waha_session_name: wahaSessionName.trim(),
+        waha_api_key: wahaApiKey === MASKED_TOKEN ? undefined : wahaApiKey.trim(),
+      };
+
+      const res = await fetch('/api/whatsapp/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        toast.error(data.error || 'Failed to save WAHA configuration');
+        return;
+      }
+
+      toast.success('Configuração do WAHA salva com sucesso.');
+      if (accountId) await fetchConfig(accountId);
+    } catch (err) {
+      console.error('WAHA Save error:', err);
+      toast.error('Erro ao salvar configuração do WAHA');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleTestMetaConnection() {
     try {
       setTesting(true);
       const res = await fetch('/api/whatsapp/config', { method: 'GET' });
@@ -308,47 +330,27 @@ export function WhatsAppConfig() {
         );
       } else {
         setConnectionStatus('disconnected');
-        setResetReason(payload.needs_reset ? 'token_corrupted' : payload.reason === 'meta_api_error' ? 'meta_api_error' : null);
+        setResetReason(
+          payload.needs_reset
+            ? 'token_corrupted'
+            : payload.reason === 'meta_api_error'
+              ? 'meta_api_error'
+              : null
+        );
         setStatusMessage(payload.message || '');
         toast.error(payload.message || 'API connection failed');
       }
     } catch (err) {
       console.error('Test connection error:', err);
       setConnectionStatus('disconnected');
-      toast.error('Connection test failed. Check network and try again.');
+      toast.error('Connection test failed.');
     } finally {
       setTesting(false);
     }
   }
 
-  async function handleVerifyRegistration() {
-    setVerifyingRegistration(true);
-    setRegistrationProbe(null);
-    try {
-      const res = await fetch('/api/whatsapp/config/verify-registration', {
-        method: 'GET',
-      });
-      const data = (await res.json()) as RegistrationProbe;
-      setRegistrationProbe(data);
-      if (data.live) {
-        toast.success('Number is fully wired — Meta is delivering events.');
-      } else {
-        toast.error(
-          'Number is not fully registered. See the checks below for which step failed.',
-          { duration: 8000 },
-        );
-      }
-      if (accountId) await fetchConfig(accountId);
-    } catch (err) {
-      console.error('verify-registration failed:', err);
-      toast.error('Could not reach the verification endpoint.');
-    } finally {
-      setVerifyingRegistration(false);
-    }
-  }
-
   async function handleReset() {
-    if (!confirm('This will delete the current WhatsApp config so you can re-enter it. Continue?')) {
+    if (!confirm('Deseja resetar a configuração do WhatsApp? Você precisará reconfigurar as credenciais.')) {
       return;
     }
 
@@ -358,40 +360,34 @@ export function WhatsAppConfig() {
       const data = await res.json();
 
       if (!res.ok) {
-        toast.error(data.error || 'Failed to reset configuration');
+        toast.error(data.error || 'Erro ao resetar');
         return;
       }
 
-      toast.success('Configuration cleared. You can now re-enter your credentials.');
+      toast.success('Configuração limpa com sucesso.');
       setConfig(null);
       setPhoneNumberId('');
       setWabaId('');
       setAccessToken('');
       setVerifyToken('');
+      setPin('');
+      setWahaApiKey('wacrm-local-dev-key');
       setTokenEdited(false);
       setConnectionStatus('disconnected');
       setResetReason(null);
       setStatusMessage('');
     } catch (err) {
       console.error('Reset error:', err);
-      toast.error('Failed to reset configuration');
+      toast.error('Erro ao resetar configuração');
     } finally {
       setResetting(false);
     }
   }
 
-  function handleCopyWebhookUrl() {
-    navigator.clipboard.writeText(webhookUrl);
-    toast.success('Webhook URL copied to clipboard');
-  }
-
   if (loading) {
     return (
       <section className="animate-in fade-in-50 duration-200">
-        <SettingsPanelHead
-          title={t("title")}
-          description={t("description")}
-        />
+        <SettingsPanelHead title={t('title')} description={t('description')} />
         <div className="flex items-center justify-center py-12">
           <Loader2 className="size-6 animate-spin text-primary" />
         </div>
@@ -399,539 +395,474 @@ export function WhatsAppConfig() {
     );
   }
 
-  const showResetBanner = resetReason === 'token_corrupted';
-
-  if (config?.provider === 'waha') {
-    return (
-      <WahaConnectionPanel
-        config={config}
-        onReset={handleReset}
-        resetting={resetting}
-        onReload={async () => {
-          if (accountId) await fetchConfig(accountId);
-        }}
-      />
-    );
-  }
-
   return (
-    <section className="animate-in fade-in-50 duration-200">
-      <SettingsPanelHead
-        title={t("title")}
-        description={t("description")}
-      />
-      <div className="grid gap-6 lg:grid-cols-[1fr_380px]">
-      {/* Main config form */}
-      <div className="space-y-6">
-        {/* Corrupted-token reset banner */}
-        {showResetBanner && (
-          <Alert className="bg-amber-950/40 border-amber-600/40">
-            <div className="flex items-start gap-3">
-              <AlertTriangle className="size-5 text-amber-400 mt-0.5 shrink-0" />
-              <div className="flex-1">
-                <AlertTitle className="text-amber-200 mb-1">
-                  Stored token can&apos;t be decrypted
-                </AlertTitle>
-                <AlertDescription className="text-amber-100/80 text-sm">
-                  {statusMessage}
-                </AlertDescription>
-                <Button
-                  onClick={handleReset}
-                  disabled={resetting}
-                  size="sm"
-                  className="mt-3 bg-amber-600 hover:bg-amber-700 text-white"
-                >
-                  {resetting ? (
-                    <>
-                      <Loader2 className="size-4 animate-spin" />
-                      {t('resetting')}
-                    </>
-                  ) : (
-                    <>
-                      <RotateCcw className="size-4" />
-                      {t('resetConfig')}
-                    </>
-                  )}
-                </Button>
-              </div>
-            </div>
-          </Alert>
-        )}
+    <section className="animate-in fade-in-50 duration-200 space-y-6">
+      <SettingsPanelHead title={t('title')} description={t('description')} />
 
-        {/* Connection Status */}
-        <Alert className="bg-card border-border">
-          <div className="flex items-center gap-2">
-            {connectionStatus === 'connected' ? (
-              <CheckCircle2 className="size-4 text-primary" />
-            ) : (
-              <XCircle className="size-4 text-red-500" />
-            )}
-            <AlertTitle className="text-foreground mb-0">
-              {connectionStatus === 'connected' ? t('credentialsValid') : t('notConnected')}
-            </AlertTitle>
-          </div>
-          <AlertDescription className="text-muted-foreground">
-            {connectionStatus === 'connected'
-              ? t('connectedDesc')
-              : statusMessage ||
-                t('notConnectedDesc')}
-          </AlertDescription>
-        </Alert>
+      {/* Provider Selector */}
+      <div className="rounded-xl border border-border bg-card p-4">
+        <div className="mb-3">
+          <h3 className="text-sm font-semibold text-foreground">{t('providerSelectorTitle')}</h3>
+          <p className="text-xs text-muted-foreground">{t('providerSelectorDesc')}</p>
+        </div>
 
-        {/* Registration Status — the "is it actually live?" check.
-            Credentials being valid is necessary but not sufficient;
-            without a successful /register call the number won't
-            receive inbound events. Surface this dimension separately
-            so users don't trust a misleading green banner. */}
-        {config && (
-          <Alert
-            className={
-              isRegistered
-                ? 'bg-emerald-950/30 border-emerald-700/50'
-                : 'bg-amber-950/30 border-amber-700/50'
-            }
+        <div className="grid gap-3 sm:grid-cols-2">
+          {/* WAHA Card */}
+          <div
+            role="button"
+            tabIndex={0}
+            onClick={() => setSelectedProvider('waha')}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') setSelectedProvider('waha');
+            }}
+            className={`cursor-pointer rounded-lg border p-4 transition-all ${
+              selectedProvider === 'waha'
+                ? 'border-primary bg-primary/5 ring-1 ring-primary'
+                : 'border-border bg-background hover:bg-muted/40'
+            }`}
           >
-            <div className="flex items-center justify-between gap-2 flex-wrap">
-              <div className="flex items-center gap-2">
-                {isRegistered ? (
-                  <CheckCircle2 className="size-4 text-emerald-400" />
-                ) : (
-                  <AlertTriangle className="size-4 text-amber-400" />
-                )}
-                <AlertTitle
-                  className={
-                    'mb-0 ' + (isRegistered ? 'text-emerald-200' : 'text-amber-200')
-                  }
-                >
-                  {isRegistered
-                    ? t('registered')
-                    : t('notRegistered')}
-                </AlertTitle>
+            <div className="flex items-start justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="flex size-8 items-center justify-center rounded-md bg-primary/10 text-primary">
+                  <QrCode className="size-4" />
+                </div>
+                <div>
+                  <h4 className="text-sm font-medium text-foreground">{t('providerWahaTitle')}</h4>
+                  <Badge variant="secondary" className="mt-0.5 text-[10px] font-normal bg-primary/10 text-primary border-primary/20">
+                    {t('providerWahaBadge')}
+                  </Badge>
+                </div>
               </div>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={handleVerifyRegistration}
-                disabled={verifyingRegistration}
-                className="border-border bg-transparent text-foreground hover:bg-muted h-7"
+              <div
+                className={`size-4 rounded-full border flex items-center justify-center ${
+                  selectedProvider === 'waha' ? 'border-primary bg-primary' : 'border-muted-foreground'
+                }`}
               >
-                {verifyingRegistration ? (
-                  <Loader2 className="size-3.5 animate-spin" />
-                ) : (
-                  <Zap className="size-3.5" />
-                )}
-                {t('verifyWithMeta')}
-              </Button>
-            </div>
-            <AlertDescription className="text-muted-foreground mt-2 text-xs leading-relaxed">
-              {isRegistered ? (
-                <span>
-                  {t('subscribedSince', {
-                    date: config.registered_at
-                      ? new Date(config.registered_at).toLocaleString()
-                      : t('unknownDate'),
-                  })}
-                </span>
-              ) : lastRegistrationError ? (
-                <>
-                  {t('lastAttemptFailed')}
-                  <span className="text-red-300">
-                    &quot;{lastRegistrationError}&quot;
-                  </span>
-                  . {t('retryHint')}
-                </>
-              ) : (
-                <>{t('noRegistrationHint')}</>
-              )}
-            </AlertDescription>
-
-            {registrationProbe && (
-              <div className="mt-3 rounded border border-border bg-card/60 px-3 py-2 space-y-1.5 text-[11px]">
-                <p className="font-medium text-foreground">
-                  {t('diagnosticLastRun')}
-                  <span className={registrationProbe.live ? 'text-emerald-400' : 'text-amber-400'}>
-                    {registrationProbe.live ? t('live') : t('notLive')}
-                  </span>
-                </p>
-                <ul className="space-y-0.5 text-muted-foreground">
-                  {Object.entries(registrationProbe.checks).map(([k, v]) => (
-                    <li key={k} className="flex items-center gap-1.5">
-                      {v === true ? (
-                        <CheckCircle2 className="size-3 text-emerald-400 shrink-0" />
-                      ) : v === false ? (
-                        <XCircle className="size-3 text-red-400 shrink-0" />
-                      ) : (
-                        <span className="size-3 rounded-full border border-border shrink-0" />
-                      )}
-                      <code className="text-muted-foreground">{k}</code>
-                    </li>
-                  ))}
-                </ul>
-                {(registrationProbe.errors ?? []).length > 0 && (
-                  <ul className="pt-1 space-y-0.5 text-red-300">
-                    {registrationProbe.errors?.map((e, i) => (
-                      <li key={i}>• {e}</li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-            )}
-          </Alert>
-        )}
-
-        {/* API Credentials */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-foreground">{t('apiCredentialsTitle')}</CardTitle>
-            <CardDescription className="text-muted-foreground">
-              {t('apiCredentialsDesc')}
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="space-y-2">
-              <Label className="text-muted-foreground">{t('phoneNumberId')}</Label>
-              <Input
-                placeholder="e.g. 100234567890123"
-                value={phoneNumberId}
-                onChange={(e) => setPhoneNumberId(e.target.value)}
-                className="bg-muted border-border text-foreground placeholder:text-muted-foreground"
-              />
-            </div>
-
-            <div className="space-y-2">
-              <Label className="text-muted-foreground">{t('wabaId')}</Label>
-              <Input
-                placeholder="e.g. 100234567890456"
-                value={wabaId}
-                onChange={(e) => setWabaId(e.target.value)}
-                className="bg-muted border-border text-foreground placeholder:text-muted-foreground"
-              />
-            </div>
-
-            <div className="space-y-2">
-              <Label className="text-muted-foreground">{t('accessToken')}</Label>
-              <div className="relative">
-                <Input
-                  type={showToken ? 'text' : 'password'}
-                  placeholder={t('accessTokenPlaceholder')}
-                  value={accessToken}
-                  onChange={(e) => {
-                    setAccessToken(e.target.value);
-                    setTokenEdited(true);
-                  }}
-                  onFocus={() => {
-                    if (accessToken === MASKED_TOKEN) {
-                      setAccessToken('');
-                      setTokenEdited(true);
-                    }
-                  }}
-                  className="bg-muted border-border text-foreground placeholder:text-muted-foreground pr-10"
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowToken(!showToken)}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
-                >
-                  {showToken ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
-                </button>
-              </div>
-              {config && !tokenEdited && (
-                <p className="text-xs text-muted-foreground">
-                  {t('tokenHidden')}
-                </p>
-              )}
-            </div>
-
-            <div className="space-y-2">
-              <Label className="text-muted-foreground">{t('webhookVerifyToken')}</Label>
-              <Input
-                placeholder={t('webhookVerifyTokenPlaceholder')}
-                value={verifyToken}
-                onChange={(e) => setVerifyToken(e.target.value)}
-                className="bg-muted border-border text-foreground placeholder:text-muted-foreground"
-              />
-              <p className="text-xs text-muted-foreground">
-                {t('webhookVerifyTokenHint')}
-              </p>
-            </div>
-
-            <div className="space-y-2">
-              <Label className="text-muted-foreground">
-                {t('twoStepPin')}
-                <span className="ml-1 text-muted-foreground">{t('optional')}</span>
-              </Label>
-              <Input
-                type="text"
-                inputMode="numeric"
-                maxLength={6}
-                placeholder={t('pinPlaceholder')}
-                value={pin}
-                onChange={(e) =>
-                  setPin(e.target.value.replace(/\D/g, '').slice(0, 6))
-                }
-                className="bg-muted border-border text-foreground placeholder:text-muted-foreground tracking-widest"
-              />
-              <p className="text-xs text-muted-foreground leading-relaxed">
-                <span>{t('pinHint')}</span>
-              </p>
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Webhook URL */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-foreground">{t('webhookTitle')}</CardTitle>
-            <CardDescription className="text-muted-foreground">
-              {t('webhookDesc')}
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-2">
-              <Label className="text-muted-foreground">{t('webhookUrl')}</Label>
-              <div className="flex gap-2">
-                <Input
-                  readOnly
-                  value={webhookUrl}
-                  className="bg-muted border-border text-muted-foreground font-mono text-sm"
-                />
-                <Button
-                  variant="outline"
-                  size="icon"
-                  onClick={handleCopyWebhookUrl}
-                  className="shrink-0 border-border text-muted-foreground hover:text-foreground hover:bg-muted"
-                >
-                  <Copy className="size-4" />
-                </Button>
+                {selectedProvider === 'waha' && <div className="size-1.5 rounded-full bg-primary-foreground" />}
               </div>
             </div>
-          </CardContent>
-        </Card>
+            <p className="mt-2.5 text-xs text-muted-foreground leading-relaxed">
+              {t('providerWahaDesc')}
+            </p>
+          </div>
 
-        {/* Action Buttons */}
-        <div className="flex flex-wrap gap-3">
-          <Button
-            onClick={handleSave}
-            disabled={saving}
-            className="bg-primary hover:bg-primary/90 text-primary-foreground"
+          {/* Meta Cloud API Card */}
+          <div
+            role="button"
+            tabIndex={0}
+            onClick={() => setSelectedProvider('meta')}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') setSelectedProvider('meta');
+            }}
+            className={`cursor-pointer rounded-lg border p-4 transition-all ${
+              selectedProvider === 'meta'
+                ? 'border-primary bg-primary/5 ring-1 ring-primary'
+                : 'border-border bg-background hover:bg-muted/40'
+            }`}
           >
-            {saving ? (
-              <>
-                <Loader2 className="size-4 animate-spin" />
-                {t('saving')}
-              </>
-            ) : (
-              t('saveConfig')
-            )}
-          </Button>
-          <Button
-            variant="outline"
-            onClick={handleTestConnection}
-            disabled={testing || !config}
-            className="border-border text-muted-foreground hover:text-foreground hover:bg-muted"
-          >
-            {testing ? (
-              <>
-                <Loader2 className="size-4 animate-spin" />
-                {t('testing')}
-              </>
-            ) : (
-              <>
-                <Zap className="size-4" />
-                {t('testConnection')}
-              </>
-            )}
-          </Button>
-          {config && (
-            <Button
-              variant="outline"
-              onClick={handleReset}
-              disabled={resetting}
-              className="border-red-900 text-red-400 hover:text-red-300 hover:bg-red-950/40"
-            >
-              {resetting ? (
-                <>
-                  <Loader2 className="size-4 animate-spin" />
-                  {t('resetting')}
-                </>
-              ) : (
-                <>
-                  <RotateCcw className="size-4" />
-                  {t('resetConfig')}
-                </>
-              )}
-            </Button>
-          )}
+            <div className="flex items-start justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="flex size-8 items-center justify-center rounded-md bg-muted text-muted-foreground">
+                  <Cloud className="size-4" />
+                </div>
+                <div>
+                  <h4 className="text-sm font-medium text-foreground">{t('providerMetaTitle')}</h4>
+                  <Badge variant="outline" className="mt-0.5 text-[10px] font-normal text-muted-foreground border-border">
+                    {t('providerMetaBadge')}
+                  </Badge>
+                </div>
+              </div>
+              <div
+                className={`size-4 rounded-full border flex items-center justify-center ${
+                  selectedProvider === 'meta' ? 'border-primary bg-primary' : 'border-muted-foreground'
+                }`}
+              >
+                {selectedProvider === 'meta' && <div className="size-1.5 rounded-full bg-primary-foreground" />}
+              </div>
+            </div>
+            <p className="mt-2.5 text-xs text-muted-foreground leading-relaxed">
+              {t('providerMetaDesc')}
+            </p>
+          </div>
         </div>
       </div>
 
-      {/* Setup Instructions Sidebar */}
-      <div>
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-foreground text-base">{t('setupInstructions')}</CardTitle>
-            <CardDescription className="text-muted-foreground">
-              {t('setupInstructionsDesc')}
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <Accordion>
-              <AccordionItem className="border-border">
-                <AccordionTrigger className="text-muted-foreground hover:text-foreground hover:no-underline">
-                  <span className="flex items-center gap-2">
-                    <span className="flex size-5 items-center justify-center rounded-full bg-primary text-xs font-bold text-primary-foreground">1</span>
-                    {t('step1')}
-                  </span>
-                </AccordionTrigger>
-                <AccordionContent className="text-muted-foreground">
-                  <ol className="list-decimal list-inside space-y-1 text-sm">
-                    <li>{t('step1_1')}</li>
-                    <li>{t('step1_2')}</li>
-                    <li>{t('step1_3')}</li>
-                    <li>{t('step1_4')}</li>
-                  </ol>
-                </AccordionContent>
-              </AccordionItem>
+      {/* Render Active Provider Panel */}
+      {selectedProvider === 'waha' ? (
+        <WahaExperiencePanel
+          config={config}
+          baseUrl={wahaBaseUrl}
+          setBaseUrl={setWahaBaseUrl}
+          apiKey={wahaApiKey}
+          setApiKey={setWahaApiKey}
+          sessionName={wahaSessionName}
+          setSessionName={setWahaSessionName}
+          initialSyncHours={wahaInitialSyncHours}
+          setInitialSyncHours={setWahaInitialSyncHours}
+          onSave={handleSaveWaha}
+          saving={saving}
+          onReset={handleReset}
+          resetting={resetting}
+          onReload={async () => {
+            if (accountId) await fetchConfig(accountId);
+          }}
+          wahaWebhookUrl={wahaWebhookUrl}
+        />
+      ) : (
+        /* Meta Cloud API Panel */
+        <div className="grid gap-6 lg:grid-cols-[1fr_380px]">
+          <div className="space-y-6">
+            {resetReason === 'token_corrupted' && (
+              <Alert className="bg-amber-950/40 border-amber-600/40">
+                <div className="flex items-start gap-3">
+                  <AlertTriangle className="size-5 text-amber-400 mt-0.5 shrink-0" />
+                  <div className="flex-1">
+                    <AlertTitle className="text-amber-200 mb-1">{t('tokenCorrupted')}</AlertTitle>
+                    <AlertDescription className="text-amber-100/80 text-sm">{statusMessage}</AlertDescription>
+                    <Button
+                      onClick={handleReset}
+                      disabled={resetting}
+                      size="sm"
+                      className="mt-3 bg-amber-600 hover:bg-amber-700 text-white"
+                    >
+                      {resetting ? <Loader2 className="size-4 animate-spin" /> : <RotateCcw className="size-4" />}
+                      {t('resetConfig')}
+                    </Button>
+                  </div>
+                </div>
+              </Alert>
+            )}
 
-              <AccordionItem className="border-border">
-                <AccordionTrigger className="text-muted-foreground hover:text-foreground hover:no-underline">
-                  <span className="flex items-center gap-2">
-                    <span className="flex size-5 items-center justify-center rounded-full bg-primary text-xs font-bold text-primary-foreground">2</span>
-                    {t('step2')}
-                  </span>
-                </AccordionTrigger>
-                <AccordionContent className="text-muted-foreground">
-                  <ol className="list-decimal list-inside space-y-1 text-sm">
-                    <li>{t('step2_1')}</li>
-                    <li>{t('step2_2')}</li>
-                    <li>{t('step2_3')}</li>
-                  </ol>
-                </AccordionContent>
-              </AccordionItem>
+            <Card>
+              <CardHeader>
+                <div className="flex items-center justify-between">
+                  <CardTitle className="text-foreground">{t('apiCredentialsTitle')}</CardTitle>
+                  <Badge variant={connectionStatus === 'connected' ? 'default' : 'secondary'}>
+                    {connectionStatus === 'connected' ? t('credentialsValid') : t('notConnected')}
+                  </Badge>
+                </div>
+                <CardDescription>{t('apiCredentialsDesc')}</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="space-y-2">
+                  <Label className="text-muted-foreground">{t('phoneNumberId')}</Label>
+                  <Input
+                    value={phoneNumberId}
+                    onChange={(e) => setPhoneNumberId(e.target.value)}
+                    placeholder="100609346426084"
+                    className="bg-muted border-border text-foreground"
+                  />
+                </div>
 
-              <AccordionItem className="border-border">
-                <AccordionTrigger className="text-muted-foreground hover:text-foreground hover:no-underline">
-                  <span className="flex items-center gap-2">
-                    <span className="flex size-5 items-center justify-center rounded-full bg-primary text-xs font-bold text-primary-foreground">3</span>
-                    {t('step3')}
-                  </span>
-                </AccordionTrigger>
-                <AccordionContent className="text-muted-foreground">
-                  <ol className="list-decimal list-inside space-y-1 text-sm">
-                    <li>{t('step3_1')}</li>
-                    <li>
-                      {t.rich('step3_2', {
-                        strong: (chunks) => (
-                          <strong className="text-foreground">{chunks}</strong>
-                        ),
-                      })}
-                    </li>
-                    <li>
-                      {t.rich('step3_3', {
-                        strong: (chunks) => (
-                          <strong className="text-foreground">{chunks}</strong>
-                        ),
-                      })}
-                    </li>
-                    <li>
-                      {t.rich('step3_4', {
-                        strong: (chunks) => (
-                          <strong className="text-foreground">{chunks}</strong>
-                        ),
-                      })}
-                    </li>
-                  </ol>
-                </AccordionContent>
-              </AccordionItem>
+                <div className="space-y-2">
+                  <Label className="text-muted-foreground">{t('wabaId')}</Label>
+                  <Input
+                    value={wabaId}
+                    onChange={(e) => setWabaId(e.target.value)}
+                    placeholder="107764358872543"
+                    className="bg-muted border-border text-foreground"
+                  />
+                </div>
 
-              <AccordionItem className="border-border">
-                <AccordionTrigger className="text-muted-foreground hover:text-foreground hover:no-underline">
-                  <span className="flex items-center gap-2">
-                    <span className="flex size-5 items-center justify-center rounded-full bg-primary text-xs font-bold text-primary-foreground">4</span>
-                    {t('step4')}
-                  </span>
-                </AccordionTrigger>
-                <AccordionContent className="text-muted-foreground">
-                  <ol className="list-decimal list-inside space-y-1 text-sm">
-                    <li>{t('step4_1')}</li>
-                    <li>{t('step4_2')}</li>
-                    <li>
-                      {t.rich('step4_3', {
-                        strong: (chunks) => (
-                          <strong className="text-foreground">{chunks}</strong>
-                        ),
-                      })}
-                    </li>
-                    <li>
-                      {t.rich('step4_4', {
-                        strong: (chunks) => (
-                          <strong className="text-foreground">{chunks}</strong>
-                        ),
-                      })}
-                    </li>
-                    <li>{t('step4_5')}</li>
-                  </ol>
-                </AccordionContent>
-              </AccordionItem>
-            </Accordion>
+                <div className="space-y-2">
+                  <Label className="text-muted-foreground">{t('accessToken')}</Label>
+                  <div className="relative">
+                    <Input
+                      type={showToken ? 'text' : 'password'}
+                      value={accessToken}
+                      onChange={(e) => {
+                        setAccessToken(e.target.value);
+                        setTokenEdited(true);
+                      }}
+                      placeholder={t('accessTokenPlaceholder')}
+                      className="bg-muted border-border text-foreground pr-10"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowToken(!showToken)}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                    >
+                      {showToken ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+                    </button>
+                  </div>
+                  {config && !tokenEdited && (
+                    <p className="text-xs text-muted-foreground">{t('tokenHidden')}</p>
+                  )}
+                </div>
 
-            <div className="mt-4 pt-4 border-t border-border">
-              <a
-                href="https://developers.facebook.com/docs/whatsapp/cloud-api/get-started"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center gap-1.5 text-sm text-primary hover:text-primary/80 transition-colors"
-              >
-                <ExternalLink className="size-3.5" />
-                {t('metaDocs')}
-              </a>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-    </div>
+                <div className="space-y-2">
+                  <Label className="text-muted-foreground">{t('webhookVerifyToken')}</Label>
+                  <Input
+                    value={verifyToken}
+                    onChange={(e) => setVerifyToken(e.target.value)}
+                    placeholder={t('webhookVerifyTokenPlaceholder')}
+                    className="bg-muted border-border text-foreground"
+                  />
+                  <p className="text-xs text-muted-foreground">{t('webhookVerifyTokenHint')}</p>
+                </div>
+
+                <div className="space-y-2">
+                  <Label className="text-muted-foreground">
+                    {t('twoStepPin')} <span className="ml-1 text-muted-foreground">{t('optional')}</span>
+                  </Label>
+                  <Input
+                    type="password"
+                    maxLength={6}
+                    value={pin}
+                    onChange={(e) => setPin(e.target.value.replace(/\D/g, ''))}
+                    placeholder={t('pinPlaceholder')}
+                    className="bg-muted border-border text-foreground tracking-widest"
+                  />
+                  <p className="text-xs text-muted-foreground leading-relaxed">{t('pinHint')}</p>
+                </div>
+
+                <div className="pt-2 flex flex-wrap gap-3">
+                  <Button onClick={handleSaveMeta} disabled={saving}>
+                    {saving ? <Loader2 className="size-4 animate-spin" /> : <Zap className="size-4" />}
+                    {t('saveConfig')}
+                  </Button>
+                  <Button variant="outline" onClick={handleTestMetaConnection} disabled={testing || !config}>
+                    {testing ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
+                    {t('testConnection')}
+                  </Button>
+                  {config && (
+                    <Button
+                      variant="outline"
+                      onClick={handleReset}
+                      disabled={resetting}
+                      className="border-red-900 text-red-400 hover:bg-red-950/40"
+                    >
+                      {resetting ? <Loader2 className="size-4 animate-spin" /> : <RotateCcw className="size-4" />}
+                      {t('resetConfig')}
+                    </Button>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Meta Webhook Card */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-foreground">{t('webhookTitle')}</CardTitle>
+                <CardDescription>{t('webhookDesc')}</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="space-y-2">
+                  <Label className="text-muted-foreground">{t('webhookUrl')}</Label>
+                  <div className="flex gap-2">
+                    <Input readOnly value={webhookUrl} className="bg-muted border-border text-foreground font-mono text-xs" />
+                    <Button
+                      variant="outline"
+                      size="icon"
+                      onClick={() => {
+                        navigator.clipboard.writeText(webhookUrl);
+                        toast.success('Webhook URL copiada!');
+                      }}
+                      className="border-border hover:bg-muted shrink-0"
+                    >
+                      <Copy className="size-4" />
+                    </Button>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* Meta Setup Guide Rail */}
+          <div className="space-y-6">
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-foreground text-base">{t('setupInstructions')}</CardTitle>
+                <CardDescription>{t('setupInstructionsDesc')}</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <Accordion className="w-full">
+                  <AccordionItem value="step-1" className="border-border">
+                    <AccordionTrigger className="text-muted-foreground hover:text-foreground hover:no-underline">
+                      <span className="flex items-center gap-2">
+                        <span className="flex size-5 items-center justify-center rounded-full bg-primary text-xs font-bold text-primary-foreground">1</span>
+                        {t('step1')}
+                      </span>
+                    </AccordionTrigger>
+                    <AccordionContent className="text-muted-foreground">
+                      <ol className="list-decimal list-inside space-y-1 text-sm">
+                        <li>{t('step1_1')}</li>
+                        <li>{t('step1_2')}</li>
+                        <li>{t('step1_3')}</li>
+                        <li>{t('step1_4')}</li>
+                      </ol>
+                    </AccordionContent>
+                  </AccordionItem>
+
+                  <AccordionItem value="step-2" className="border-border">
+                    <AccordionTrigger className="text-muted-foreground hover:text-foreground hover:no-underline">
+                      <span className="flex items-center gap-2">
+                        <span className="flex size-5 items-center justify-center rounded-full bg-primary text-xs font-bold text-primary-foreground">2</span>
+                        {t('step2')}
+                      </span>
+                    </AccordionTrigger>
+                    <AccordionContent className="text-muted-foreground">
+                      <ol className="list-decimal list-inside space-y-1 text-sm">
+                        <li>{t('step2_1')}</li>
+                        <li>{t('step2_2')}</li>
+                        <li>{t('step2_3')}</li>
+                      </ol>
+                    </AccordionContent>
+                  </AccordionItem>
+
+                  <AccordionItem value="step-3" className="border-border">
+                    <AccordionTrigger className="text-muted-foreground hover:text-foreground hover:no-underline">
+                      <span className="flex items-center gap-2">
+                        <span className="flex size-5 items-center justify-center rounded-full bg-primary text-xs font-bold text-primary-foreground">3</span>
+                        {t('step3')}
+                      </span>
+                    </AccordionTrigger>
+                    <AccordionContent className="text-muted-foreground">
+                      <ol className="list-decimal list-inside space-y-1 text-sm">
+                        <li>{t('step3_1')}</li>
+                        <li>
+                          {t.rich('step3_2', {
+                            strong: (chunks) => <strong className="text-foreground">{chunks}</strong>,
+                          })}
+                        </li>
+                        <li>
+                          {t.rich('step3_3', {
+                            strong: (chunks) => <strong className="text-foreground">{chunks}</strong>,
+                          })}
+                        </li>
+                        <li>
+                          {t.rich('step3_4', {
+                            strong: (chunks) => <strong className="text-foreground">{chunks}</strong>,
+                          })}
+                        </li>
+                      </ol>
+                    </AccordionContent>
+                  </AccordionItem>
+
+                  <AccordionItem value="step-4" className="border-border">
+                    <AccordionTrigger className="text-muted-foreground hover:text-foreground hover:no-underline">
+                      <span className="flex items-center gap-2">
+                        <span className="flex size-5 items-center justify-center rounded-full bg-primary text-xs font-bold text-primary-foreground">4</span>
+                        {t('step4')}
+                      </span>
+                    </AccordionTrigger>
+                    <AccordionContent className="text-muted-foreground">
+                      <ol className="list-decimal list-inside space-y-1 text-sm">
+                        <li>{t('step4_1')}</li>
+                        <li>{t('step4_2')}</li>
+                        <li>
+                          {t.rich('step4_3', {
+                            strong: (chunks) => <strong className="text-foreground">{chunks}</strong>,
+                          })}
+                        </li>
+                        <li>
+                          {t.rich('step4_4', {
+                            strong: (chunks) => <strong className="text-foreground">{chunks}</strong>,
+                          })}
+                        </li>
+                        <li>{t('step4_5')}</li>
+                      </ol>
+                    </AccordionContent>
+                  </AccordionItem>
+                </Accordion>
+
+                <div className="mt-4 pt-4 border-t border-border">
+                  <a
+                    href="https://developers.facebook.com/docs/whatsapp/cloud-api/get-started"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1.5 text-sm text-primary hover:text-primary/80 transition-colors"
+                  >
+                    <ExternalLink className="size-3.5" />
+                    {t('metaDocs')}
+                  </a>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+        </div>
+      )}
     </section>
   );
 }
 
-function WahaConnectionPanel({
+/**
+ * WAHA Experience Panel:
+ * Native QR code flow, real session lifecycle, auto-reconciliation,
+ * connection health metrics, and non-destructive reconnection.
+ */
+function WahaExperiencePanel({
   config,
+  baseUrl,
+  setBaseUrl,
+  apiKey,
+  setApiKey,
+  sessionName,
+  setSessionName,
+  initialSyncHours,
+  setInitialSyncHours,
+  onSave,
+  saving,
   onReset,
   resetting,
   onReload,
+  wahaWebhookUrl,
 }: {
-  config: WhatsAppConfigType;
+  config: WhatsAppConfigType | null;
+  baseUrl: string;
+  setBaseUrl: (v: string) => void;
+  apiKey: string;
+  setApiKey: (v: string) => void;
+  sessionName: string;
+  setSessionName: (v: string) => void;
+  initialSyncHours: number;
+  setInitialSyncHours: (v: number) => void;
+  onSave: () => Promise<void>;
+  saving: boolean;
   onReset: () => void;
   resetting: boolean;
-  onReload: () => void | Promise<void>;
+  onReload: () => Promise<void>;
+  wahaWebhookUrl: string;
 }) {
+  const t = useTranslations('Settings.whatsapp');
   const [sessionState, setSessionState] = useState<WahaSessionState | null>(null);
+  const [syncState, setSyncState] = useState<WahaSyncState | null>(null);
   const [loadingStatus, setLoadingStatus] = useState(true);
   const [starting, setStarting] = useState(false);
+  const [reconnecting, setReconnecting] = useState(false);
+  const [loggingOut, setLoggingOut] = useState(false);
+  const [syncingNow, setSyncingNow] = useState(false);
   const [qrVersion, setQrVersion] = useState(0);
   const [qrError, setQrError] = useState<string | null>(null);
 
-  const sessionStatus = sessionState?.session?.status ?? 'UNKNOWN';
-  const connected = sessionState?.connected || sessionStatus === 'WORKING';
-  const displayName =
-    sessionState?.session?.me?.pushName ||
-    sessionState?.session?.me?.id ||
-    config.waha_session_name ||
-    'WhatsApp';
+  const rawStatus = sessionState?.session?.status ?? (config ? 'STARTING' : 'NOT_CONFIGURED');
+  const isWorking = sessionState?.connected || rawStatus === 'WORKING';
+  const isScanning = rawStatus === 'SCAN_QR_CODE' || (!isWorking && config !== null);
+
+  const connectedNumber = formatPhoneDisplay(sessionState?.session?.me?.id);
+  const pushName = sessionState?.session?.me?.pushName;
 
   const loadStatus = useCallback(async () => {
-    setLoadingStatus(true);
     try {
-      const res = await fetch('/api/whatsapp/waha/session', { cache: 'no-store' });
-      const data = (await res.json().catch(() => ({}))) as WahaSessionState;
-      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-      setSessionState(data);
-      if (data.connected || data.session?.status === 'WORKING') {
-        setQrError(null);
+      const [sessRes, syncRes] = await Promise.all([
+        fetch('/api/whatsapp/waha/session', { cache: 'no-store' }),
+        fetch('/api/whatsapp/waha/sync', { cache: 'no-store' }),
+      ]);
+
+      if (sessRes.ok) {
+        const sessData = (await sessRes.json()) as WahaSessionState;
+        setSessionState(sessData);
+        if (sessData.connected || sessData.session?.status === 'WORKING') {
+          setQrError(null);
+        }
+      }
+
+      if (syncRes.ok) {
+        const syncData = await syncRes.json();
+        setSyncState(syncData.sync_state || null);
       }
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Erro ao consultar sessão WAHA';
-      setSessionState({ provider: 'waha', connected: false, error: message });
+      console.error('[waha-panel] status fetch failed:', err);
     } finally {
       setLoadingStatus(false);
     }
@@ -939,25 +870,32 @@ function WahaConnectionPanel({
 
   useEffect(() => {
     void loadStatus();
-    const timer = window.setInterval(() => {
+    const interval = window.setInterval(() => {
       void loadStatus();
-    }, 5000);
-    return () => window.clearInterval(timer);
+    }, 4000);
+    return () => window.clearInterval(interval);
   }, [loadStatus]);
 
-  async function handleStartSession() {
+  async function handleStartOrEnsure() {
     setStarting(true);
     setQrError(null);
     try {
+      if (!config) {
+        await onSave();
+      }
       const res = await fetch('/api/whatsapp/waha/session', { method: 'POST' });
-      const data = (await res.json().catch(() => ({}))) as WahaSessionState;
+      const data = (await res.json()) as WahaSessionState;
       if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
       setSessionState(data);
       setQrVersion((v) => v + 1);
-      toast.success(data.connected ? 'WhatsApp conectado.' : 'Sessão iniciada. Escaneie o QR Code abaixo.');
+      toast.success(
+        data.connected
+          ? 'WhatsApp conectado.'
+          : 'Sessão iniciada. Escaneie o QR Code abaixo com o celular.'
+      );
       await onReload();
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Não foi possível iniciar a sessão WAHA';
+      const message = err instanceof Error ? err.message : 'Falha ao iniciar sessão';
       toast.error(message);
     } finally {
       setStarting(false);
@@ -965,195 +903,469 @@ function WahaConnectionPanel({
     }
   }
 
-  function refreshQr() {
-    setQrError(null);
-    setQrVersion((v) => v + 1);
-    void loadStatus();
+  async function handleRestartConnection() {
+    setReconnecting(true);
+    try {
+      const res = await fetch('/api/whatsapp/waha/session', { method: 'PUT' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      toast.success('Conexão reiniciada com sucesso.');
+      await onReload();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Falha ao reiniciar conexão');
+    } finally {
+      setReconnecting(false);
+      void loadStatus();
+    }
+  }
+
+  async function handleLogoutDevice() {
+    if (!confirm(t('wahaDisconnectConfirm'))) return;
+
+    setLoggingOut(true);
+    try {
+      const res = await fetch('/api/whatsapp/waha/session', { method: 'DELETE' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      toast.success('Aparelho desconectado. A sessão foi desvinculada.');
+      setSessionState(null);
+      setQrVersion((v) => v + 1);
+      await onReload();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Falha ao desconectar');
+    } finally {
+      setLoggingOut(false);
+      void loadStatus();
+    }
+  }
+
+  async function handleManualSync() {
+    setSyncingNow(true);
+    try {
+      const res = await fetch('/api/whatsapp/waha/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ initialSyncWindowHours: initialSyncHours }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+
+      if (data.success && data.stats) {
+        toast.success(
+          `Sincronização concluída: ${data.stats.messagesInserted} nova(s) mensagem(ns), ${data.stats.duplicatesIgnored} existente(s).`
+        );
+      } else {
+        toast.info(data.reason || 'Sincronização executada.');
+      }
+      void loadStatus();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Falha na sincronização');
+    } finally {
+      setSyncingNow(false);
+    }
   }
 
   return (
-    <section className="animate-in fade-in-50 duration-200">
-      <SettingsPanelHead
-        title="Conexão WhatsApp"
-        description="Conecte o WhatsApp do cliente pelo QR Code e acompanhe o status da sessão WAHA."
-      />
-
-      <div className="grid gap-6 lg:grid-cols-[1fr_380px]">
-        <div className="space-y-6">
-          <Alert
-            className={
-              connected
-                ? 'border-emerald-700/50 bg-emerald-950/30'
-                : 'border-amber-700/50 bg-amber-950/30'
-            }
-          >
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div className="flex gap-3">
+    <div className="grid gap-6 lg:grid-cols-[1fr_380px]">
+      <div className="space-y-6">
+        {/* Main Status Header Card */}
+        <Card
+          className={`border transition-all ${
+            isWorking
+              ? 'border-emerald-700/40 bg-emerald-950/10'
+              : isScanning
+                ? 'border-primary/40 bg-primary/5'
+                : 'border-border bg-card'
+          }`}
+        >
+          <CardHeader className="pb-3">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
                 <div
-                  className={
-                    'mt-0.5 flex size-10 items-center justify-center rounded-xl ' +
-                    (connected ? 'bg-emerald-500/15 text-emerald-300' : 'bg-amber-500/15 text-amber-300')
-                  }
+                  className={`flex size-10 items-center justify-center rounded-xl ${
+                    isWorking
+                      ? 'bg-emerald-500/15 text-emerald-400'
+                      : isScanning
+                        ? 'bg-primary/15 text-primary'
+                        : 'bg-muted text-muted-foreground'
+                  }`}
                 >
-                  {connected ? <CheckCircle2 className="size-5" /> : <QrCode className="size-5" />}
+                  {isWorking ? (
+                    <CheckCircle2 className="size-5" />
+                  ) : isScanning ? (
+                    <QrCode className="size-5 animate-pulse" />
+                  ) : (
+                    <Smartphone className="size-5" />
+                  )}
                 </div>
                 <div>
-                  <AlertTitle className={connected ? 'text-emerald-100' : 'text-amber-100'}>
-                    {connected ? 'WhatsApp conectado' : 'Escaneie o QR Code para conectar'}
-                  </AlertTitle>
-                  <AlertDescription className="mt-1 text-sm text-muted-foreground">
-                    {connected
-                      ? `${displayName} está online e pronto para receber/enviar mensagens.`
-                      : 'Abra o WhatsApp no celular do cliente e escaneie o QR Code exibido abaixo.'}
-                  </AlertDescription>
+                  <CardTitle className="text-base text-foreground">
+                    {isWorking
+                      ? t('wahaConnected')
+                      : isScanning
+                        ? t('wahaWaitingQr')
+                        : t('wahaDisconnected')}
+                  </CardTitle>
+                  <CardDescription className="text-xs">
+                    {isWorking
+                      ? t('wahaConnectedDesc')
+                      : isScanning
+                        ? t('wahaWaitingQrDesc')
+                        : t('wahaDisconnectedDesc')}
+                  </CardDescription>
                 </div>
               </div>
 
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={loadStatus}
-                disabled={loadingStatus}
-                className="border-border bg-transparent"
-              >
-                {loadingStatus ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
-                Atualizar
-              </Button>
+              <div className="flex items-center gap-2">
+                <Badge
+                  variant={isWorking ? 'default' : 'secondary'}
+                  className={
+                    isWorking
+                      ? 'bg-emerald-600/20 text-emerald-300 border-emerald-600/30'
+                      : isScanning
+                        ? 'bg-primary/20 text-primary border-primary/30'
+                        : 'bg-muted text-muted-foreground border-border'
+                  }
+                >
+                  <span
+                    className={`mr-1.5 size-1.5 rounded-full ${
+                      isWorking ? 'bg-emerald-400' : isScanning ? 'bg-primary animate-ping' : 'bg-muted-foreground'
+                    }`}
+                  />
+                  {rawStatus}
+                </Badge>
+              </div>
             </div>
-          </Alert>
+          </CardHeader>
 
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2 text-foreground">
-                <QrCode className="size-5 text-primary" />
-                QR Code de conexão
-              </CardTitle>
-              <CardDescription>
-                Este é o jeito mais simples para conectar o WhatsApp do cliente nesta instalação.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-5">
-              {connected ? (
-                <div className="rounded-2xl border border-emerald-700/40 bg-emerald-950/20 p-6 text-center">
-                  <CheckCircle2 className="mx-auto size-12 text-emerald-300" />
-                  <h3 className="mt-3 text-base font-semibold text-foreground">Sessão conectada</h3>
-                  <p className="mt-1 text-sm text-muted-foreground">
-                    Não precisa escanear QR Code enquanto a sessão estiver conectada.
-                  </p>
+          <CardContent className="space-y-4 pt-2">
+            {/* Connected State Card View */}
+            {isWorking ? (
+              <div className="space-y-4">
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="rounded-lg border border-border/70 bg-background/50 p-3">
+                    <p className="text-xs text-muted-foreground">{t('wahaConnectedNumber')}</p>
+                    <p className="mt-0.5 text-sm font-semibold text-foreground">
+                      {connectedNumber || 'Número não informado'}
+                    </p>
+                    {pushName && <p className="text-xs text-muted-foreground/80 mt-0.5">{pushName}</p>}
+                  </div>
+
+                  <div className="rounded-lg border border-border/70 bg-background/50 p-3">
+                    <p className="text-xs text-muted-foreground">{t('wahaLastSync')}</p>
+                    <p className="mt-0.5 text-sm font-semibold text-foreground">
+                      {syncState?.last_sync_completed_at
+                        ? new Date(syncState.last_sync_completed_at).toLocaleTimeString()
+                        : 'Recente'}
+                    </p>
+                    <div className="mt-0.5 flex items-center gap-1.5 text-xs text-emerald-400">
+                      <ShieldCheck className="size-3.5" />
+                      <span>{t('wahaSyncHealthy')}</span>
+                    </div>
+                  </div>
                 </div>
-              ) : (
-                <div className="grid gap-5 md:grid-cols-[280px_1fr]">
-                  <div className="flex min-h-[280px] items-center justify-center rounded-2xl border border-dashed border-border bg-muted/40 p-4">
-                    {qrError ? (
-                      <div className="text-center">
-                        <AlertTriangle className="mx-auto size-10 text-amber-400" />
-                        <p className="mt-2 text-sm font-medium text-foreground">QR indisponível</p>
-                        <p className="mt-1 text-xs text-muted-foreground">{qrError}</p>
-                      </div>
-                    ) : (
-                      // eslint-disable-next-line @next/next/no-img-element
+
+                <div className="flex flex-wrap gap-2.5 pt-2">
+                  <Button onClick={handleManualSync} disabled={syncingNow} size="sm">
+                    {syncingNow ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
+                    {t('wahaSyncNow')}
+                  </Button>
+
+                  <Button
+                    variant="outline"
+                    onClick={handleRestartConnection}
+                    disabled={reconnecting}
+                    size="sm"
+                    className="border-border"
+                  >
+                    {reconnecting ? <Loader2 className="size-4 animate-spin" /> : <RotateCcw className="size-4" />}
+                    {t('wahaRestartSession')}
+                  </Button>
+
+                  <Button
+                    variant="outline"
+                    onClick={handleLogoutDevice}
+                    disabled={loggingOut}
+                    size="sm"
+                    className="border-red-900/60 text-red-400 hover:bg-red-950/40 hover:text-red-300 ml-auto"
+                  >
+                    {loggingOut ? <Loader2 className="size-4 animate-spin" /> : <XCircle className="size-4" />}
+                    {t('wahaDisconnect')}
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              /* QR Code Scan Flow */
+              <div className="grid gap-5 md:grid-cols-[280px_1fr] pt-2">
+                <div className="flex min-h-[280px] items-center justify-center rounded-2xl border border-dashed border-border bg-muted/40 p-4 relative">
+                  {qrError ? (
+                    <div className="text-center p-4">
+                      <AlertTriangle className="mx-auto size-10 text-amber-400" />
+                      <p className="mt-2 text-sm font-medium text-foreground">{t('wahaQrExpired')}</p>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => {
+                          setQrError(null);
+                          setQrVersion((v) => v + 1);
+                          void loadStatus();
+                        }}
+                        className="mt-3"
+                      >
+                        <RefreshCw className="size-3.5 mr-1" />
+                        {t('wahaQrRefresh')}
+                      </Button>
+                    </div>
+                  ) : (
+                    <div className="text-center">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
                       <img
                         key={qrVersion}
                         src={`/api/whatsapp/waha/qr?v=${qrVersion}`}
                         alt="QR Code para conectar WhatsApp"
-                        className="h-64 w-64 rounded-xl bg-white object-contain p-3 shadow-sm"
-                        onError={() => setQrError('Clique em “Iniciar ou renovar QR” e aguarde alguns segundos.')}
+                        className="h-60 w-60 rounded-xl bg-white object-contain p-2 shadow-sm border"
+                        onError={() =>
+                          setQrError('Sessão iniciando ou QR Code indisponível. Clique para recarregar.')
+                        }
                       />
-                    )}
+                      <p className="mt-2 text-[11px] text-muted-foreground flex items-center justify-center gap-1">
+                        <Radio className="size-3 text-emerald-400 animate-pulse" />
+                        Atualização em tempo real
+                      </p>
+                    </div>
+                  )}
+                </div>
+
+                <div className="space-y-4">
+                  <div className="rounded-xl border border-border bg-card p-4">
+                    <h4 className="text-sm font-semibold text-foreground">Passo a passo</h4>
+                    <ol className="mt-3 space-y-2 text-xs text-muted-foreground leading-relaxed">
+                      <li className="flex gap-2">
+                        <span className="font-semibold text-primary">1.</span> Abra o WhatsApp no celular comercial da sua empresa.
+                      </li>
+                      <li className="flex gap-2">
+                        <span className="font-semibold text-primary">2.</span> Vá em <strong>Configurações &gt; Aparelhos conectados</strong>.
+                      </li>
+                      <li className="flex gap-2">
+                        <span className="font-semibold text-primary">3.</span> Toque em <strong>Conectar aparelho</strong>.
+                      </li>
+                      <li className="flex gap-2">
+                        <span className="font-semibold text-primary">4.</span> Aponte a câmera para o QR Code ao lado.
+                      </li>
+                    </ol>
                   </div>
 
-                  <div className="space-y-4">
-                    <div className="rounded-xl border border-border bg-card p-4">
-                      <h3 className="font-semibold text-foreground">Como conectar</h3>
-                      <ol className="mt-3 space-y-2 text-sm text-muted-foreground">
-                        <li className="flex gap-2"><span className="font-semibold text-primary">1.</span> Abra o WhatsApp no celular do cliente.</li>
-                        <li className="flex gap-2"><span className="font-semibold text-primary">2.</span> Toque em Aparelhos conectados.</li>
-                        <li className="flex gap-2"><span className="font-semibold text-primary">3.</span> Toque em Conectar aparelho.</li>
-                        <li className="flex gap-2"><span className="font-semibold text-primary">4.</span> Aponte a câmera para este QR Code.</li>
-                      </ol>
+                  <div className="flex flex-wrap gap-2">
+                    <Button onClick={handleStartOrEnsure} disabled={starting}>
+                      {starting ? <Loader2 className="size-4 animate-spin" /> : <Smartphone className="size-4" />}
+                      {t('wahaStartSession')}
+                    </Button>
+                    <Button
+                      variant="outline"
+                      onClick={() => {
+                        setQrError(null);
+                        setQrVersion((v) => v + 1);
+                        void loadStatus();
+                      }}
+                    >
+                      <RefreshCw className="size-4" />
+                      {t('wahaQrRefresh')}
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Initial Sync Policy Window Selector */}
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-sm text-foreground flex items-center gap-2">
+              <Clock className="size-4 text-primary" />
+              {t('wahaInitialSyncTitle')}
+            </CardTitle>
+            <CardDescription className="text-xs">{t('wahaInitialSyncDesc')}</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="grid gap-2 sm:grid-cols-2">
+              {[
+                { hours: 0, label: t('wahaSyncNowOnly'), desc: 'Mais rápido e seguro para o piloto' },
+                { hours: 24, label: t('wahaSync24h'), desc: 'Recupera mensagens do último dia' },
+                { hours: 168, label: t('wahaSync7d'), desc: 'Histórico da última semana' },
+                { hours: 720, label: t('wahaSync30d'), desc: 'Histórico dos últimos 30 dias' },
+              ].map((opt) => (
+                <div
+                  key={opt.hours}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => setInitialSyncHours(opt.hours)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') setInitialSyncHours(opt.hours);
+                  }}
+                  className={`cursor-pointer rounded-lg border p-3 transition-all ${
+                    initialSyncHours === opt.hours
+                      ? 'border-primary bg-primary/5 ring-1 ring-primary'
+                      : 'border-border bg-background hover:bg-muted/40'
+                  }`}
+                >
+                  <p className="text-xs font-semibold text-foreground">{opt.label}</p>
+                  <p className="text-[11px] text-muted-foreground mt-0.5">{opt.desc}</p>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Advanced WAHA Configuration Accordion */}
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm text-foreground flex items-center gap-2">
+              <Server className="size-4 text-primary" />
+              {t('wahaAdvancedTitle')}
+            </CardTitle>
+            <CardDescription className="text-xs">{t('wahaAdvancedDesc')}</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Accordion className="w-full">
+              <AccordionItem value="waha-adv" className="border-border">
+                <AccordionTrigger className="text-xs text-muted-foreground hover:text-foreground">
+                  Configurações de rede e credenciais locais
+                </AccordionTrigger>
+                <AccordionContent className="space-y-4 pt-2">
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <div className="space-y-1.5">
+                      <Label className="text-xs text-muted-foreground">{t('wahaBaseUrl')}</Label>
+                      <Input
+                        value={baseUrl}
+                        onChange={(e) => setBaseUrl(e.target.value)}
+                        placeholder="http://localhost:3001"
+                        className="bg-muted border-border text-foreground text-xs"
+                      />
                     </div>
 
-                    <div className="flex flex-wrap gap-2">
-                      <Button onClick={handleStartSession} disabled={starting}>
-                        {starting ? <Loader2 className="size-4 animate-spin" /> : <Smartphone className="size-4" />}
-                        Iniciar ou renovar QR
-                      </Button>
-                      <Button variant="outline" onClick={refreshQr}>
-                        <RefreshCw className="size-4" />
-                        Recarregar QR
+                    <div className="space-y-1.5">
+                      <Label className="text-xs text-muted-foreground">{t('wahaSessionName')}</Label>
+                      <Input
+                        value={sessionName}
+                        onChange={(e) => setSessionName(e.target.value)}
+                        placeholder="wacrm"
+                        className="bg-muted border-border text-foreground text-xs"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <Label className="text-xs text-muted-foreground">{t('wahaApiKey')}</Label>
+                    <Input
+                      type="password"
+                      value={apiKey}
+                      onChange={(e) => setApiKey(e.target.value)}
+                      placeholder="wacrm-local-dev-key"
+                      className="bg-muted border-border text-foreground text-xs font-mono"
+                    />
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <Label className="text-xs text-muted-foreground">{t('wahaWebhookUrl')}</Label>
+                    <div className="flex gap-2">
+                      <Input
+                        readOnly
+                        value={wahaWebhookUrl}
+                        className="bg-muted border-border text-foreground font-mono text-xs"
+                      />
+                      <Button
+                        variant="outline"
+                        size="icon"
+                        onClick={() => {
+                          navigator.clipboard.writeText(wahaWebhookUrl);
+                          toast.success('Webhook URL copiada!');
+                        }}
+                        className="border-border hover:bg-muted shrink-0"
+                      >
+                        <Copy className="size-4" />
                       </Button>
                     </div>
                   </div>
-                </div>
-              )}
-            </CardContent>
-          </Card>
 
-          <div className="flex flex-wrap gap-3">
-            <Button variant="outline" onClick={handleStartSession} disabled={starting}>
-              {starting ? <Loader2 className="size-4 animate-spin" /> : <Smartphone className="size-4" />}
-              {connected ? 'Reiniciar sessão' : 'Iniciar sessão'}
-            </Button>
-            <Button
-              variant="outline"
-              onClick={onReset}
-              disabled={resetting}
-              className="border-red-900 text-red-400 hover:bg-red-950/40 hover:text-red-300"
-            >
-              {resetting ? <Loader2 className="size-4 animate-spin" /> : <RotateCcw className="size-4" />}
-              Resetar configuração
-            </Button>
-          </div>
-        </div>
-
-        <div className="space-y-4">
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base text-foreground">Detalhes da sessão</CardTitle>
-              <CardDescription>Dados técnicos para conferência rápida.</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-3 text-sm">
-              <div className="flex justify-between gap-3">
-                <span className="text-muted-foreground">Provider</span>
-                <span className="font-medium text-foreground">WAHA</span>
-              </div>
-              <div className="flex justify-between gap-3">
-                <span className="text-muted-foreground">Sessão</span>
-                <code className="rounded bg-muted px-1.5 py-0.5 text-xs text-foreground">{config.waha_session_name}</code>
-              </div>
-              <div className="flex justify-between gap-3">
-                <span className="text-muted-foreground">Status</span>
-                <span className={connected ? 'font-medium text-emerald-400' : 'font-medium text-amber-400'}>
-                  {loadingStatus ? 'consultando...' : sessionStatus}
-                </span>
-              </div>
-              <div className="flex justify-between gap-3">
-                <span className="text-muted-foreground">WhatsApp</span>
-                <span className="text-right font-medium text-foreground">{displayName}</span>
-              </div>
-              {sessionState?.error && (
-                <div className="rounded-lg border border-red-900/60 bg-red-950/30 p-3 text-xs text-red-200">
-                  {sessionState.error}
-                </div>
-              )}
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base text-foreground">Checklist rápido</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <ul className="space-y-2 text-sm text-muted-foreground">
-                <li className="flex gap-2"><CheckCircle2 className="mt-0.5 size-4 text-primary" /> WAHA configurado nesta conta.</li>
-                <li className="flex gap-2"><CheckCircle2 className="mt-0.5 size-4 text-primary" /> Webhook configurado para receber mensagens.</li>
-                <li className="flex gap-2"><CheckCircle2 className="mt-0.5 size-4 text-primary" /> Depois de conectar, teste enviando uma mensagem para o número do cliente.</li>
-              </ul>
-            </CardContent>
-          </Card>
-        </div>
+                  <div className="pt-2 flex flex-wrap gap-2">
+                    <Button onClick={onSave} disabled={saving} size="sm">
+                      {saving ? <Loader2 className="size-3.5 animate-spin mr-1" /> : null}
+                      Salvar parâmetros
+                    </Button>
+                    <Button
+                      variant="outline"
+                      onClick={onReset}
+                      disabled={resetting}
+                      size="sm"
+                      className="border-red-900/60 text-red-400 hover:bg-red-950/40"
+                    >
+                      {resetting ? <Loader2 className="size-3.5 animate-spin mr-1" /> : null}
+                      Resetar
+                    </Button>
+                  </div>
+                </AccordionContent>
+              </AccordionItem>
+            </Accordion>
+          </CardContent>
+        </Card>
       </div>
-    </section>
+
+      {/* Right Sidebar: Quick Checklist & Architecture info */}
+      <div className="space-y-4">
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-sm text-foreground">Piloto WhatsApp</CardTitle>
+            <CardDescription className="text-xs">Informações de operação do WAHA.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3 text-xs text-muted-foreground">
+            <div className="flex items-start gap-2">
+              <CheckCircle2 className="size-4 text-primary shrink-0 mt-0.5" />
+              <span>
+                <strong>Sessão Persistente:</strong> Reiniciar o Ciclopes ou o Docker não perde a conexão vinculada.
+              </span>
+            </div>
+            <div className="flex items-start gap-2">
+              <CheckCircle2 className="size-4 text-primary shrink-0 mt-0.5" />
+              <span>
+                <strong>Zero IA Automática:</strong> Mensagens de entrada não disparam LLM (modo On-Demand padrão).
+              </span>
+            </div>
+            <div className="flex items-start gap-2">
+              <CheckCircle2 className="size-4 text-primary shrink-0 mt-0.5" />
+              <span>
+                <strong>Idempotência:</strong> Reconciliação e webhooks repetidos nunca duplicam conversas ou mensagens.
+              </span>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-sm text-foreground">Status do Serviço</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2.5 text-xs">
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Motor:</span>
+              <span className="font-medium text-foreground">WAHA Core (WEBJS)</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Porta Local:</span>
+              <span className="font-mono text-foreground">3001</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Sessão:</span>
+              <span className="font-mono text-foreground">{sessionName}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Status da Sessão:</span>
+              <span className={isWorking ? 'text-emerald-400 font-semibold' : 'text-amber-400 font-semibold'}>
+                {loadingStatus ? 'Verificando...' : rawStatus}
+              </span>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+    </div>
   );
 }
-

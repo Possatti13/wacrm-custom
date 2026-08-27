@@ -1,6 +1,6 @@
 export interface WahaSessionInfo {
   name: string;
-  status: string;
+  status: 'STOPPED' | 'STARTING' | 'SCAN_QR_CODE' | 'WORKING' | 'FAILED' | string;
   me?: { id?: string; pushName?: string } | null;
 }
 
@@ -11,6 +11,35 @@ export interface WahaConfig {
 }
 
 export type WahaMediaKind = 'image' | 'document';
+
+export interface WahaRawChat {
+  id: string;
+  name?: string;
+  timestamp?: number;
+  unreadCount?: number;
+}
+
+export interface WahaRawMessage {
+  id: string;
+  timestamp: number;
+  from: string;
+  fromMe: boolean;
+  to?: string;
+  body?: string;
+  text?: string;
+  caption?: string;
+  hasMedia?: boolean;
+  media?: { url?: string; mimetype?: string; filename?: string };
+  mediaUrl?: string;
+  type?: string;
+  _data?: {
+    id?: { id?: string; _serialized?: string; remote?: string; fromMe?: boolean };
+    notifyName?: string;
+    t?: number;
+    body?: string;
+    type?: string;
+  };
+}
 
 function cleanBaseUrl(baseUrl: string): string {
   return baseUrl.replace(/\/+$/, '');
@@ -51,7 +80,7 @@ export async function getWahaSession(
   );
 }
 
-export async function ensureWahaSession(config: WahaConfig) {
+export async function ensureWahaSession(config: WahaConfig): Promise<WahaSessionInfo> {
   try {
     return await getWahaSession(config);
   } catch {
@@ -62,10 +91,26 @@ export async function ensureWahaSession(config: WahaConfig) {
   }
 }
 
-export async function startWahaSession(config: WahaConfig) {
+export async function startWahaSession(config: WahaConfig): Promise<WahaSessionInfo> {
   return wahaFetch<WahaSessionInfo>(
     config,
     `/api/sessions/${encodeURIComponent(config.session)}/start`,
+    { method: 'POST' }
+  );
+}
+
+export async function stopWahaSession(config: WahaConfig): Promise<void> {
+  await wahaFetch<unknown>(
+    config,
+    `/api/sessions/${encodeURIComponent(config.session)}/stop`,
+    { method: 'POST' }
+  );
+}
+
+export async function logoutWahaSession(config: WahaConfig): Promise<void> {
+  await wahaFetch<unknown>(
+    config,
+    `/api/sessions/${encodeURIComponent(config.session)}/logout`,
     { method: 'POST' }
   );
 }
@@ -154,9 +199,6 @@ export async function configureWahaWebhook(
   hmacKey?: string
 ): Promise<void> {
   const key = hmacKey || config.apiKey || process.env.WAHA_WEBHOOK_SECRET || process.env.WAHA_API_KEY;
-  // WAHA accepts session config updates with a webhooks array on recent
-  // versions. When hmac key is provided, WAHA will sign every outbound event
-  // with X-Webhook-Hmac.
   await wahaFetch(config, `/api/sessions/${encodeURIComponent(config.session)}`, {
     method: 'PUT',
     body: JSON.stringify({
@@ -172,4 +214,63 @@ export async function configureWahaWebhook(
       },
     }),
   });
+}
+
+/**
+ * Lists all active chats from the WAHA engine for the session.
+ */
+export async function getWahaChats(
+  config: WahaConfig,
+  options: { limit?: number; offset?: number } = {}
+): Promise<WahaRawChat[]> {
+  const params = new URLSearchParams();
+  if (options.limit) params.set('limit', String(options.limit));
+  if (options.offset) params.set('offset', String(options.offset));
+
+  const queryStr = params.toString() ? `?${params.toString()}` : '';
+  const result = await wahaFetch<WahaRawChat[]>(
+    config,
+    `/api/${encodeURIComponent(config.session)}/chats${queryStr}`
+  );
+  return Array.isArray(result) ? result : [];
+}
+
+/**
+ * Retrieves messages for a specific chat with optional pagination limit.
+ */
+export async function getWahaChatMessages(
+  config: WahaConfig,
+  chatId: string,
+  options: { limit?: number; downloadMedia?: boolean } = {}
+): Promise<WahaRawMessage[]> {
+  const params = new URLSearchParams();
+  params.set('limit', String(options.limit ?? 50));
+  params.set('downloadMedia', String(options.downloadMedia ?? false));
+
+  const encodedChat = encodeURIComponent(chatId);
+  const result = await wahaFetch<WahaRawMessage[]>(
+    config,
+    `/api/${encodeURIComponent(config.session)}/chats/${encodedChat}/messages?${params.toString()}`
+  );
+  return Array.isArray(result) ? result : [];
+}
+
+/**
+ * Global health probe to test if the WAHA base URL is reachable and API key is valid.
+ */
+export async function testWahaHealth(
+  config: Pick<WahaConfig, 'baseUrl' | 'apiKey'>
+): Promise<{ ok: boolean; version?: string; error?: string }> {
+  try {
+    const res = await wahaFetch<{ version?: string }>(config, '/api/version');
+    return { ok: true, version: typeof res === 'object' ? res.version : undefined };
+  } catch {
+    try {
+      // Fallback to /api/sessions
+      await wahaFetch<unknown>(config, '/api/sessions');
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : 'WAHA unreachable' };
+    }
+  }
 }
