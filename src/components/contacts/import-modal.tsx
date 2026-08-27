@@ -398,17 +398,35 @@ export function ImportModal({
             <DialogTitle className="text-lg text-popover-foreground">
               {t('title')}
             </DialogTitle>
-            <DialogDescription className="leading-relaxed text-muted-foreground"
-              dangerouslySetInnerHTML={{
-                __html: t.markup('desc', {
-                  phoneCode: (chunks) => `<code class="rounded bg-muted px-1 py-0.5 text-[11px] text-muted-foreground">${chunks}</code>`,
-                  nameCode: (chunks) => `<code class="rounded bg-muted px-1 py-0.5 text-[11px] text-muted-foreground">${chunks}</code>`,
-                  emailCode: (chunks) => `<code class="rounded bg-muted px-1 py-0.5 text-[11px] text-muted-foreground">${chunks}</code>`,
-                  companyCode: (chunks) => `<code class="rounded bg-muted px-1 py-0.5 text-[11px] text-muted-foreground">${chunks}</code>`,
-                  tagsCode: (chunks) => `<code class="rounded bg-muted px-1 py-0.5 text-[11px] text-muted-foreground">${chunks}</code>`,
-                })
-              }}
-            />
+            <DialogDescription className="leading-relaxed text-muted-foreground">
+              {t.rich('desc', {
+                phoneCode: (chunks) => (
+                  <code className="rounded bg-muted px-1 py-0.5 text-[11px] text-muted-foreground">
+                    {chunks}
+                  </code>
+                ),
+                nameCode: (chunks) => (
+                  <code className="rounded bg-muted px-1 py-0.5 text-[11px] text-muted-foreground">
+                    {chunks}
+                  </code>
+                ),
+                emailCode: (chunks) => (
+                  <code className="rounded bg-muted px-1 py-0.5 text-[11px] text-muted-foreground">
+                    {chunks}
+                  </code>
+                ),
+                companyCode: (chunks) => (
+                  <code className="rounded bg-muted px-1 py-0.5 text-[11px] text-muted-foreground">
+                    {chunks}
+                  </code>
+                ),
+                tagsCode: (chunks) => (
+                  <code className="rounded bg-muted px-1 py-0.5 text-[11px] text-muted-foreground">
+                    {chunks}
+                  </code>
+                ),
+              })}
+            </DialogDescription>
           </DialogHeader>
 
           <div

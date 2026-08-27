@@ -167,4 +167,34 @@ describe('i18n Consistency & Completeness Guard (Phase 17B.0)', () => {
       `Found useTranslations referencing non-existent namespaces: ${JSON.stringify(missingNamespaces, null, 2)}`
     ).toEqual([]);
   });
+
+  it('forbids HTML/JSX attributes (class, className, style, etc.) inside translation strings (Phase 17B.0.1)', () => {
+    function scanInvalidTags(obj: Record<string, unknown>, locale: string, prefix = ''): Array<{ key: string; tag: string; locale: string }> {
+      const invalid: Array<{ key: string; tag: string; locale: string }> = [];
+      for (const [k, v] of Object.entries(obj)) {
+        const fullKey = prefix ? `${prefix}.${k}` : k;
+        if (v && typeof v === 'object' && !Array.isArray(v)) {
+          invalid.push(...scanInvalidTags(v as Record<string, unknown>, locale, fullKey));
+        } else if (typeof v === 'string' && v.includes('<')) {
+          const tags = v.match(/<[^>]+>/g) || [];
+          for (const tag of tags) {
+            // Check if tag contains attributes (e.g. <strong class="foo">, <code className="bar">, <span style="baz">)
+            if (/<[a-zA-Z0-9_-]+\s+[^>]+>/.test(tag)) {
+              invalid.push({ key: fullKey, tag, locale });
+            }
+          }
+        }
+      }
+      return invalid;
+    }
+
+    const invalidPt = scanInvalidTags(pt, 'pt-BR');
+    const invalidEn = scanInvalidTags(en, 'en');
+    const allInvalid = [...invalidPt, ...invalidEn];
+
+    expect(
+      allInvalid,
+      `Found translation keys with illegal attributes in rich-text tags (must use semantic tags without attributes for next-intl): ${JSON.stringify(allInvalid, null, 2)}`
+    ).toEqual([]);
+  });
 });
