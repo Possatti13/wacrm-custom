@@ -1,4 +1,10 @@
 {
+  "roles": {
+    "owner": "Owner",
+    "admin": "Admin",
+    "agent": "Agent",
+    "viewer": "Viewer"
+  },
   "LoginPage": {
     "titleAccept": "Sign in to accept",
     "titleWelcome": "Welcome back",
@@ -64,7 +70,8 @@
     "defaultAvatar": "Avatar",
     "menuProfile": "Profile",
     "menuSettings": "Settings",
-    "menuSignOut": "Sign out"
+    "menuSignOut": "Sign out",
+    "aiAgents": "AI Assistant"
   },
   "ModeToggle": {
     "switchMode": "Switch to {mode} mode"
@@ -365,6 +372,7 @@
         "details": "Details",
         "activity": "Activity",
         "notes": "Notes",
+        "tags": "Tags",
         "custom": "Custom Fields",
         "deals": "Deals",
       "noTags": "No tags",
@@ -892,6 +900,7 @@
       "activeAria": "Active",
       "save": "Save",
       "saveDraft": "Save Draft",
+      "delete": "Delete",
       "untitled": "Untitled automation",
       "backToAutomations": "Back to automations",
       "toasts": {
@@ -1508,7 +1517,9 @@
       "security": "Login & security",
       "appearance": "Appearance",
       "whatsapp": "WhatsApp",
+      "intelligence": "Commercial Intelligence",
       "templates": "Templates",
+      "quick-replies": "Quick replies",
       "fields": "Fields & tags",
       "deals": "Deals & currency",
       "members": "Team members",

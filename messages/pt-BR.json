@@ -1,4 +1,10 @@
 {
+  "roles": {
+    "owner": "Proprietário",
+    "admin": "Admin",
+    "agent": "Atendente",
+    "viewer": "Visualizador"
+  },
   "LoginPage": {
     "titleAccept": "Faça login para aceitar",
     "titleWelcome": "Bem-vindo de volta",
@@ -366,6 +372,7 @@
         "details": "Detalhes",
         "activity": "Atividade",
         "notes": "Notas",
+        "tags": "Tags",
         "custom": "Campos personalizados",
         "deals": "Deals",
         "noTags": "Sem tags",
@@ -893,6 +900,7 @@
       "activeAria": "Ativo",
       "save": "Salvar",
       "saveDraft": "Salvar rascunho",
+      "delete": "Excluir",
       "untitled": "Automação sem título",
       "backToAutomations": "Voltar para automações",
       "toasts": {
@@ -1499,7 +1507,9 @@
       "security": "Login e segurança",
       "appearance": "Aparência",
       "whatsapp": "WhatsApp",
+      "intelligence": "Inteligência Comercial",
       "templates": "Modelos",
+      "quick-replies": "Respostas rápidas",
       "fields": "Campos e tags",
       "deals": "Deals e moeda",
       "members": "Membros da equipe",
