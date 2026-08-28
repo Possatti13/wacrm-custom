@@ -71,10 +71,33 @@ export async function POST(request: Request) {
     }
 
     let initialSyncWindowHours: number | undefined
+    let mode: 'now' | '24h' | '7d' | '30d' | undefined
     try {
       const body = await request.json().catch(() => ({}))
       if (typeof body.initialSyncWindowHours === 'number') {
         initialSyncWindowHours = body.initialSyncWindowHours
+      }
+      if (['now', '24h', '7d', '30d'].includes(body.mode)) {
+        mode = body.mode
+      } else if (typeof initialSyncWindowHours === 'number') {
+        mode =
+          initialSyncWindowHours === 24
+            ? '24h'
+            : initialSyncWindowHours === 168
+              ? '7d'
+              : initialSyncWindowHours === 720
+                ? '30d'
+                : 'now'
+      }
+
+      if (mode) {
+        await supabase
+          .from('whatsapp_config')
+          .update({
+            history_import_mode: mode,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('account_id', accountId)
       }
     } catch {
       // Body optional
@@ -82,6 +105,7 @@ export async function POST(request: Request) {
 
     const result = await reconcileWahaMessages({
       accountId,
+      mode,
       initialSyncWindowHours,
     })
 

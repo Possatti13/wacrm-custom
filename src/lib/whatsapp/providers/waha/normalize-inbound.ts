@@ -128,6 +128,18 @@ export function normalizeWahaInbound(
 
     const isLid = rawContactId.endsWith('@lid')
     const lid = isLid ? rawContactId : undefined
+
+    // 1:1 message invariant: exclude groups, broadcasts, channels, and status updates
+    const lowerContact = rawContactId.toLowerCase()
+    if (
+      lowerContact.endsWith('@g.us') ||
+      lowerContact.endsWith('@broadcast') ||
+      lowerContact.endsWith('@newsletter') ||
+      lowerContact.includes('status@')
+    ) {
+      return null
+    }
+
     const phone = isLid ? '' : normalizePhone(rawContactId.replace(/@.+$/, ''))
 
     const rawToId = fromMe

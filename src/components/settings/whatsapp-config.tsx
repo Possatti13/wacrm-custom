@@ -149,6 +149,9 @@ export function WhatsAppConfig() {
           setWahaBaseUrl(data.waha_base_url || 'http://localhost:3001');
           setWahaSessionName(data.waha_session_name || 'wacrm');
           setWahaApiKey(MASKED_TOKEN);
+          const mode = (data.history_import_mode as string) || 'now';
+          const hours = mode === '24h' ? 24 : mode === '7d' ? 168 : mode === '30d' ? 720 : 0;
+          setWahaInitialSyncHours(hours);
         } else {
           setPhoneNumberId(data.phone_number_id || '');
           setWabaId(data.waba_id || '');
@@ -288,11 +291,21 @@ export function WhatsAppConfig() {
 
     try {
       setSaving(true);
+      const history_import_mode =
+        wahaInitialSyncHours === 24
+          ? '24h'
+          : wahaInitialSyncHours === 168
+            ? '7d'
+            : wahaInitialSyncHours === 720
+              ? '30d'
+              : 'now';
+
       const payload: Record<string, unknown> = {
         provider: 'waha',
         waha_base_url: wahaBaseUrl.trim(),
         waha_session_name: wahaSessionName.trim(),
         waha_api_key: wahaApiKey === MASKED_TOKEN ? undefined : wahaApiKey.trim(),
+        history_import_mode,
       };
 
       const res = await fetch('/api/whatsapp/config', {
@@ -946,10 +959,19 @@ function WahaExperiencePanel({
   async function handleManualSync() {
     setSyncingNow(true);
     try {
+      const mode =
+        initialSyncHours === 24
+          ? '24h'
+          : initialSyncHours === 168
+            ? '7d'
+            : initialSyncHours === 720
+              ? '30d'
+              : 'now';
+
       const res = await fetch('/api/whatsapp/waha/sync', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ initialSyncWindowHours: initialSyncHours }),
+        body: JSON.stringify({ initialSyncWindowHours: initialSyncHours, mode }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);

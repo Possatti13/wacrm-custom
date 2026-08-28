@@ -285,6 +285,8 @@ export interface MessageReaction {
   created_at: string;
 }
 
+export type WhatsAppHistoryImportMode = 'now' | '24h' | '7d' | '30d';
+
 export interface WhatsAppConfig {
   id: string;
   user_id: string;
@@ -297,6 +299,9 @@ export interface WhatsAppConfig {
   waha_session_name?: string | null;
   status: 'connected' | 'disconnected';
   connected_at?: string;
+  history_import_mode?: WhatsAppHistoryImportMode;
+  history_import_started_at?: string | null;
+  recovery_not_before?: string | null;
   /**
    * Set when POST /{phone_number_id}/register last succeeded. NULL
    * means the number was saved but never actually subscribed for

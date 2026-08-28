@@ -9,17 +9,26 @@ import {
 } from '../../waha-api'
 import { normalizeWahaInbound } from './normalize-inbound'
 import { processNormalizedInboundEvent } from '../../inbound/processor'
+import type { WhatsAppHistoryImportMode } from '@/types'
 
 export interface ReconcileOptions {
   accountId: string
   db?: SupabaseClient
   overlapMinutes?: number
   initialSyncWindowHours?: number
+  mode?: WhatsAppHistoryImportMode
   forcedChatId?: string
 }
 
 export interface ReconcileStats {
+  windowStart: string
+  windowEnd: string
+  historyMode: WhatsAppHistoryImportMode
   chatsScanned: number
+  chatsEligible: number
+  chatsSkippedGroup: number
+  chatsSkippedBroadcast: number
+  chatsSkippedBeforeBaseline: number
   chatsSucceeded: number
   chatsFailed: number
   messagesDiscovered: number
@@ -56,9 +65,33 @@ function getAdminClient() {
 const _autoRecoveryLocks = new Map<string, number>()
 
 /**
+ * Validates if a chatId is eligible for 1:1 CRM sync.
+ * Rejects groups (@g.us), broadcasts (@broadcast), newsletters/channels (@newsletter), and status updates.
+ */
+export function isEligibleWahaChat(chatId: string): boolean {
+  if (!chatId || typeof chatId !== 'string') return false
+  const lower = chatId.toLowerCase().trim()
+  if (lower === '[object object]') return false
+
+  // Reject groups
+  if (lower.endsWith('@g.us')) return false
+
+  // Reject broadcasts and status updates
+  if (lower.endsWith('@broadcast') || lower.includes('status@') || lower.includes('broadcast')) return false
+
+  // Reject channels / newsletters
+  if (lower.endsWith('@newsletter') || lower.includes('newsletter')) return false
+
+  // Accept 1:1 direct contacts: @c.us, @lid, or pure digits
+  if (lower.endsWith('@c.us') || lower.endsWith('@lid')) return true
+
+  return /^\d{7,16}$/.test(lower)
+}
+
+/**
  * Reconciles messages from WAHA for a given account.
- * Implements overlap protection window, pagination, idempotency,
- * and records telemetry into whatsapp_sync_state.
+ * Implements strict temporal boundaries, chat type filtering,
+ * overlap protection window, pagination, idempotency, and records telemetry.
  */
 export async function reconcileWahaMessages(
   options: ReconcileOptions
@@ -68,10 +101,12 @@ export async function reconcileWahaMessages(
   const accountId = options.accountId
   const overlapMinutes = options.overlapMinutes ?? 10
 
-  // 1. Fetch WAHA configuration for this account
+  // 1. Fetch WAHA configuration and history policy for this account
   const { data: configRow, error: configError } = await db
     .from('whatsapp_config')
-    .select('provider, access_token, waha_base_url, waha_session_name')
+    .select(
+      'provider, access_token, waha_base_url, waha_session_name, history_import_mode, history_import_started_at, recovery_not_before, connected_at, created_at'
+    )
     .eq('account_id', accountId)
     .maybeSingle()
 
@@ -127,7 +162,29 @@ export async function reconcileWahaMessages(
     }
   }
 
-  // 3. Load previous sync boundary from whatsapp_sync_state
+  // 3. Determine History Mode and Strict Temporal Window
+  const historyMode: WhatsAppHistoryImportMode =
+    options.mode ??
+    (options.initialSyncWindowHours === 24
+      ? '24h'
+      : options.initialSyncWindowHours === 168
+        ? '7d'
+        : options.initialSyncWindowHours === 720
+          ? '30d'
+          : (configRow.history_import_mode as WhatsAppHistoryImportMode) ?? 'now')
+
+  // Baseline timestamp / recovery floor: the exact moment the tenant/session connected or policy started
+  const rawBaseline =
+    configRow.recovery_not_before ||
+    configRow.history_import_started_at ||
+    configRow.connected_at ||
+    configRow.created_at ||
+    new Date().toISOString()
+
+  const baselineTimestamp = Math.floor(new Date(rawBaseline).getTime() / 1000)
+  const nowTimestamp = Math.floor(Date.now() / 1000)
+
+  // Load previous sync boundary from whatsapp_sync_state
   const { data: syncState } = await db
     .from('whatsapp_sync_state')
     .select('*')
@@ -137,16 +194,29 @@ export async function reconcileWahaMessages(
 
   let syncFromTimestamp: number
 
-  if (syncState?.last_sync_completed_at && syncState?.last_sync_status !== 'failed' && syncState?.last_sync_status !== 'error') {
-    const lastCompleted = new Date(syncState.last_sync_completed_at).getTime()
-    // Overlap window (e.g. 10 minutes prior to last completed sync)
-    syncFromTimestamp = Math.floor((lastCompleted - overlapMinutes * 60 * 1000) / 1000)
-  } else if (typeof options.initialSyncWindowHours === 'number' && options.initialSyncWindowHours > 0) {
-    // Initial history sync window (e.g. 24h, 7d, 30d)
-    syncFromTimestamp = Math.floor((Date.now() - options.initialSyncWindowHours * 3600 * 1000) / 1000)
-  } else {
-    // Default fallback: 24 hours prior to now to catch any downtime
+  if (historyMode === 'now') {
+    // Mode "Apenas novas mensagens (a partir de agora)"
+    if (
+      syncState?.last_sync_completed_at &&
+      syncState?.last_sync_status !== 'failed' &&
+      syncState?.last_sync_status !== 'error'
+    ) {
+      const lastCompleted = new Date(syncState.last_sync_completed_at).getTime()
+      const candidate = Math.floor((lastCompleted - overlapMinutes * 60 * 1000) / 1000)
+      // Must NEVER go before recovery_not_before baseline
+      syncFromTimestamp = Math.max(candidate, baselineTimestamp)
+    } else {
+      // Default: start at baseline floor
+      syncFromTimestamp = baselineTimestamp
+    }
+  } else if (historyMode === '24h') {
     syncFromTimestamp = Math.floor((Date.now() - 24 * 3600 * 1000) / 1000)
+  } else if (historyMode === '7d') {
+    syncFromTimestamp = Math.floor((Date.now() - 7 * 24 * 3600 * 1000) / 1000)
+  } else if (historyMode === '30d') {
+    syncFromTimestamp = Math.floor((Date.now() - 30 * 24 * 3600 * 1000) / 1000)
+  } else {
+    syncFromTimestamp = baselineTimestamp
   }
 
   // 4. Mark sync state as 'syncing'
@@ -164,7 +234,14 @@ export async function reconcileWahaMessages(
   )
 
   const stats: ReconcileStats = {
+    windowStart: new Date(syncFromTimestamp * 1000).toISOString(),
+    windowEnd: new Date(nowTimestamp * 1000).toISOString(),
+    historyMode,
     chatsScanned: 0,
+    chatsEligible: 0,
+    chatsSkippedGroup: 0,
+    chatsSkippedBroadcast: 0,
+    chatsSkippedBeforeBaseline: 0,
     chatsSucceeded: 0,
     chatsFailed: 0,
     messagesDiscovered: 0,
@@ -191,21 +268,62 @@ export async function reconcileWahaMessages(
           : rawChatId && typeof rawChatId === 'object' && '_serialized' in rawChatId
             ? String((rawChatId as { _serialized?: string })._serialized || '')
             : String(rawChatId || '')
+
       if (!chatIdStr || chatIdStr === '[object Object]') {
         stats.chatsFailed++
         continue
       }
+
+      const lowerChatId = chatIdStr.toLowerCase()
+
+      // Filter: Skip group chats
+      if (chat.isGroup || lowerChatId.endsWith('@g.us')) {
+        stats.chatsSkippedGroup++
+        continue
+      }
+
+      // Filter: Skip broadcast, status, newsletter/channel
+      if (
+        lowerChatId.endsWith('@broadcast') ||
+        lowerChatId.endsWith('@newsletter') ||
+        lowerChatId.includes('status@') ||
+        lowerChatId.includes('broadcast') ||
+        lowerChatId.includes('newsletter')
+      ) {
+        stats.chatsSkippedBroadcast++
+        continue
+      }
+
+      // Filter: Must be eligible 1:1 chat
+      if (!isEligibleWahaChat(chatIdStr)) {
+        stats.chatsSkippedBroadcast++
+        continue
+      }
+
+      // Filter: If chat has a known last activity timestamp strictly before the recovery floor, skip it
+      if (typeof chat.timestamp === 'number' && chat.timestamp > 0 && chat.timestamp < syncFromTimestamp) {
+        stats.chatsSkippedBeforeBaseline++
+        continue
+      }
+
+      stats.chatsEligible++
 
       try {
         const rawMessages = await getWahaChatMessages(wahaConfig, chatIdStr, {
           limit: 100,
           downloadMedia: false,
           filterTimestampGte: syncFromTimestamp,
+          filterTimestampLte: nowTimestamp,
         })
 
         // Sort chronologically ascending so replay preserves true message order
         const filtered = rawMessages
-          .filter((m) => typeof m.timestamp === 'number' && m.timestamp >= syncFromTimestamp)
+          .filter(
+            (m) =>
+              typeof m.timestamp === 'number' &&
+              m.timestamp >= syncFromTimestamp &&
+              m.timestamp <= nowTimestamp
+          )
           .sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0))
 
         for (const rawMsg of filtered) {
@@ -270,12 +388,12 @@ export async function reconcileWahaMessages(
     let finalStatus: SyncStatus = 'success'
     let syncErrorMessage: string | null = null
 
-    if (stats.chatsScanned > 0 && stats.chatsSucceeded === 0) {
+    if (stats.chatsEligible > 0 && stats.chatsSucceeded === 0) {
       finalStatus = 'failed'
-      syncErrorMessage = `Falha ao sincronizar histórico: todas as ${stats.chatsScanned} conversas falharam.`
+      syncErrorMessage = `Falha ao sincronizar histórico: todas as ${stats.chatsEligible} conversas elegíveis falharam.`
     } else if (stats.chatsFailed > 0 || stats.errorsCount > 0) {
       finalStatus = 'partial'
-      syncErrorMessage = `Sincronização parcial: ${stats.chatsFailed} de ${stats.chatsScanned} conversas falharam.`
+      syncErrorMessage = `Sincronização parcial: ${stats.chatsFailed} de ${stats.chatsEligible} conversas falharam.`
     } else {
       finalStatus = 'success'
       syncErrorMessage = null
@@ -291,7 +409,7 @@ export async function reconcileWahaMessages(
       updated_at: new Date().toISOString(),
     }
 
-    // Advance last_sync_completed_at ONLY if sync had succeeded chats
+    // Advance last_sync_completed_at ONLY if sync had succeeded chats or 0 eligible chats
     if (finalStatus === 'success' || (finalStatus === 'partial' && stats.chatsSucceeded > 0)) {
       upsertPayload.last_sync_completed_at = new Date().toISOString()
     }

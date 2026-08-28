@@ -88,7 +88,9 @@ export async function GET() {
 
     const { data: config, error: configError } = await supabase
       .from('whatsapp_config')
-      .select('provider, phone_number_id, access_token, status, waha_base_url, waha_session_name')
+      .select(
+        'provider, phone_number_id, access_token, status, waha_base_url, waha_session_name, history_import_mode, history_import_started_at, recovery_not_before'
+      )
       .eq('account_id', accountId)
       .maybeSingle()
 
@@ -163,6 +165,9 @@ export async function GET() {
           connected: session.status === 'WORKING',
           provider: 'waha',
           session,
+          history_import_mode: config.history_import_mode || 'now',
+          history_import_started_at: config.history_import_started_at,
+          recovery_not_before: config.recovery_not_before,
           message: session.status === 'WORKING'
             ? 'WAHA session is connected.'
             : `WAHA session status: ${session.status}`,
@@ -310,6 +315,11 @@ export async function POST(request: Request) {
         console.warn('[whatsapp/config POST] Could not auto-configure WAHA webhook:', whErr)
       }
 
+      const historyImportMode = ['now', '24h', '7d', '30d'].includes(body.history_import_mode)
+        ? body.history_import_mode
+        : 'now'
+
+      const nowIso = new Date().toISOString()
       const baseRow = {
         provider: 'waha',
         phone_number_id: null,
@@ -319,11 +329,14 @@ export async function POST(request: Request) {
         waha_base_url: String(waha_base_url).replace(/\/+$/, ''),
         waha_session_name: String(waha_session_name),
         status: session.status === 'WORKING' ? 'connected' : 'disconnected',
-        connected_at: session.status === 'WORKING' ? new Date().toISOString() : null,
+        connected_at: session.status === 'WORKING' ? nowIso : null,
+        history_import_mode: historyImportMode,
+        history_import_started_at: nowIso,
+        recovery_not_before: nowIso,
         registered_at: null,
         subscribed_apps_at: null,
         last_registration_error: null,
-        updated_at: new Date().toISOString(),
+        updated_at: nowIso,
       }
 
       const { data: existing } = await supabase
