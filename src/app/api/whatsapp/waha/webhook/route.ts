@@ -107,6 +107,32 @@ export async function POST(request: Request) {
     return NextResponse.json({ status: 'ignored', reason: 'unknown_or_empty_event' })
   }
 
+  // 4b. Resolve WhatsApp Privacy LID to real Phone Number (PN) if needed
+  if (
+    (event.type === 'message' || event.type === 'reaction') &&
+    event.lid &&
+    !event.fromPhone &&
+    config.waha_base_url &&
+    sessionSecret
+  ) {
+    try {
+      const { resolveWahaLidToPhoneNumber } = await import('@/lib/whatsapp/waha-api')
+      const resolvedPhone = await resolveWahaLidToPhoneNumber(
+        {
+          baseUrl: config.waha_base_url,
+          apiKey: sessionSecret,
+          session: sessionName,
+        },
+        event.lid
+      )
+      if (resolvedPhone) {
+        event.fromPhone = resolvedPhone
+      }
+    } catch {
+      // Non-fatal fallback: LID remains preserved
+    }
+  }
+
   // 5. Durably enqueue event before responding HTTP 200
   let enqueueResult: { jobId: string; messageId?: number }
   try {

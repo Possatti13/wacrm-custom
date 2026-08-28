@@ -256,21 +256,31 @@ export async function getWahaChatMessages(
 }
 
 /**
- * Global health probe to test if the WAHA base URL is reachable and API key is valid.
+ * Resolves a WhatsApp LID (e.g. "25190000009361@lid") to a real phone number via WAHA engine.
+ * Returns digits-only E.164 phone string if found, or null if unresolvable.
  */
-export async function testWahaHealth(
-  config: Pick<WahaConfig, 'baseUrl' | 'apiKey'>
-): Promise<{ ok: boolean; version?: string; error?: string }> {
+export async function resolveWahaLidToPhoneNumber(
+  config: WahaConfig,
+  lid: string
+): Promise<string | null> {
+  if (!lid || !lid.endsWith('@lid')) return null;
+
   try {
-    const res = await wahaFetch<{ version?: string }>(config, '/api/version');
-    return { ok: true, version: typeof res === 'object' ? res.version : undefined };
-  } catch {
-    try {
-      // Fallback to /api/sessions
-      await wahaFetch<unknown>(config, '/api/sessions');
-      return { ok: true };
-    } catch (err) {
-      return { ok: false, error: err instanceof Error ? err.message : 'WAHA unreachable' };
+    const encodedLid = encodeURIComponent(lid);
+    const result = await wahaFetch<{ lid?: string; pn?: string | null }>(
+      config,
+      `/api/${encodeURIComponent(config.session)}/lids/${encodedLid}`
+    );
+
+    if (result && result.pn) {
+      // pn format is e.g. "5513974135365@c.us"
+      const digits = result.pn.replace(/@.+$/, '').replace(/\D/g, '');
+      return digits || null;
     }
+    return null;
+  } catch {
+    // Non-fatal: if WAHA has not cached the LID mapping yet, return null
+    return null;
   }
 }
+

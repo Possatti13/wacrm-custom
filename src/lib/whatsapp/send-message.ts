@@ -237,22 +237,10 @@ export async function sendMessageToConversation(
   }
 
   const contact = conversation.contact;
-  if (!contact?.phone) {
-    throw new SendMessageError(
-      'bad_request',
-      'Contact phone number not found',
-      400
-    );
-  }
-
-  const sanitizedPhone = sanitizePhoneForMeta(contact.phone);
-  if (!isValidE164(sanitizedPhone)) {
-    throw new SendMessageError(
-      'bad_request',
-      'Invalid phone number format',
-      400
-    );
-  }
+  const externalChatId: string | null =
+    conversation.external_chat_id || contact?.whatsapp_lid || null;
+  const rawPhone: string | null = contact?.phone || null;
+  const sanitizedPhone = rawPhone ? sanitizePhoneForMeta(rawPhone) : null;
 
   // WhatsApp config, account-scoped.
   const { data: config, error: configError } = await db
@@ -401,36 +389,58 @@ export async function sendMessageToConversation(
   let workingPhone = sanitizedPhone;
 
   if (whatsappProvider.type === 'waha') {
-    // WAHA direct recipient format
-    let wahaRecipient = sanitizedPhone;
-    try {
-      const { data: lastInbound } = await db
-        .from('messages')
-        .select('message_id')
-        .eq('conversation_id', conversationId)
-        .eq('sender_type', 'customer')
-        .not('message_id', 'is', null)
-        .order('created_at', { ascending: false })
-        .limit(1)
-        .maybeSingle();
+    // WAHA direct recipient format (prefers canonical external_chat_id / @lid)
+    let wahaRecipient: string | null =
+      externalChatId || (sanitizedPhone ? `${sanitizedPhone}@c.us` : null);
 
-      const rawMessageId = lastInbound?.message_id as string | null | undefined;
-      const match = rawMessageId?.match(/^(?:true|false)_([^_]+)_.+$/);
-      if (match?.[1]?.includes('@')) {
-        wahaRecipient = match[1];
+    if (!wahaRecipient) {
+      try {
+        const { data: lastInbound } = await db
+          .from('messages')
+          .select('message_id')
+          .eq('conversation_id', conversationId)
+          .eq('sender_type', 'customer')
+          .not('message_id', 'is', null)
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        const rawMessageId = lastInbound?.message_id as string | null | undefined;
+        const match = rawMessageId?.match(/^(?:true|false)_([^_]+)_.+$/);
+        if (match?.[1]?.includes('@')) {
+          wahaRecipient = match[1];
+        }
+      } catch (err) {
+        console.warn('[send-message] Could not resolve WAHA chat id:', err);
       }
-    } catch (err) {
-      console.warn('[send-message] Could not resolve WAHA chat id:', err);
+    }
+
+    if (!wahaRecipient) {
+      throw new SendMessageError(
+        'bad_request',
+        'No valid recipient phone number or WhatsApp chat identifier found for this conversation',
+        400
+      );
     }
 
     try {
       waMessageId = await attemptSend(wahaRecipient);
+      workingPhone = sanitizedPhone || wahaRecipient;
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unknown WAHA error';
       console.error('[send-message] WAHA send failed:', message);
       throw new SendMessageError('waha_error', `WAHA API error: ${message}`, 502);
     }
   } else {
+    // Meta requires a valid E.164 phone
+    if (!sanitizedPhone || !isValidE164(sanitizedPhone)) {
+      throw new SendMessageError(
+        'bad_request',
+        `Valid E.164 contact phone number is required for Meta WhatsApp provider (got: "${rawPhone ?? 'none'}").`,
+        400
+      );
+    }
+
     // Meta variant retry
     try {
       const variants = phoneVariants(sanitizedPhone);
@@ -461,7 +471,7 @@ export async function sendMessageToConversation(
   }
 
   // Persist working phone back to contact if different
-  if (workingPhone !== sanitizedPhone && isValidE164(workingPhone)) {
+  if (workingPhone && workingPhone !== sanitizedPhone && isValidE164(workingPhone)) {
     void db
       .from('contacts')
       .update({ phone: workingPhone })

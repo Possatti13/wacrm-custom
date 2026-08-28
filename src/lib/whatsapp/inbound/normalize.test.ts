@@ -335,6 +335,46 @@ describe('Inbound Event Normalization', () => {
       expect(ev.recipientPhone).toBe('5511999999999')
     })
 
+    it('normalizes an inbound message with WhatsApp Privacy LID (@lid) without stripping into fake phone', () => {
+      const wahaLidPayload = {
+        event: 'message',
+        session: 'ciclopes_ec86e41e',
+        payload: {
+          id: 'false_25190000009361@lid_3EB05B8AA3703F261BE423',
+          timestamp: 1740698200,
+          from: '25190000009361@lid',
+          fromMe: false,
+          to: '5511888887777@c.us',
+          body: 'TESTE CICLOPES 05 - mensagem real',
+          hasMedia: false,
+          ack: 1,
+          ackName: 'SERVER',
+          _data: {
+            id: {
+              fromMe: false,
+              remote: '25190000009361@lid',
+              id: '3EB05B8AA3703F261BE423',
+              _serialized: 'false_25190000009361@lid_3EB05B8AA3703F261BE423',
+            },
+            body: 'TESTE CICLOPES 05 - mensagem real',
+            notifyName: 'Leo Possatti',
+            from: '25190000009361@lid',
+            to: '5511888887777@c.us',
+          },
+        },
+      }
+
+      const ev = normalizeWahaInbound(wahaLidPayload, accountId) as NormalizedInboundMessageEvent
+
+      expect(ev).not.toBeNull()
+      expect(ev.type).toBe('message')
+      expect(ev.lid).toBe('25190000009361@lid')
+      expect(ev.externalChatId).toBe('25190000009361@lid')
+      expect(ev.fromPhone).toBe('') // Must NEVER store numeric LID as phone
+      expect(ev.senderName).toBe('Leo Possatti')
+      expect(ev.content.text).toBe('TESTE CICLOPES 05 - mensagem real')
+    })
+
     it('handles unknown or unformatted events safely', () => {
       const wahaPayload = {
         event: 'custom.something_strange',

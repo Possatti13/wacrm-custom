@@ -56,6 +56,27 @@ export async function findExistingContact(
 }
 
 /**
+ * Find an existing contact by WhatsApp Privacy LID (e.g. "25190000009361@lid").
+ */
+export async function findExistingContactByLid(
+  db: SupabaseClient,
+  accountId: string,
+  lid: string,
+): Promise<ExistingContact | null> {
+  if (!lid) return null;
+
+  const { data, error } = await db
+    .from("contacts")
+    .select("*")
+    .eq("account_id", accountId)
+    .eq("whatsapp_lid", lid)
+    .maybeSingle();
+
+  if (error || !data) return null;
+  return data as ExistingContact;
+}
+
+/**
  * True when an existing contact is an *exact* normalized match for
  * `phone` (vs only a fuzzy trunk-variant match). The form hard-blocks
  * exact matches but only warns on fuzzy ones.

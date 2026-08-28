@@ -1,10 +1,10 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
-import { findExistingContact, isUniqueViolation } from '@/lib/contacts/dedupe'
+import { findExistingContact, findExistingContactByLid, isUniqueViolation } from '@/lib/contacts/dedupe'
 import { runAutomationsForTrigger } from '@/lib/automations/engine'
 import { dispatchInboundToAiReply } from '@/lib/ai/auto-reply'
 import type { NormalizedInboundEvent, NormalizedInboundMessageEvent } from './types'
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 let _adminClient: any = null
 function getDefaultAdminClient() {
   if (!_adminClient) {
@@ -38,7 +38,7 @@ export async function processNormalizedInboundEvent(
   const db = options.db || getDefaultAdminClient()
 
   if (event.type === 'unknown') {
-    return { processed: true }
+    return { processed: false, error: 'unknown_event' }
   }
 
   if (event.type === 'status') {
@@ -56,26 +56,21 @@ export async function processNormalizedInboundEvent(
   }
 
   if (event.type === 'message') {
-    return processInboundMessage(event, db, options.userId)
+    return processInboundMessage(db, event, options.userId)
   }
 
-  return { processed: true }
+  return { processed: false, error: 'unhandled_event_type' }
 }
 
 async function processInboundMessage(
-  event: NormalizedInboundMessageEvent,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   db: any,
-  fallbackUserId?: string | null
+  event: NormalizedInboundMessageEvent,
+  providedUserId?: string | null
 ): Promise<ProcessInboundResult> {
   const isOutboundFromMe = Boolean(event.fromMe)
 
-  if (!event.fromPhone) {
-    return { processed: false, error: 'missing_from_phone' }
-  }
-
-  // 1. Resolve default user_id for tenant if not provided
-  let userId: string = fallbackUserId || ''
+  // 1. Resolve agent user_id within account context
+  let userId: string = providedUserId || ''
   if (!userId) {
     const { data: profile } = await db
       .from('profiles')
@@ -88,13 +83,14 @@ async function processInboundMessage(
     userId = profile?.user_id || '00000000-0000-0000-0000-000000000000'
   }
 
-  // 2. Find or create Contact strictly within account_id
+  // 2. Find or create Contact strictly within account_id (supporting Phone & WhatsApp LID)
   const contactOutcome = await findOrCreateContact(
     db,
     event.accountId,
     userId,
-    event.fromPhone,
-    event.senderName
+    event.fromPhone || null,
+    event.senderName,
+    event.lid
   )
   if (!contactOutcome || !contactOutcome.contact?.id) {
     return { processed: false, error: 'contact_creation_failed' }
@@ -106,7 +102,8 @@ async function processInboundMessage(
     db,
     event.accountId,
     userId,
-    contact.id
+    contact.id,
+    event.externalChatId
   )
   if (!conversation || !conversation.id) {
     return { processed: false, error: 'conversation_creation_failed' }
@@ -280,21 +277,83 @@ async function processInboundMessage(
   }
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function findOrCreateContact(db: any, accountId: string, userId: string, phone: string, name: string) {
-  const existing = await findExistingContact(db, accountId, phone)
-  if (existing) return { contact: existing, wasCreated: false }
+async function findOrCreateContact(
+  db: any,
+  accountId: string,
+  userId: string,
+  phone: string | null,
+  name: string,
+  lid?: string
+) {
+  let existing: any = null
+
+  // 1. Try finding by LID first if LID is provided
+  if (lid) {
+    existing = await findExistingContactByLid(db, accountId, lid)
+  }
+
+  // 2. If not found and phone is present, try finding by phone
+  if (!existing && phone) {
+    existing = await findExistingContact(db, accountId, phone)
+  }
+
+  if (existing) {
+    // If contact exists, backfill LID or phone if missing
+    const updates: Record<string, unknown> = {}
+    if (lid && !existing.whatsapp_lid) {
+      updates.whatsapp_lid = lid
+    }
+    if (phone && !existing.phone) {
+      updates.phone = phone
+    }
+    if (name && (!existing.name || existing.name === 'WhatsApp Contact' || existing.name === 'Unknown')) {
+      updates.name = name
+    }
+
+    if (Object.keys(updates).length > 0) {
+      try {
+        const builder = db.from('contacts')
+        if (typeof builder.update === 'function') {
+          const { data: updated } = await builder
+            .update(updates)
+            .eq('id', existing.id)
+            .select('*')
+            .maybeSingle()
+          if (updated) return { contact: updated, wasCreated: false }
+        }
+      } catch {
+        // Non-fatal: mock DB in unit tests or fallback
+      }
+    }
+
+    return { contact: existing, wasCreated: false }
+  }
+
+  // 3. Insert new contact
+  const insertPayload: Record<string, unknown> = {
+    account_id: accountId,
+    user_id: userId,
+    phone: phone || null,
+    name: name || (lid ? 'Contato WhatsApp' : null),
+    whatsapp_lid: lid || null,
+  }
 
   const { data, error } = await db
     .from('contacts')
-    .insert({ account_id: accountId, user_id: userId, phone, name })
+    .insert(insertPayload)
     .select('*')
     .single()
 
   if (error) {
     if (isUniqueViolation(error)) {
-      const raced = await findExistingContact(db, accountId, phone)
-      if (raced) return { contact: raced, wasCreated: false }
+      if (lid) {
+        const raced = await findExistingContactByLid(db, accountId, lid)
+        if (raced) return { contact: raced, wasCreated: false }
+      }
+      if (phone) {
+        const raced = await findExistingContact(db, accountId, phone)
+        if (raced) return { contact: raced, wasCreated: false }
+      }
     }
     console.error('[inbound-processor] contact insert failed:', error.message)
     return null
@@ -302,8 +361,13 @@ async function findOrCreateContact(db: any, accountId: string, userId: string, p
   return { contact: data, wasCreated: true }
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function findOrCreateConversation(db: any, accountId: string, userId: string, contactId: string) {
+async function findOrCreateConversation(
+  db: any,
+  accountId: string,
+  userId: string,
+  contactId: string,
+  externalChatId?: string
+) {
   const { data: existing, error: existingError } = await db
     .from('conversations')
     .select('*')
@@ -316,11 +380,32 @@ async function findOrCreateConversation(db: any, accountId: string, userId: stri
     console.error('[inbound-processor] conversation lookup failed:', existingError.message)
     return null
   }
-  if (existing && existing.length > 0) return existing[0]
+  if (existing && existing.length > 0) {
+    const conv = existing[0]
+    if (externalChatId && conv.external_chat_id !== externalChatId) {
+      try {
+        const builder = db.from('conversations')
+        if (typeof builder.update === 'function') {
+          await builder
+            .update({ external_chat_id: externalChatId, updated_at: new Date().toISOString() })
+            .eq('id', conv.id)
+        }
+      } catch {
+        // Non-fatal
+      }
+      conv.external_chat_id = externalChatId
+    }
+    return conv
+  }
 
   const { data, error } = await db
     .from('conversations')
-    .insert({ account_id: accountId, user_id: userId, contact_id: contactId })
+    .insert({
+      account_id: accountId,
+      user_id: userId,
+      contact_id: contactId,
+      external_chat_id: externalChatId || null,
+    })
     .select('*')
     .single()
 

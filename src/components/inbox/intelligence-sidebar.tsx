@@ -355,8 +355,9 @@ export function IntelligenceSidebar({
   };
 
   const handleCopyPhone = useCallback(async () => {
-    if (!contact?.phone) return;
-    await navigator.clipboard.writeText(contact.phone);
+    const textToCopy = contact?.phone || contact?.whatsapp_lid;
+    if (!textToCopy) return;
+    await navigator.clipboard.writeText(textToCopy);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   }, [contact]);
@@ -443,7 +444,12 @@ export function IntelligenceSidebar({
     );
   }
 
-  const displayName = contact.name || contact.phone;
+  const displayName =
+    contact.name ||
+    contact.phone ||
+    (contact.whatsapp_lid ? "Contato WhatsApp" : "Contato");
+  const displayPhone =
+    contact.phone || (contact.whatsapp_lid ? "Identidade WhatsApp" : "Sem telefone");
   const initials = displayName.charAt(0).toUpperCase();
 
   // Score Visual Properties
@@ -473,7 +479,7 @@ export function IntelligenceSidebar({
               {displayName}
             </h3>
             <p className="truncate text-xs text-muted-foreground mt-0.5">
-              {contact.company || contact.phone}
+              {contact.company || displayPhone}
             </p>
           </div>
         </div>
@@ -484,7 +490,7 @@ export function IntelligenceSidebar({
             onClick={handleCopyPhone}
             className="flex flex-1 items-center justify-between rounded-md border border-border bg-background px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted"
           >
-            <span className="truncate">{contact.phone}</span>
+            <span className="truncate">{displayPhone}</span>
             {copied ? <Check className="h-3 w-3 text-primary" /> : <Copy className="h-3 w-3" />}
           </button>
         </div>

@@ -860,7 +860,12 @@ export function MessageThread({
     );
   }
 
-  const displayName = contact.name || contact.phone;
+  const displayName =
+    contact.name ||
+    contact.phone ||
+    (contact.whatsapp_lid ? "Contato WhatsApp" : "Customer");
+  const displayPhone =
+    contact.phone || (contact.whatsapp_lid ? "Identidade WhatsApp" : "");
   const messageGroups = groupMessagesByDate(messages);
   const currentStatus = STATUS_OPTIONS.find(
     (s) => s.value === conversation.status
@@ -902,7 +907,9 @@ export function MessageThread({
           </div>
           <div className="min-w-0">
             <h2 className="truncate text-sm font-semibold text-foreground">{displayName}</h2>
-            <p className="truncate text-xs text-muted-foreground">{contact.phone}</p>
+            {displayPhone && (
+              <p className="truncate text-xs text-muted-foreground">{displayPhone}</p>
+            )}
           </div>
           {/* Session timer badge — hidden on the narrowest phones so
               the name + back arrow keep their room. */}

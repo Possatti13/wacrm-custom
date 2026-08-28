@@ -40,6 +40,7 @@ export interface NormalizedInboundMessageEvent {
   externalChatId?: string
   fromPhone: string
   toPhone?: string
+  lid?: string
   senderName: string
   timestamp: number // unix epoch in seconds
   fromMe: boolean
@@ -55,6 +56,7 @@ export interface NormalizedInboundStatusEvent {
   accountId: string
   externalMessageId: string
   recipientPhone?: string
+  lid?: string
   status: InboundDeliveryStatus
   timestamp: number
   error?: {
@@ -69,6 +71,7 @@ export interface NormalizedInboundReactionEvent {
   provider: WhatsAppProviderType
   accountId: string
   fromPhone: string
+  lid?: string
   targetExternalMessageId: string
   emoji: string
   timestamp: number

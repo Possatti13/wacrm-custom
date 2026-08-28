@@ -75,11 +75,13 @@ export function normalizeWahaInbound(
   if (event === 'message.reaction' || (!event && Boolean(payload.reaction))) {
     const reactionObj = asRecord(payload.reaction)
     const rawFrom = str(payload.from) ?? str(data.from) ?? str(idObj.remote) ?? ''
+    const isLid = rawFrom.endsWith('@lid')
     return {
       type: 'reaction',
       provider: 'waha',
       accountId,
-      fromPhone: normalizePhone(rawFrom.replace(/@.+$/, '')),
+      fromPhone: isLid ? '' : normalizePhone(rawFrom.replace(/@.+$/, '')),
+      lid: isLid ? rawFrom : undefined,
       targetExternalMessageId: str(reactionObj.messageId) ?? str(payload.targetMessageId) ?? '',
       emoji: str(reactionObj.text) ?? str(payload.reaction) ?? '',
       timestamp: Number(payload.timestamp ?? data.t) || Math.floor(Date.now() / 1000),
@@ -101,12 +103,16 @@ export function normalizeWahaInbound(
     else if (ack === 3) status = 'read'
     else if (ack < 0) status = 'failed'
 
+    const rawTo = str(payload.to) ?? str(data.to) ?? ''
+    const isLid = rawTo.endsWith('@lid')
+
     return {
       type: 'status',
       provider: 'waha',
       accountId,
       externalMessageId: str(payload.id) ?? str(idObj._serialized) ?? `waha-ack-${Date.now()}`,
-      recipientPhone: normalizePhone(str(payload.to)?.replace(/@.+$/, '') ?? ''),
+      recipientPhone: isLid ? '' : normalizePhone(rawTo.replace(/@.+$/, '')),
+      lid: isLid ? rawTo : undefined,
       status,
       timestamp: Number(payload.timestamp ?? data.t) || Math.floor(Date.now() / 1000),
       rawPayload: body,
@@ -120,13 +126,15 @@ export function normalizeWahaInbound(
       ? (str(idObj.remote) ?? str(payload.chatId) ?? str(data.chatId) ?? str(payload.to) ?? str(data.to) ?? str(payload.from) ?? str(data.from) ?? '')
       : (str(payload.from) ?? str(data.from) ?? str(idObj.remote) ?? str(payload.chatId) ?? str(data.chatId) ?? '')
 
-    const phone = normalizePhone(rawContactId.replace(/@.+$/, ''))
-    const toPhone = normalizePhone(
-      (fromMe
-        ? (str(payload.from) ?? str(data.from) ?? '')
-        : (str(payload.to) ?? str(data.to) ?? '')
-      ).replace(/@.+$/, '')
-    )
+    const isLid = rawContactId.endsWith('@lid')
+    const lid = isLid ? rawContactId : undefined
+    const phone = isLid ? '' : normalizePhone(rawContactId.replace(/@.+$/, ''))
+
+    const rawToId = fromMe
+      ? (str(payload.from) ?? str(data.from) ?? '')
+      : (str(payload.to) ?? str(data.to) ?? '')
+    const toPhone = rawToId.endsWith('@lid') ? '' : normalizePhone(rawToId.replace(/@.+$/, ''))
+
     const messageId =
       str(payload.id) ??
       str(data.id) ??
@@ -157,7 +165,7 @@ export function normalizeWahaInbound(
       str(data.notifyName) ??
       str(data.verifiedBizName) ??
       str(data.sender?.toString()) ??
-      'WhatsApp Contact'
+      (fromMe ? 'Agent' : 'WhatsApp Contact')
 
     const messageEvent: NormalizedInboundMessageEvent = {
       type: 'message',
@@ -167,6 +175,7 @@ export function normalizeWahaInbound(
       externalChatId: rawContactId,
       fromPhone: phone,
       toPhone: toPhone || undefined,
+      lid,
       senderName,
       timestamp: Number.isFinite(timestamp) ? timestamp : Math.floor(Date.now() / 1000),
       fromMe,

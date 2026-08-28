@@ -49,11 +49,11 @@ describe('WAHA Real Message End-to-End Pipeline & DB Persistence', () => {
         id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
         account_id uuid NOT NULL,
         user_id uuid,
-        phone text NOT NULL,
+        phone text,
+        whatsapp_lid text,
         name text,
         created_at timestamptz DEFAULT now(),
-        updated_at timestamptz DEFAULT now(),
-        CONSTRAINT uq_contacts_account_phone UNIQUE (account_id, phone)
+        updated_at timestamptz DEFAULT now()
       );
 
       CREATE TABLE IF NOT EXISTS conversations (
@@ -61,6 +61,7 @@ describe('WAHA Real Message End-to-End Pipeline & DB Persistence', () => {
         account_id uuid NOT NULL,
         user_id uuid,
         contact_id uuid NOT NULL REFERENCES contacts(id) ON DELETE CASCADE,
+        external_chat_id text,
         status text DEFAULT 'open',
         unread_count integer DEFAULT 0,
         last_message_at timestamptz DEFAULT now(),
@@ -350,5 +351,117 @@ describe('WAHA Real Message End-to-End Pipeline & DB Persistence', () => {
     expect(msgs.rows).toHaveLength(1)
     expect(msgs.rows[0].sender_type).toBe('agent')
     expect(msgs.rows[0].content_text).toBe('Olá! A Falcon 400 está por R$ 38.000.')
+  })
+
+  it('handles inbound message with WhatsApp Privacy LID where PN is resolved', async () => {
+    const rawLidPayload = {
+      event: 'message',
+      session: 'ciclopes_ec86e41e',
+      payload: {
+        id: 'false_25190000009361@lid_3EB05B8AA3703F261BE423',
+        timestamp: 1740698200,
+        from: '25190000009361@lid',
+        fromMe: false,
+        to: '5511888887777@c.us',
+        body: 'TESTE CICLOPES 05 - mensagem real',
+        hasMedia: false,
+        ack: 1,
+        ackName: 'SERVER',
+        _data: {
+          id: {
+            fromMe: false,
+            remote: '25190000009361@lid',
+            id: '3EB05B8AA3703F261BE423',
+            _serialized: 'false_25190000009361@lid_3EB05B8AA3703F261BE423',
+          },
+          body: 'TESTE CICLOPES 05 - mensagem real',
+          notifyName: 'Leo Possatti',
+          from: '25190000009361@lid',
+          to: '5511888887777@c.us',
+        },
+      },
+    }
+
+    const normalized = normalizeWahaInbound(rawLidPayload, accountId) as NormalizedInboundMessageEvent
+    expect(normalized.lid).toBe('25190000009361@lid')
+    expect(normalized.externalChatId).toBe('25190000009361@lid')
+    expect(normalized.fromPhone).toBe('') // Normalizer leaves empty, does NOT put LID into phone
+
+    // Simulate resolved phone from WAHA LID API
+    normalized.fromPhone = '5513974135365'
+
+    const shim = createPgShim(pg)
+    const result = await processNormalizedInboundEvent({
+      event: normalized,
+      db: shim as any,
+    })
+
+    expect(result.processed).toBe(true)
+
+    // Check DB: contact has phone=5513974135365 and whatsapp_lid=25190000009361@lid
+    const contactsRes = await pg.query('SELECT * FROM contacts WHERE account_id = $1', [accountId])
+    expect(contactsRes.rows).toHaveLength(1)
+    expect(contactsRes.rows[0].phone).toBe('5513974135365')
+    expect(contactsRes.rows[0].whatsapp_lid).toBe('25190000009361@lid')
+    expect(contactsRes.rows[0].name).toBe('Leo Possatti')
+
+    // Conversation has external_chat_id=25190000009361@lid
+    const convsRes = await pg.query('SELECT * FROM conversations WHERE account_id = $1', [accountId])
+    expect(convsRes.rows).toHaveLength(1)
+    expect(convsRes.rows[0].external_chat_id).toBe('25190000009361@lid')
+  })
+
+  it('handles inbound message with WhatsApp Privacy LID where PN is unresolvable (null)', async () => {
+    const rawLidPayload = {
+      event: 'message',
+      session: 'ciclopes_ec86e41e',
+      payload: {
+        id: 'false_99990000009999@lid_3EB0UNKNOWN',
+        timestamp: 1740698300,
+        from: '99990000009999@lid',
+        fromMe: false,
+        to: '5511888887777@c.us',
+        body: 'Mensagem de LID anônimo',
+        hasMedia: false,
+        ack: 1,
+        ackName: 'SERVER',
+        _data: {
+          id: {
+            fromMe: false,
+            remote: '99990000009999@lid',
+            id: '3EB0UNKNOWN',
+            _serialized: 'false_99990000009999@lid_3EB0UNKNOWN',
+          },
+          body: 'Mensagem de LID anônimo',
+          notifyName: 'Cliente Privado',
+          from: '99990000009999@lid',
+          to: '5511888887777@c.us',
+        },
+      },
+    }
+
+    const normalized = normalizeWahaInbound(rawLidPayload, accountId) as NormalizedInboundMessageEvent
+    expect(normalized.lid).toBe('99990000009999@lid')
+    expect(normalized.fromPhone).toBe('')
+
+    const shim = createPgShim(pg)
+    const result = await processNormalizedInboundEvent({
+      event: normalized,
+      db: shim as any,
+    })
+
+    expect(result.processed).toBe(true)
+
+    // Check DB: phone is NULL, NOT 99990000009999
+    const contactsRes = await pg.query('SELECT * FROM contacts WHERE whatsapp_lid = $1', ['99990000009999@lid'])
+    expect(contactsRes.rows).toHaveLength(1)
+    expect(contactsRes.rows[0].phone).toBeNull()
+    expect(contactsRes.rows[0].whatsapp_lid).toBe('99990000009999@lid')
+    expect(contactsRes.rows[0].name).toBe('Cliente Privado')
+
+    // Conversation has external_chat_id=99990000009999@lid
+    const convsRes = await pg.query('SELECT * FROM conversations WHERE contact_id = $1', [contactsRes.rows[0].id])
+    expect(convsRes.rows).toHaveLength(1)
+    expect(convsRes.rows[0].external_chat_id).toBe('99990000009999@lid')
   })
 })

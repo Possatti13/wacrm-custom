@@ -1,5 +1,7 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, expect, it, vi } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { encrypt } from '@/lib/whatsapp/encryption';
 
 import {
   sendMessageToConversation,
@@ -157,3 +159,221 @@ describe('SendMessageError', () => {
     expect(e).toBeInstanceOf(Error);
   });
 });
+
+describe('sendMessageToConversation — Provider Routing & WhatsApp LID', () => {
+  it('routes outbound message to external_chat_id when contact has no phone (WAHA provider)', async () => {
+    const mockSendText = vi.fn(async () => ({
+      provider: 'waha',
+      externalMessageId: 'true_25190000009361@lid_OUT123',
+      status: 'sent',
+    }));
+
+    const mockDb: any = {
+      from: vi.fn((table: string) => {
+        if (table === 'conversations') {
+          return {
+            select: () => ({
+              eq: () => ({
+                eq: () => ({
+                  single: async () => ({
+                    data: {
+                      id: 'conv-lid-1',
+                      account_id: 'acct-1',
+                      external_chat_id: '25190000009361@lid',
+                      contact: {
+                        id: 'contact-lid-1',
+                        phone: null,
+                        whatsapp_lid: '25190000009361@lid',
+                        name: 'Leo Possatti',
+                      },
+                    },
+                    error: null,
+                  }),
+                }),
+              }),
+            }),
+            update: () => ({
+              eq: () => Promise.resolve({ data: null, error: null }),
+            }),
+          };
+        }
+        if (table === 'whatsapp_config') {
+          return {
+            select: () => ({
+              eq: () => ({
+                single: async () => ({
+                  data: {
+                    id: 'wcfg-1',
+                    account_id: 'acct-1',
+                    provider_type: 'waha',
+                    waha_base_url: 'http://localhost:3001',
+                    waha_session_name: 'ciclopes_test',
+                    access_token: encrypt('secret-token'),
+                  },
+                  error: null,
+                }),
+              }),
+            }),
+          };
+        }
+        if (table === 'messages') {
+          return {
+            select: () => ({
+              eq: () => ({
+                eq: () => ({
+                  not: () => ({
+                    order: () => ({
+                      limit: () => ({
+                        maybeSingle: async () => ({ data: null }),
+                      }),
+                    }),
+                  }),
+                }),
+              }),
+            }),
+            insert: () => ({
+              select: () => ({
+                single: async () => ({
+                  data: { id: 'msg-persisted-1' },
+                  error: null,
+                }),
+              }),
+            }),
+          };
+        }
+        if (table === 'contacts') {
+          return {
+            update: () => ({
+              eq: () => Promise.resolve({ data: null, error: null }),
+            }),
+          };
+        }
+        return {
+          select: () => ({
+            eq: () => ({
+              eq: () => ({
+                maybeSingle: async () => ({ data: null }),
+              }),
+            }),
+          }),
+        };
+      }),
+    };
+
+    // Mock factory
+    const factory = await import('./providers/factory');
+    vi.spyOn(factory, 'getWhatsAppProvider').mockReturnValue({
+      type: 'waha',
+      getCapabilities: () => ({
+        sendText: true,
+        sendImage: true,
+        sendDocument: true,
+        sendAudio: true,
+        sendVideo: true,
+        templates: false,
+        interactiveMessages: false,
+        reactions: false,
+        qrCode: true,
+        sessionLifecycle: true,
+      }),
+      sendText: mockSendText,
+      sendMedia: vi.fn(),
+      getStatus: vi.fn(),
+    } as any);
+
+    const result = await sendMessageToConversation(mockDb as SupabaseClient, 'acct-1', {
+      conversationId: 'conv-lid-1',
+      messageType: 'text',
+      contentText: 'Resposta enviada para conversa @lid',
+    });
+
+    expect(result.messageId).toBe('msg-persisted-1');
+    expect(result.whatsappMessageId).toBe('true_25190000009361@lid_OUT123');
+    expect(mockSendText).toHaveBeenCalledWith({
+      to: '25190000009361@lid',
+      text: 'Resposta enviada para conversa @lid',
+    });
+  });
+
+  it('rejects outbound message when contact has no phone and provider is Meta (requires E.164)', async () => {
+    const mockDb: any = {
+      from: vi.fn((table: string) => {
+        if (table === 'conversations') {
+          return {
+            select: () => ({
+              eq: () => ({
+                eq: () => ({
+                  single: async () => ({
+                    data: {
+                      id: 'conv-lid-1',
+                      account_id: 'acct-1',
+                      external_chat_id: '25190000009361@lid',
+                      contact: {
+                        id: 'contact-lid-1',
+                        phone: null,
+                        whatsapp_lid: '25190000009361@lid',
+                        name: 'Leo Possatti',
+                      },
+                    },
+                    error: null,
+                  }),
+                }),
+              }),
+            }),
+          };
+        }
+        if (table === 'whatsapp_config') {
+          return {
+            select: () => ({
+              eq: () => ({
+                single: async () => ({
+                  data: {
+                    id: 'wcfg-1',
+                    account_id: 'acct-1',
+                    provider_type: 'meta',
+                    phone_number_id: 'pn-123',
+                    access_token: encrypt('secret-token'),
+                  },
+                  error: null,
+                }),
+              }),
+            }),
+          };
+        }
+        return {};
+      }),
+    };
+
+    const factory = await import('./providers/factory');
+    vi.spyOn(factory, 'getWhatsAppProvider').mockReturnValue({
+      type: 'meta',
+      getCapabilities: () => ({
+        sendText: true,
+        sendImage: true,
+        sendDocument: true,
+        sendAudio: true,
+        sendVideo: true,
+        templates: true,
+        interactiveMessages: true,
+        reactions: true,
+        qrCode: false,
+        sessionLifecycle: false,
+      }),
+      sendText: vi.fn(),
+      sendMedia: vi.fn(),
+      getStatus: vi.fn(),
+    } as any);
+
+    await expect(
+      sendMessageToConversation(mockDb as SupabaseClient, 'acct-1', {
+        conversationId: 'conv-lid-1',
+        messageType: 'text',
+        contentText: 'Tentativa para Meta',
+      })
+    ).rejects.toMatchObject({
+      code: 'bad_request',
+      status: 400,
+    });
+  });
+});
+

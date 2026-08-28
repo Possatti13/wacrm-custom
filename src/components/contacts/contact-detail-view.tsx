@@ -191,7 +191,9 @@ export function ContactDetailView({
 
   async function copyPhone() {
     if (!contact) return;
-    await navigator.clipboard.writeText(contact.phone);
+    const text = contact.phone || contact.whatsapp_lid || '';
+    if (!text) return;
+    await navigator.clipboard.writeText(text);
     setCopiedPhone(true);
     setTimeout(() => setCopiedPhone(false), 2000);
   }
