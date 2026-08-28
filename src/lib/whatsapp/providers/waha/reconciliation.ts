@@ -4,6 +4,7 @@ import {
   getWahaSession,
   getWahaChats,
   getWahaChatMessages,
+  resolveWahaLidToPhoneNumber,
   type WahaConfig,
 } from '../../waha-api'
 import { normalizeWahaInbound } from './normalize-inbound'
@@ -19,6 +20,8 @@ export interface ReconcileOptions {
 
 export interface ReconcileStats {
   chatsScanned: number
+  chatsSucceeded: number
+  chatsFailed: number
   messagesDiscovered: number
   messagesInserted: number
   duplicatesIgnored: number
@@ -26,8 +29,11 @@ export interface ReconcileStats {
   durationMs: number
 }
 
+export type SyncStatus = 'success' | 'partial' | 'failed' | 'idle' | 'syncing' | 'error'
+
 export interface ReconcileResult {
   success: boolean
+  status: SyncStatus
   reason?: string
   sessionStatus?: string
   stats?: ReconcileStats
@@ -45,6 +51,9 @@ function getAdminClient() {
   }
   return _adminClient
 }
+
+// In-memory cooldown per account to avoid concurrent auto-recovery sync storms
+const _autoRecoveryLocks = new Map<string, number>()
 
 /**
  * Reconciles messages from WAHA for a given account.
@@ -67,15 +76,15 @@ export async function reconcileWahaMessages(
     .maybeSingle()
 
   if (configError || !configRow) {
-    return { success: false, reason: 'no_config', error: configError?.message }
+    return { success: false, status: 'failed', reason: 'no_config', error: configError?.message }
   }
 
   if (configRow.provider !== 'waha') {
-    return { success: false, reason: 'provider_not_waha' }
+    return { success: false, status: 'failed', reason: 'provider_not_waha' }
   }
 
   if (!configRow.access_token || !configRow.waha_base_url || !configRow.waha_session_name) {
-    return { success: false, reason: 'incomplete_waha_config' }
+    return { success: false, status: 'failed', reason: 'incomplete_waha_config' }
   }
 
   let apiKey: string
@@ -84,6 +93,7 @@ export async function reconcileWahaMessages(
   } catch (decErr) {
     return {
       success: false,
+      status: 'failed',
       reason: 'decrypt_failed',
       error: decErr instanceof Error ? decErr.message : 'Decrypt failed',
     }
@@ -103,6 +113,7 @@ export async function reconcileWahaMessages(
     if (session.status !== 'WORKING') {
       return {
         success: false,
+        status: 'failed',
         reason: 'session_not_working',
         sessionStatus: session.status,
       }
@@ -110,6 +121,7 @@ export async function reconcileWahaMessages(
   } catch (sessErr) {
     return {
       success: false,
+      status: 'failed',
       reason: 'waha_unreachable',
       error: sessErr instanceof Error ? sessErr.message : 'WAHA unreachable',
     }
@@ -125,7 +137,7 @@ export async function reconcileWahaMessages(
 
   let syncFromTimestamp: number
 
-  if (syncState?.last_sync_completed_at) {
+  if (syncState?.last_sync_completed_at && syncState?.last_sync_status !== 'failed' && syncState?.last_sync_status !== 'error') {
     const lastCompleted = new Date(syncState.last_sync_completed_at).getTime()
     // Overlap window (e.g. 10 minutes prior to last completed sync)
     syncFromTimestamp = Math.floor((lastCompleted - overlapMinutes * 60 * 1000) / 1000)
@@ -133,8 +145,8 @@ export async function reconcileWahaMessages(
     // Initial history sync window (e.g. 24h, 7d, 30d)
     syncFromTimestamp = Math.floor((Date.now() - options.initialSyncWindowHours * 3600 * 1000) / 1000)
   } else {
-    // Default initial sync: start from now (with safety 10 min window)
-    syncFromTimestamp = Math.floor((Date.now() - overlapMinutes * 60 * 1000) / 1000)
+    // Default fallback: 24 hours prior to now to catch any downtime
+    syncFromTimestamp = Math.floor((Date.now() - 24 * 3600 * 1000) / 1000)
   }
 
   // 4. Mark sync state as 'syncing'
@@ -153,6 +165,8 @@ export async function reconcileWahaMessages(
 
   const stats: ReconcileStats = {
     chatsScanned: 0,
+    chatsSucceeded: 0,
+    chatsFailed: 0,
     messagesDiscovered: 0,
     messagesInserted: 0,
     duplicatesIgnored: 0,
@@ -161,7 +175,7 @@ export async function reconcileWahaMessages(
   }
 
   try {
-    // 5. Fetch chats
+    // 5. Fetch chats from WAHA
     const chats = options.forcedChatId
       ? [{ id: options.forcedChatId }]
       : await getWahaChats(wahaConfig, { limit: 100 })
@@ -170,10 +184,23 @@ export async function reconcileWahaMessages(
 
     // 6. Iterate through each chat and pull messages since boundary
     for (const chat of chats) {
+      const rawChatId = chat.id as unknown
+      const chatIdStr =
+        typeof rawChatId === 'string'
+          ? rawChatId
+          : rawChatId && typeof rawChatId === 'object' && '_serialized' in rawChatId
+            ? String((rawChatId as { _serialized?: string })._serialized || '')
+            : String(rawChatId || '')
+      if (!chatIdStr || chatIdStr === '[object Object]') {
+        stats.chatsFailed++
+        continue
+      }
+
       try {
-        const rawMessages = await getWahaChatMessages(wahaConfig, chat.id, {
+        const rawMessages = await getWahaChatMessages(wahaConfig, chatIdStr, {
           limit: 100,
           downloadMedia: false,
+          filterTimestampGte: syncFromTimestamp,
         })
 
         // Sort chronologically ascending so replay preserves true message order
@@ -189,13 +216,25 @@ export async function reconcileWahaMessages(
             session: configRow.waha_session_name,
             payload: {
               ...rawMsg,
-              chatId: chat.id,
+              chatId: chatIdStr,
             },
           }
 
           const normalized = normalizeWahaInbound(eventPayload, accountId)
           if (!normalized || normalized.type !== 'message') {
             continue
+          }
+
+          // Resolve WhatsApp Privacy LID to Phone Number server-side if not already resolved
+          if (normalized.lid && !normalized.fromPhone) {
+            try {
+              const resolved = await resolveWahaLidToPhoneNumber(wahaConfig, normalized.lid)
+              if (resolved) {
+                normalized.fromPhone = resolved
+              }
+            } catch {
+              // Non-fatal
+            }
           }
 
           try {
@@ -216,33 +255,58 @@ export async function reconcileWahaMessages(
             console.error('[waha-reconcile] message ingestion error:', itemErr)
           }
         }
+
+        stats.chatsSucceeded++
       } catch (chatErr) {
+        stats.chatsFailed++
         stats.errorsCount++
-        console.warn(`[waha-reconcile] error scanning chat ${chat.id}:`, chatErr)
+        console.warn(`[waha-reconcile] error scanning chat ${chatIdStr}:`, chatErr)
       }
     }
 
     stats.durationMs = Date.now() - startTime
 
-    // 7. Update sync state as 'success'
+    // 7. Calculate clear sync status semantics
+    let finalStatus: SyncStatus = 'success'
+    let syncErrorMessage: string | null = null
+
+    if (stats.chatsScanned > 0 && stats.chatsSucceeded === 0) {
+      finalStatus = 'failed'
+      syncErrorMessage = `Falha ao sincronizar histórico: todas as ${stats.chatsScanned} conversas falharam.`
+    } else if (stats.chatsFailed > 0 || stats.errorsCount > 0) {
+      finalStatus = 'partial'
+      syncErrorMessage = `Sincronização parcial: ${stats.chatsFailed} de ${stats.chatsScanned} conversas falharam.`
+    } else {
+      finalStatus = 'success'
+      syncErrorMessage = null
+    }
+
+    const upsertPayload: Record<string, unknown> = {
+      account_id: accountId,
+      provider: 'waha',
+      session_name: configRow.waha_session_name,
+      last_sync_status: finalStatus,
+      last_sync_error: syncErrorMessage,
+      sync_stats: stats,
+      updated_at: new Date().toISOString(),
+    }
+
+    // Advance last_sync_completed_at ONLY if sync had succeeded chats
+    if (finalStatus === 'success' || (finalStatus === 'partial' && stats.chatsSucceeded > 0)) {
+      upsertPayload.last_sync_completed_at = new Date().toISOString()
+    }
+
     await db.from('whatsapp_sync_state').upsert(
-      {
-        account_id: accountId,
-        provider: 'waha',
-        session_name: configRow.waha_session_name,
-        last_sync_completed_at: new Date().toISOString(),
-        last_sync_status: 'success',
-        last_sync_error: null,
-        sync_stats: stats,
-        updated_at: new Date().toISOString(),
-      },
+      upsertPayload,
       { onConflict: 'account_id,provider' }
     )
 
     return {
-      success: true,
+      success: finalStatus === 'success' || finalStatus === 'partial',
+      status: finalStatus,
       sessionStatus,
       stats,
+      error: syncErrorMessage || undefined,
     }
   } catch (err) {
     stats.durationMs = Date.now() - startTime
@@ -253,7 +317,7 @@ export async function reconcileWahaMessages(
         account_id: accountId,
         provider: 'waha',
         session_name: configRow.waha_session_name,
-        last_sync_status: 'error',
+        last_sync_status: 'failed',
         last_sync_error: errorMessage,
         sync_stats: stats,
         updated_at: new Date().toISOString(),
@@ -263,9 +327,69 @@ export async function reconcileWahaMessages(
 
     return {
       success: false,
+      status: 'failed',
       error: errorMessage,
       sessionStatus,
       stats,
     }
+  }
+}
+
+/**
+ * Triggers background auto-recovery reconciliation when an account session
+ * is active and has a timestamp gap since the last successful sync.
+ * Non-blocking, fire-and-forget with in-memory lock/cooldown.
+ */
+export async function maybeTriggerAutoRecovery(
+  accountId: string,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  db?: any,
+  options: { minGapMinutes?: number } = {}
+): Promise<void> {
+  const minGapMinutes = options.minGapMinutes ?? 5
+  const now = Date.now()
+
+  // 1. In-memory cooldown per account
+  const lastAttempt = _autoRecoveryLocks.get(accountId) || 0
+  if (now - lastAttempt < minGapMinutes * 60 * 1000) {
+    return
+  }
+
+  const client = db || getAdminClient()
+
+  try {
+    const { data: syncState } = await client
+      .from('whatsapp_sync_state')
+      .select('*')
+      .eq('account_id', accountId)
+      .eq('provider', 'waha')
+      .maybeSingle()
+
+    // If currently syncing and not stale (< 3 min), don't trigger
+    if (syncState?.last_sync_status === 'syncing' && syncState?.last_sync_started_at) {
+      const startedAt = new Date(syncState.last_sync_started_at).getTime()
+      if (now - startedAt < 3 * 60 * 1000) {
+        return
+      }
+    }
+
+    // Check if there is a gap (> minGapMinutes since last completed sync or if failed)
+    const isFailed = syncState?.last_sync_status === 'failed' || syncState?.last_sync_status === 'error'
+    const lastCompleted = syncState?.last_sync_completed_at ? new Date(syncState.last_sync_completed_at).getTime() : 0
+    const hasGap = !lastCompleted || (now - lastCompleted) > minGapMinutes * 60 * 1000
+
+    if (hasGap || isFailed) {
+      _autoRecoveryLocks.set(accountId, now)
+      // Fire-and-forget in background without awaiting or blocking caller
+      reconcileWahaMessages({
+        accountId,
+        db: client,
+        overlapMinutes: 10,
+      }).catch((err) => {
+        console.error('[waha-auto-recovery] background reconciliation failed:', err)
+      })
+    }
+  } catch (err) {
+    console.warn('[waha-auto-recovery] check failed:', err)
   }
 }

@@ -3,6 +3,7 @@ import { createClient } from '@supabase/supabase-js'
 import { decrypt } from '@/lib/whatsapp/encryption'
 import { verifyWahaWebhookSignature } from '@/lib/whatsapp/waha-signature'
 import { normalizeWahaInbound } from '@/lib/whatsapp/providers/waha/normalize-inbound'
+import { maybeTriggerAutoRecovery } from '@/lib/whatsapp/providers/waha/reconciliation'
 import { enqueueWhatsAppInboundEvent } from '@/lib/jobs/producer'
 import { processWhatsAppInboundBatch } from '@/lib/jobs/workers/whatsapp-inbound-worker'
 
@@ -97,6 +98,10 @@ export async function POST(request: Request) {
         updated_at: new Date().toISOString(),
       })
       .eq('id', config.id)
+
+    if (isConnected) {
+      void maybeTriggerAutoRecovery(config.account_id, supabaseAdmin())
+    }
 
     return NextResponse.json({ status: 'handled', event: 'session.status', session_status: rawStatus })
   }

@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { decrypt } from '@/lib/whatsapp/encryption'
 import { getWahaSession, startWahaSession } from '@/lib/whatsapp/waha-api'
+import { maybeTriggerAutoRecovery } from '@/lib/whatsapp/providers/waha/reconciliation'
 
 async function resolveAccountId(
   supabase: Awaited<ReturnType<typeof createClient>>,
@@ -88,6 +89,9 @@ export async function GET() {
           updated_at: new Date().toISOString(),
         })
         .eq('account_id', loaded.accountId)
+
+      // Automatically trigger background reconciliation if there is a sync gap
+      void maybeTriggerAutoRecovery(loaded.accountId, loaded.supabase)
     }
 
     return NextResponse.json({ provider: 'waha', connected: isConnected, session })
@@ -115,6 +119,8 @@ export async function POST() {
           updated_at: new Date().toISOString(),
         })
         .eq('account_id', loaded.accountId)
+
+      void maybeTriggerAutoRecovery(loaded.accountId, loaded.supabase)
     }
 
     return NextResponse.json({ provider: 'waha', connected: isConnected, session })
@@ -149,6 +155,8 @@ export async function PUT() {
           updated_at: new Date().toISOString(),
         })
         .eq('account_id', loaded.accountId)
+
+      void maybeTriggerAutoRecovery(loaded.accountId, loaded.supabase)
     }
 
     return NextResponse.json({ provider: 'waha', connected: isConnected, session })

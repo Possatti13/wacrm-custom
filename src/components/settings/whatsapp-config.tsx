@@ -21,6 +21,7 @@ import {
   Clock,
   ShieldCheck,
   Radio,
+  AlertCircle,
 } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
 import { useAuth } from '@/hooks/use-auth';
@@ -58,7 +59,7 @@ interface WahaSessionState {
 }
 
 interface WahaSyncState {
-  last_sync_status: 'idle' | 'syncing' | 'success' | 'error';
+  last_sync_status: 'idle' | 'syncing' | 'success' | 'partial' | 'failed' | 'error';
   last_sync_completed_at?: string | null;
   last_sync_error?: string | null;
   sync_stats?: {
@@ -67,6 +68,9 @@ interface WahaSyncState {
     duplicatesIgnored?: number;
     durationMs?: number;
     chatsScanned?: number;
+    chatsSucceeded?: number;
+    chatsFailed?: number;
+    errorsCount?: number;
   } | null;
 }
 
@@ -950,12 +954,16 @@ function WahaExperiencePanel({
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
 
-      if (data.success && data.stats) {
+      if (data.status === 'success' || (data.success && (!data.stats || data.stats.chatsFailed === 0))) {
         toast.success(
-          `Sincronização concluída: ${data.stats.messagesInserted} nova(s) mensagem(ns), ${data.stats.duplicatesIgnored} existente(s).`
+          `Sincronização concluída: ${data.stats?.messagesInserted ?? 0} nova(s) mensagem(ns), ${data.stats?.duplicatesIgnored ?? 0} existente(s).`
+        );
+      } else if (data.status === 'partial') {
+        toast.warning(
+          `Sincronização parcial: ${data.stats?.messagesInserted ?? 0} nova(s), ${data.stats?.chatsFailed ?? 0} conversa(s) falharam.`
         );
       } else {
-        toast.info(data.reason || 'Sincronização executada.');
+        toast.error(data.error || data.reason || 'Falha ao sincronizar histórico do WhatsApp.');
       }
       void loadStatus();
     } catch (err) {
@@ -1058,10 +1066,22 @@ function WahaExperiencePanel({
                         ? new Date(syncState.last_sync_completed_at).toLocaleTimeString()
                         : 'Recente'}
                     </p>
-                    <div className="mt-0.5 flex items-center gap-1.5 text-xs text-emerald-400">
-                      <ShieldCheck className="size-3.5" />
-                      <span>{t('wahaSyncHealthy')}</span>
-                    </div>
+                    {syncState?.last_sync_status === 'failed' || syncState?.last_sync_status === 'error' ? (
+                      <div className="mt-0.5 flex items-center gap-1.5 text-xs text-red-400">
+                        <AlertCircle className="size-3.5" />
+                        <span>Falha na sincronização</span>
+                      </div>
+                    ) : syncState?.last_sync_status === 'partial' ? (
+                      <div className="mt-0.5 flex items-center gap-1.5 text-xs text-amber-400">
+                        <AlertCircle className="size-3.5" />
+                        <span>Sincronização parcial</span>
+                      </div>
+                    ) : (
+                      <div className="mt-0.5 flex items-center gap-1.5 text-xs text-emerald-400">
+                        <ShieldCheck className="size-3.5" />
+                        <span>{t('wahaSyncHealthy')}</span>
+                      </div>
+                    )}
                   </div>
                 </div>
 

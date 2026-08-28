@@ -17,6 +17,16 @@ export interface WahaRawChat {
   name?: string;
   timestamp?: number;
   unreadCount?: number;
+  isGroup?: boolean;
+}
+
+export interface GetWahaChatMessagesOptions {
+  limit?: number;
+  offset?: number;
+  downloadMedia?: boolean;
+  filterTimestampGte?: number;
+  filterTimestampLte?: number;
+  filterFromMe?: boolean;
 }
 
 export interface WahaRawMessage {
@@ -228,26 +238,70 @@ export async function getWahaChats(
   if (options.offset) params.set('offset', String(options.offset));
 
   const queryStr = params.toString() ? `?${params.toString()}` : '';
-  const result = await wahaFetch<WahaRawChat[]>(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const result = await wahaFetch<any[]>(
     config,
     `/api/${encodeURIComponent(config.session)}/chats${queryStr}`
   );
-  return Array.isArray(result) ? result : [];
+  if (!Array.isArray(result)) return [];
+
+  return result
+    .map((raw) => {
+      // WAHA WEBJS can return id as an object: { server: 'lid', user: '25190000009361', _serialized: '25190000009361@lid' }
+      // or as a plain string: '5511999998888@c.us'
+      const idStr =
+        typeof raw.id === 'string'
+          ? raw.id
+          : (raw.id?._serialized ||
+            (raw.id?.user && raw.id?.server ? `${raw.id.user}@${raw.id.server}` : String(raw.id || '')));
+
+      return {
+        id: idStr,
+        name: raw.name || raw.pushname || raw.formattedTitle,
+        timestamp:
+          typeof raw.timestamp === 'number'
+            ? raw.timestamp
+            : (raw.lastMessage?.timestamp || raw.t),
+        unreadCount:
+          typeof raw.unreadCount === 'number' ? raw.unreadCount : (raw.unreadCount || 0),
+        isGroup: Boolean(raw.isGroup || (idStr && idStr.endsWith('@g.us'))),
+      };
+    })
+    .filter((c) => Boolean(c.id) && c.id !== '[object Object]');
 }
 
 /**
- * Retrieves messages for a specific chat with optional pagination limit.
+ * Retrieves messages for a specific chat with optional pagination and timestamp filters.
  */
 export async function getWahaChatMessages(
   config: WahaConfig,
-  chatId: string,
-  options: { limit?: number; downloadMedia?: boolean } = {}
+  chatId: string | { _serialized?: string; id?: string },
+  options: GetWahaChatMessagesOptions = {}
 ): Promise<WahaRawMessage[]> {
+  const chatIdStr =
+    typeof chatId === 'string'
+      ? chatId
+      : (chatId?._serialized || (typeof chatId?.id === 'string' ? chatId.id : String(chatId || '')));
+
+  if (!chatIdStr || chatIdStr === '[object Object]') {
+    return [];
+  }
+
   const params = new URLSearchParams();
   params.set('limit', String(options.limit ?? 50));
+  if (typeof options.offset === 'number') params.set('offset', String(options.offset));
   params.set('downloadMedia', String(options.downloadMedia ?? false));
+  if (typeof options.filterTimestampGte === 'number') {
+    params.set('filter.timestamp.gte', String(options.filterTimestampGte));
+  }
+  if (typeof options.filterTimestampLte === 'number') {
+    params.set('filter.timestamp.lte', String(options.filterTimestampLte));
+  }
+  if (typeof options.filterFromMe === 'boolean') {
+    params.set('filter.fromMe', String(options.filterFromMe));
+  }
 
-  const encodedChat = encodeURIComponent(chatId);
+  const encodedChat = encodeURIComponent(chatIdStr);
   const result = await wahaFetch<WahaRawMessage[]>(
     config,
     `/api/${encodeURIComponent(config.session)}/chats/${encodedChat}/messages?${params.toString()}`
