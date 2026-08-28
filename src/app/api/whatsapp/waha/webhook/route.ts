@@ -52,8 +52,8 @@ export async function POST(request: Request) {
     .maybeSingle()
 
   if (configError || !config) {
-    console.error('[waha-webhook] no config for session:', sessionName, configError?.message)
-    return NextResponse.json({ status: 'ignored', reason: 'no_config' })
+    console.info('[waha-webhook] ignored event for unconfigured session:', sessionName)
+    return NextResponse.json({ status: 'ignored', reason: 'unconfigured_session' })
   }
 
   // 2. Validate cryptographic signature (HMAC-SHA512 / SHA256)
@@ -83,13 +83,31 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Invalid signature' }, { status: 401 })
   }
 
-  // 3. Normalize inbound event
+  // 3. Handle session.status lifecycle events directly
+  if (body.event === 'session.status') {
+    const payload = asRecord(body.payload ?? body)
+    const rawStatus = str(payload.status) ?? str(body.status) ?? ''
+    const isConnected = rawStatus.toUpperCase() === 'WORKING'
+
+    await supabaseAdmin()
+      .from('whatsapp_config')
+      .update({
+        status: isConnected ? 'connected' : 'disconnected',
+        connected_at: isConnected ? new Date().toISOString() : null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', config.id)
+
+    return NextResponse.json({ status: 'handled', event: 'session.status', session_status: rawStatus })
+  }
+
+  // 4. Normalize inbound event
   const event = normalizeWahaInbound(body, config.account_id)
   if (!event || event.type === 'unknown') {
     return NextResponse.json({ status: 'ignored', reason: 'unknown_or_empty_event' })
   }
 
-  // 4. Durably enqueue event before responding HTTP 200
+  // 5. Durably enqueue event before responding HTTP 200
   let enqueueResult: { jobId: string; messageId?: number }
   try {
     enqueueResult = await enqueueWhatsAppInboundEvent(event, { db: supabaseAdmin() })

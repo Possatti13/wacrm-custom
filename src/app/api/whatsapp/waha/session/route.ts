@@ -60,6 +60,8 @@ async function loadWahaConfig() {
   }
 
   return {
+    supabase,
+    accountId,
     config: {
       baseUrl: config.waha_base_url as string,
       apiKey,
@@ -74,7 +76,21 @@ export async function GET() {
 
   try {
     const session = await getWahaSession(loaded.config)
-    return NextResponse.json({ provider: 'waha', connected: session.status === 'WORKING', session })
+    const isConnected = session.status === 'WORKING'
+    
+    // Sync database status if connected
+    if (isConnected) {
+      await loaded.supabase
+        .from('whatsapp_config')
+        .update({
+          status: 'connected',
+          connected_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        })
+        .eq('account_id', loaded.accountId)
+    }
+
+    return NextResponse.json({ provider: 'waha', connected: isConnected, session })
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown WAHA error'
     console.error('[waha/session] status failed:', message)
@@ -88,7 +104,20 @@ export async function POST() {
 
   try {
     const session = await startWahaSession(loaded.config)
-    return NextResponse.json({ provider: 'waha', connected: session.status === 'WORKING', session })
+    const isConnected = session.status === 'WORKING'
+
+    if (isConnected) {
+      await loaded.supabase
+        .from('whatsapp_config')
+        .update({
+          status: 'connected',
+          connected_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        })
+        .eq('account_id', loaded.accountId)
+    }
+
+    return NextResponse.json({ provider: 'waha', connected: isConnected, session })
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown WAHA error'
     console.error('[waha/session] start failed:', message)
@@ -109,7 +138,20 @@ export async function PUT() {
       // Best effort stop
     }
     const session = await startWahaSession(loaded.config)
-    return NextResponse.json({ provider: 'waha', connected: session.status === 'WORKING', session })
+    const isConnected = session.status === 'WORKING'
+
+    if (isConnected) {
+      await loaded.supabase
+        .from('whatsapp_config')
+        .update({
+          status: 'connected',
+          connected_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        })
+        .eq('account_id', loaded.accountId)
+    }
+
+    return NextResponse.json({ provider: 'waha', connected: isConnected, session })
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Failed to restart WAHA session'
     console.error('[waha/session] restart failed:', message)
@@ -124,6 +166,15 @@ export async function DELETE() {
   try {
     const { logoutWahaSession } = await import('@/lib/whatsapp/waha-api')
     await logoutWahaSession(loaded.config)
+
+    await loaded.supabase
+      .from('whatsapp_config')
+      .update({
+        status: 'disconnected',
+        updated_at: new Date().toISOString(),
+      })
+      .eq('account_id', loaded.accountId)
+
     return NextResponse.json({ provider: 'waha', loggedOut: true })
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Failed to logout WAHA session'

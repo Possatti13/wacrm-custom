@@ -207,7 +207,7 @@ export async function configureWahaWebhook(
         webhooks: [
           {
             url: webhookUrl,
-            events: ['message', 'message.any', 'session.status'],
+            events: ['message.any', 'session.status', 'message.ack', 'message.reaction'],
             hmac: key ? { key } : undefined,
           },
         ],

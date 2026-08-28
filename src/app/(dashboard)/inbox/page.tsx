@@ -191,11 +191,31 @@ export default function InboxPage() {
 
       const { data } = await supabase
         .from("whatsapp_config")
-        .select("status")
+        .select("status, provider")
         .eq("account_id", accountId)
         .maybeSingle();
 
-      setWhatsappConnected(data?.status === "connected");
+      if (data?.status === "connected") {
+        setWhatsappConnected(true);
+        return;
+      }
+
+      if (data?.provider === "waha") {
+        try {
+          const res = await fetch("/api/whatsapp/waha/session", { cache: "no-store" });
+          if (res.ok) {
+            const sess = await res.json();
+            if (sess.connected || sess.session?.status === "WORKING") {
+              setWhatsappConnected(true);
+              return;
+            }
+          }
+        } catch {
+          // Ignore live probe failure
+        }
+      }
+
+      setWhatsappConnected(false);
     };
 
     checkConnection();

@@ -1098,7 +1098,13 @@ function WahaExperiencePanel({
               /* QR Code Scan Flow */
               <div className="grid gap-5 md:grid-cols-[280px_1fr] pt-2">
                 <div className="flex min-h-[280px] items-center justify-center rounded-2xl border border-dashed border-border bg-muted/40 p-4 relative">
-                  {qrError ? (
+                  {rawStatus === 'STARTING' || starting ? (
+                    <div className="flex flex-col items-center justify-center p-6 text-center">
+                      <Loader2 className="size-8 animate-spin text-primary mb-3" />
+                      <p className="text-sm font-medium text-foreground">{t('wahaStarting')}</p>
+                      <p className="text-xs text-muted-foreground mt-1">Aguarde a inicialização do motor WhatsApp...</p>
+                    </div>
+                  ) : qrError ? (
                     <div className="text-center p-4">
                       <AlertTriangle className="mx-auto size-10 text-amber-400" />
                       <p className="mt-2 text-sm font-medium text-foreground">{t('wahaQrExpired')}</p>
@@ -1116,7 +1122,7 @@ function WahaExperiencePanel({
                         {t('wahaQrRefresh')}
                       </Button>
                     </div>
-                  ) : (
+                  ) : rawStatus === 'SCAN_QR_CODE' || config !== null ? (
                     <div className="text-center">
                       {/* eslint-disable-next-line @next/next/no-img-element */}
                       <img
@@ -1132,6 +1138,11 @@ function WahaExperiencePanel({
                         <Radio className="size-3 text-emerald-400 animate-pulse" />
                         Atualização em tempo real
                       </p>
+                    </div>
+                  ) : (
+                    <div className="flex flex-col items-center justify-center p-6 text-center">
+                      <QrCode className="size-10 text-muted-foreground mb-2 opacity-50" />
+                      <p className="text-xs text-muted-foreground">Clique em Conectar WhatsApp para gerar o QR Code.</p>
                     </div>
                   )}
                 </div>

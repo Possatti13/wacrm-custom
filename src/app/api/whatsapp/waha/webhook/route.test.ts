@@ -23,13 +23,21 @@ vi.mock('@supabase/supabase-js', () => ({
       return { data: null, error: null }
     }),
     from: (table: string) => {
+      let queriedSession: string | null = null
       const b: Record<string, unknown> = {}
       const chain = () => b
-      for (const m of ['select', 'eq', 'like', 'order', 'limit', 'not', 'insert', 'update']) {
+      for (const m of ['select', 'like', 'order', 'limit', 'not', 'insert', 'update']) {
         b[m] = vi.fn(chain)
       }
+      b.eq = vi.fn((col: string, val: string) => {
+        if (col === 'waha_session_name') queriedSession = val
+        return b
+      })
       b.maybeSingle = vi.fn(async () => {
         if (table === 'whatsapp_config') {
+          if (queriedSession && queriedSession !== 'default') {
+            return { data: null, error: null }
+          }
           return {
             data: {
               account_id: 'acct-1',
@@ -202,5 +210,58 @@ describe('POST /api/whatsapp/waha/webhook', () => {
 
     const res = await POST(req)
     expect(res.status).toBe(401)
+  })
+
+  it('safely handles session.status event and returns 200 without queueing a message job', async () => {
+    const payloadStr = JSON.stringify({
+      event: 'session.status',
+      session: 'default',
+      payload: {
+        status: 'WORKING',
+        name: 'default',
+      },
+    })
+    const signature = crypto.createHmac('sha512', secret).update(payloadStr).digest('hex')
+
+    const req = new Request('http://localhost/api/whatsapp/waha/webhook', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-webhook-hmac': signature,
+      },
+      body: payloadStr,
+    })
+
+    const res = await POST(req)
+    expect(res.status).toBe(200)
+    const json = await res.json()
+    expect(json.status).toBe('handled')
+    expect(json.event).toBe('session.status')
+    expect(json.session_status).toBe('WORKING')
+  })
+
+  it('safely ignores events from unconfigured sessions with 200 to prevent retry storms', async () => {
+    const payloadStr = JSON.stringify({
+      event: 'session.status',
+      session: 'legacy_wacrm_unknown',
+      payload: {
+        status: 'STOPPED',
+        name: 'legacy_wacrm_unknown',
+      },
+    })
+
+    const req = new Request('http://localhost/api/whatsapp/waha/webhook', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: payloadStr,
+    })
+
+    const res = await POST(req)
+    expect(res.status).toBe(200)
+    const json = await res.json()
+    expect(json.status).toBe('ignored')
+    expect(json.reason).toBe('unconfigured_session')
   })
 })

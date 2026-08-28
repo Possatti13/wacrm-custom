@@ -73,14 +73,15 @@ export async function GET() {
     })
 
     if (!upstream.ok) {
+      if (upstream.status === 422) {
+        return NextResponse.json(
+          { connected: true, message: 'Session is already connected (QR not required).' },
+          { status: 200 }
+        )
+      }
       const text = await upstream.text().catch(() => '')
       return NextResponse.json(
-        {
-          error:
-            upstream.status === 422
-              ? 'QR Code indisponível porque a sessão provavelmente já está conectada.'
-              : text || upstream.statusText,
-        },
+        { error: text || upstream.statusText },
         { status: upstream.status },
       )
     }
