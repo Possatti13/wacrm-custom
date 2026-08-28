@@ -126,17 +126,31 @@ export function IntelligenceSidebar({
           .eq("contact_id", contact.id)
           .order("created_at", { ascending: false }),
         supabase
-          .from("contact_tag_assignments")
+          .from("contact_tags")
           .select("id, tag_id, tags(*)")
-          .eq("account_id", accountId)
           .eq("contact_id", contact.id),
       ]);
 
-      if (dealsRes.error) console.error("Failed to load deals:", dealsRes.error);
-      if (dealsRes.data) setDeals(dealsRes.data as unknown as Deal[]);
+      if (dealsRes.error) {
+        console.error("[intelligence-sidebar] Failed to load deals:", {
+          message: dealsRes.error.message,
+          code: dealsRes.error.code,
+          details: dealsRes.error.details,
+          hint: dealsRes.error.hint,
+        });
+        setDeals([]);
+      } else if (dealsRes.data) {
+        setDeals(dealsRes.data as unknown as Deal[]);
+      }
 
       if (notesRes.error) {
-        console.error("Failed to load contact notes:", notesRes.error);
+        console.error("[intelligence-sidebar] Failed to load contact notes:", {
+          message: notesRes.error.message,
+          code: notesRes.error.code,
+          details: notesRes.error.details,
+          hint: notesRes.error.hint,
+        });
+        setNotes([]);
       } else if (notesRes.data) {
         const rawNotes = notesRes.data as unknown as ContactNote[];
         const userIds = Array.from(
@@ -152,7 +166,10 @@ export function IntelligenceSidebar({
             .in("user_id", userIds);
 
           if (profError) {
-            console.error("Failed to load note author profiles:", profError);
+            console.error("[intelligence-sidebar] Failed to load note author profiles:", {
+              message: profError.message,
+              code: profError.code,
+            });
           } else if (profs) {
             for (const p of profs) {
               if (p.user_id) profileNameMap.set(p.user_id, p.full_name);
@@ -167,8 +184,15 @@ export function IntelligenceSidebar({
         setNotes(enrichedNotes as ContactNote[]);
       }
 
-      if (tagsRes.error) console.error("Failed to load tags:", tagsRes.error);
-      if (tagsRes.data) {
+      if (tagsRes.error) {
+        console.error("[intelligence-sidebar] Failed to load tags:", {
+          message: tagsRes.error.message,
+          code: tagsRes.error.code,
+          details: tagsRes.error.details,
+          hint: tagsRes.error.hint,
+        });
+        setTags([]);
+      } else if (tagsRes.data) {
         interface TagJoinRow {
           id: string;
           tag_id: string;
@@ -182,9 +206,11 @@ export function IntelligenceSidebar({
             contact_tag_id: t.id,
           }));
         setTags(flattened);
+      } else {
+        setTags([]);
       }
     } catch (err) {
-      console.error("Failed to load CRM data:", err);
+      console.error("[intelligence-sidebar] Failed to load CRM data:", err);
     }
   }, [contact, accountId]);
 
@@ -239,7 +265,6 @@ export function IntelligenceSidebar({
           supabase
             .from("messages")
             .select("id, created_at", { count: "exact" })
-            .eq("account_id", accountId)
             .eq("conversation_id", conversationId),
           supabase
             .from("internal_ai_requests")
