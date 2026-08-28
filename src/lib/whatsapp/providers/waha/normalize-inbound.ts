@@ -72,7 +72,7 @@ export function normalizeWahaInbound(
   const idObj = asRecord(data.id)
 
   // 1. Reaction event
-  if (event === 'message.reaction' || payload.reaction) {
+  if (event === 'message.reaction' || (!event && Boolean(payload.reaction))) {
     const reactionObj = asRecord(payload.reaction)
     const rawFrom = str(payload.from) ?? str(data.from) ?? str(idObj.remote) ?? ''
     return {
@@ -87,8 +87,14 @@ export function normalizeWahaInbound(
     } as NormalizedInboundReactionEvent
   }
 
-  // 2. Status / ACK event
-  if (event === 'message.ack' || typeof payload.ack === 'number') {
+  // 2. Status / ACK event (ONLY explicit message.ack / message.status events)
+  // ack / ackName exist inside standard message payloads (e.g. ack: 1, ackName: "SERVER")
+  // and MUST NOT cause message events to be normalized as status.
+  if (
+    event === 'message.ack' ||
+    event === 'message.status' ||
+    (!event && typeof payload.ack === 'number' && !payload.body && !payload.fromMe && !payload.from)
+  ) {
     const ack = Number(payload.ack)
     let status: InboundDeliveryStatus = 'sent'
     if (ack === 2) status = 'delivered'
@@ -107,14 +113,20 @@ export function normalizeWahaInbound(
     } as NormalizedInboundStatusEvent
   }
 
-  // 3. Message event
-  if (event === 'message' || event === 'message.any' || !event) {
+  // 3. Message event (event === 'message' || event === 'message.any' || !event / fallback)
+  if (event === 'message' || event === 'message.any' || !event || event.startsWith('message.')) {
     const fromMe = Boolean(payload.fromMe ?? data.fromMe ?? idObj.fromMe)
     const rawContactId = fromMe
       ? (str(idObj.remote) ?? str(payload.chatId) ?? str(data.chatId) ?? str(payload.to) ?? str(data.to) ?? str(payload.from) ?? str(data.from) ?? '')
       : (str(payload.from) ?? str(data.from) ?? str(idObj.remote) ?? str(payload.chatId) ?? str(data.chatId) ?? '')
 
     const phone = normalizePhone(rawContactId.replace(/@.+$/, ''))
+    const toPhone = normalizePhone(
+      (fromMe
+        ? (str(payload.from) ?? str(data.from) ?? '')
+        : (str(payload.to) ?? str(data.to) ?? '')
+      ).replace(/@.+$/, '')
+    )
     const messageId =
       str(payload.id) ??
       str(data.id) ??
@@ -154,6 +166,7 @@ export function normalizeWahaInbound(
       externalMessageId: messageId,
       externalChatId: rawContactId,
       fromPhone: phone,
+      toPhone: toPhone || undefined,
       senderName,
       timestamp: Number.isFinite(timestamp) ? timestamp : Math.floor(Date.now() / 1000),
       fromMe,

@@ -209,6 +209,113 @@ describe('Inbound Event Normalization', () => {
       expect(ev.content.mediaUrl).toBe('http://localhost:3001/media/doc.pdf')
     })
 
+    it('normalizes a real customer inbound message with ack and ackName as type message', () => {
+      const realWahaPayload = {
+        event: 'message',
+        session: 'ciclopes_ec86e41e',
+        payload: {
+          id: 'false_5511999998888@c.us_3EB0C34B876A28D44A',
+          timestamp: 1740698100,
+          from: '5511999998888@c.us',
+          fromMe: false,
+          to: '5511888887777@c.us',
+          body: 'Olá, tudo bem? Quero saber mais.',
+          hasMedia: false,
+          ack: 1,
+          ackName: 'SERVER',
+          _data: {
+            id: {
+              fromMe: false,
+              remote: '5511999998888@c.us',
+              id: '3EB0C34B876A28D44A',
+              _serialized: 'false_5511999998888@c.us_3EB0C34B876A28D44A',
+            },
+            body: 'Olá, tudo bem? Quero saber mais.',
+            type: 'chat',
+            t: 1740698100,
+            notifyName: 'Cliente Real',
+            from: '5511999998888@c.us',
+            to: '5511888887777@c.us',
+            self: 'in',
+            ack: 1,
+            isNewMsg: true,
+          },
+        },
+      }
+
+      const ev = normalizeWahaInbound(realWahaPayload, accountId) as NormalizedInboundMessageEvent
+
+      expect(ev).not.toBeNull()
+      expect(ev.type).toBe('message')
+      expect(ev.provider).toBe('waha')
+      expect(ev.accountId).toBe(accountId)
+      expect(ev.externalMessageId).toBe('false_5511999998888@c.us_3EB0C34B876A28D44A')
+      expect(ev.fromPhone).toBe('5511999998888')
+      expect(ev.toPhone).toBe('5511888887777')
+      expect(ev.fromMe).toBe(false)
+      expect(ev.senderName).toBe('Cliente Real')
+      expect(ev.content.type).toBe('text')
+      expect(ev.content.text).toBe('Olá, tudo bem? Quero saber mais.')
+    })
+
+    it('normalizes a message.any event from customer inbound correctly', () => {
+      const realWahaAnyPayload = {
+        event: 'message.any',
+        session: 'ciclopes_ec86e41e',
+        payload: {
+          id: 'false_5511999998888@c.us_3EB0C34B876A28D44A',
+          timestamp: 1740698100,
+          from: '5511999998888@c.us',
+          fromMe: false,
+          to: '5511888887777@c.us',
+          body: 'Mensagem via message.any',
+          ack: 1,
+          ackName: 'SERVER',
+        },
+      }
+
+      const ev = normalizeWahaInbound(realWahaAnyPayload, accountId) as NormalizedInboundMessageEvent
+
+      expect(ev).not.toBeNull()
+      expect(ev.type).toBe('message')
+      expect(ev.fromMe).toBe(false)
+      expect(ev.fromPhone).toBe('5511999998888')
+      expect(ev.content.text).toBe('Mensagem via message.any')
+    })
+
+    it('normalizes an outbound message sent from physical device (fromMe=true)', () => {
+      const outboundPayload = {
+        event: 'message.any',
+        session: 'ciclopes_ec86e41e',
+        payload: {
+          id: 'true_5511999998888@c.us_3EB099999999',
+          timestamp: 1740698150,
+          from: '5511888887777@c.us',
+          fromMe: true,
+          to: '5511999998888@c.us',
+          body: 'Resposta enviada direto do WhatsApp do celular',
+          ack: 1,
+          ackName: 'SERVER',
+          _data: {
+            id: {
+              fromMe: true,
+              remote: '5511999998888@c.us',
+              id: '3EB099999999',
+              _serialized: 'true_5511999998888@c.us_3EB099999999',
+            },
+          },
+        },
+      }
+
+      const ev = normalizeWahaInbound(outboundPayload, accountId) as NormalizedInboundMessageEvent
+
+      expect(ev).not.toBeNull()
+      expect(ev.type).toBe('message')
+      expect(ev.fromMe).toBe(true)
+      expect(ev.fromPhone).toBe('5511999998888')
+      expect(ev.content.text).toBe('Resposta enviada direto do WhatsApp do celular')
+    })
+
     it('normalizes an ack status update from WAHA', () => {
       const wahaPayload = {
         event: 'message.ack',
