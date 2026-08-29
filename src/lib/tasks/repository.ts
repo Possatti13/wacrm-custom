@@ -9,6 +9,8 @@ import type {
   NoNextActionLeadItem,
   ForgottenLeadItem,
 } from '@/types/tasks';
+import { COMMERCIAL_THRESHOLDS } from './thresholds';
+import { sanitizeTimezone } from './validation';
 
 /**
  * Enriches tasks with assigned user profile data scoped strictly to the current account.
@@ -219,6 +221,11 @@ export async function updateTask(
   taskId: string,
   updates: UpdateTaskInput
 ): Promise<Task> {
+  // If status is transitioning to completed and db.rpc exists, delegate to canonical atomic RPC
+  if (updates.status === 'completed' && typeof db.rpc === 'function') {
+    return completeFollowup(db, accountId, taskId, updates.completed_by_user_id);
+  }
+
   const payload: Record<string, unknown> = {
     updated_at: new Date().toISOString(),
   };
@@ -232,15 +239,10 @@ export async function updateTask(
     payload.status = updates.status;
     if (updates.status === 'completed' && updates.completed_at === undefined) {
       payload.completed_at = new Date().toISOString();
-    } else if (updates.status !== 'completed') {
-      payload.completed_at = null;
-      payload.completed_by_user_id = null;
     }
   }
   if (updates.due_at !== undefined) payload.due_at = updates.due_at;
   if (updates.assigned_user_id !== undefined) payload.assigned_user_id = updates.assigned_user_id;
-  if (updates.completed_at !== undefined) payload.completed_at = updates.completed_at;
-  if (updates.completed_by_user_id !== undefined) payload.completed_by_user_id = updates.completed_by_user_id;
 
   const { data, error } = await db
     .from('tasks')
@@ -267,7 +269,6 @@ export async function snoozeFollowup(
   taskId: string,
   input: SnoozeTaskInput
 ): Promise<Task> {
-  // Try atomic stored procedure first
   const { data: rpcData, error: rpcError } = await db.rpc('snooze_followup_atomic', {
     p_account_id: accountId,
     p_task_id: taskId,
@@ -275,35 +276,13 @@ export async function snoozeFollowup(
     p_reason: input.reason || null,
   });
 
-  if (!rpcError && rpcData?.success) {
-    const updated = await getTaskById(db, accountId, taskId);
-    if (updated) return updated;
+  if (rpcError) {
+    throw new Error(`snoozeFollowup failed: ${rpcError.message}`);
   }
 
-  // Fallback direct update
-  const existing = await getTaskById(db, accountId, taskId);
-  if (!existing) throw new Error('Task not found');
-
-  const { data, error } = await db
-    .from('tasks')
-    .update({
-      snoozed_until: input.snooze_until,
-      snooze_count: (existing.snooze_count || 0) + 1,
-      snooze_reason: input.reason || existing.snooze_reason || null,
-      original_due_at: existing.original_due_at || existing.due_at || null,
-      updated_at: new Date().toISOString(),
-    })
-    .eq('account_id', accountId)
-    .eq('id', taskId)
-    .select(`
-      *,
-      contact:contacts(id, name, phone, avatar_url)
-    `)
-    .single();
-
-  if (error) throw new Error(`snoozeFollowup failed: ${error.message}`);
-  const [enriched] = await attachTaskProfiles(db, accountId, [data]);
-  return enriched;
+  const updated = await getTaskById(db, accountId, taskId);
+  if (!updated) throw new Error('Task not found after snooze');
+  return updated;
 }
 
 export async function completeFollowup(
@@ -318,31 +297,13 @@ export async function completeFollowup(
     p_completed_by: completedByUserId || null,
   });
 
-  if (!rpcError && rpcData?.success) {
-    const updated = await getTaskById(db, accountId, taskId);
-    if (updated) return updated;
+  if (rpcError) {
+    throw new Error(`completeFollowup failed: ${rpcError.message}`);
   }
 
-  // Fallback direct update
-  const { data, error } = await db
-    .from('tasks')
-    .update({
-      status: 'completed',
-      completed_at: new Date().toISOString(),
-      completed_by_user_id: completedByUserId || null,
-      updated_at: new Date().toISOString(),
-    })
-    .eq('account_id', accountId)
-    .eq('id', taskId)
-    .select(`
-      *,
-      contact:contacts(id, name, phone, avatar_url)
-    `)
-    .single();
-
-  if (error) throw new Error(`completeFollowup failed: ${error.message}`);
-  const [enriched] = await attachTaskProfiles(db, accountId, [data]);
-  return enriched;
+  const updated = await getTaskById(db, accountId, taskId);
+  if (!updated) throw new Error('Task not found after complete');
+  return updated;
 }
 
 export async function deleteTask(
@@ -464,7 +425,7 @@ export async function getCockpitFollowups(
     });
     return {
       total: fallbackTasks.length,
-      timezone: 'America/Sao_Paulo',
+      timezone: 'UTC',
       view: options.view || 'today',
       items: fallbackTasks,
     };
@@ -475,7 +436,7 @@ export async function getCockpitFollowups(
 
   return {
     total: Number(data.total || 0),
-    timezone: data.timezone || 'America/Sao_Paulo',
+    timezone: sanitizeTimezone(data.timezone, 'UTC'),
     view: data.view || options.view || 'today',
     items: enriched,
   };
@@ -491,6 +452,8 @@ export async function getLeadsWithoutNextAction(
     assigned_user_id?: string | null;
     limit?: number;
     offset?: number;
+    min_lead_score?: number;
+    max_conversation_days?: number;
   }
 ): Promise<{ total: number; items: NoNextActionLeadItem[] }> {
   const { data, error } = await db.rpc('get_leads_without_next_action', {
@@ -498,6 +461,8 @@ export async function getLeadsWithoutNextAction(
     p_assigned_user_id: options?.assigned_user_id || null,
     p_limit: options?.limit || 50,
     p_offset: options?.offset || 0,
+    p_min_lead_score: options?.min_lead_score ?? COMMERCIAL_THRESHOLDS.NO_NEXT_ACTION.DEFAULT_MIN_LEAD_SCORE,
+    p_max_conversation_days: options?.max_conversation_days ?? COMMERCIAL_THRESHOLDS.NO_NEXT_ACTION.DEFAULT_MAX_CONVERSATION_INACTIVE_DAYS,
   });
 
   if (error || !data) {
@@ -521,23 +486,28 @@ export async function getForgottenLeads(
     inactive_hours?: number;
     limit?: number;
     offset?: number;
+    min_lead_score?: number;
   }
 ): Promise<{ total: number; inactive_threshold_hours: number; items: ForgottenLeadItem[] }> {
+  const inactiveHours = options?.inactive_hours ?? COMMERCIAL_THRESHOLDS.FORGOTTEN_LEADS.DEFAULT_INACTIVE_HOURS;
+  const minScore = options?.min_lead_score ?? COMMERCIAL_THRESHOLDS.FORGOTTEN_LEADS.DEFAULT_MIN_LEAD_SCORE;
+
   const { data, error } = await db.rpc('get_forgotten_leads', {
     p_account_id: accountId,
     p_assigned_user_id: options?.assigned_user_id || null,
-    p_inactive_hours: options?.inactive_hours || 72,
+    p_inactive_hours: inactiveHours,
     p_limit: options?.limit || 50,
     p_offset: options?.offset || 0,
+    p_min_lead_score: minScore,
   });
 
   if (error || !data) {
-    return { total: 0, inactive_threshold_hours: 72, items: [] };
+    return { total: 0, inactive_threshold_hours: inactiveHours, items: [] };
   }
 
   return {
     total: Number(data.total || 0),
-    inactive_threshold_hours: Number(data.inactive_threshold_hours || 72),
+    inactive_threshold_hours: Number(data.inactive_threshold_hours || inactiveHours),
     items: Array.isArray(data.items) ? data.items : [],
   };
 }
