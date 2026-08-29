@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   matchesContactFilters,
+  matchesSellerVisibility,
   normalizeConversation,
 } from "./conversations";
 import type { Conversation } from "@/types";
@@ -143,3 +144,63 @@ describe("normalizeConversation", () => {
     expect(normalizeConversation(raw).contact).toBeNull();
   });
 });
+
+describe("matchesSellerVisibility", () => {
+  const convMine: Conversation = {
+    id: "c1",
+    user_id: "u1",
+    contact_id: "ct1",
+    status: "open",
+    assigned_agent_id: "seller_123",
+    unread_count: 0,
+    created_at: "",
+    updated_at: "",
+  };
+
+  const convOther: Conversation = {
+    id: "c2",
+    user_id: "u1",
+    contact_id: "ct2",
+    status: "open",
+    assigned_agent_id: "seller_999",
+    unread_count: 0,
+    created_at: "",
+    updated_at: "",
+  };
+
+  const convUnassigned: Conversation = {
+    id: "c3",
+    user_id: "u1",
+    contact_id: "ct3",
+    status: "open",
+    assigned_agent_id: undefined,
+    unread_count: 0,
+    created_at: "",
+    updated_at: "",
+  };
+
+  it("allows owner and admin to see all conversations regardless of policy", () => {
+    expect(matchesSellerVisibility(convOther, "owner", "seller_123", "assigned_only")).toBe(true);
+    expect(matchesSellerVisibility(convOther, "admin", "seller_123", "assigned_only")).toBe(true);
+    expect(matchesSellerVisibility(convUnassigned, "admin", "seller_123", "assigned_only")).toBe(true);
+  });
+
+  it("allows agents to see all conversations when policy is 'all'", () => {
+    expect(matchesSellerVisibility(convMine, "agent", "seller_123", "all")).toBe(true);
+    expect(matchesSellerVisibility(convOther, "agent", "seller_123", "all")).toBe(true);
+    expect(matchesSellerVisibility(convUnassigned, "agent", "seller_123", "all")).toBe(true);
+  });
+
+  it("filters for 'assigned_and_unassigned' policy", () => {
+    expect(matchesSellerVisibility(convMine, "agent", "seller_123", "assigned_and_unassigned")).toBe(true);
+    expect(matchesSellerVisibility(convUnassigned, "agent", "seller_123", "assigned_and_unassigned")).toBe(true);
+    expect(matchesSellerVisibility(convOther, "agent", "seller_123", "assigned_and_unassigned")).toBe(false);
+  });
+
+  it("filters for 'assigned_only' policy", () => {
+    expect(matchesSellerVisibility(convMine, "agent", "seller_123", "assigned_only")).toBe(true);
+    expect(matchesSellerVisibility(convUnassigned, "agent", "seller_123", "assigned_only")).toBe(false);
+    expect(matchesSellerVisibility(convOther, "agent", "seller_123", "assigned_only")).toBe(false);
+  });
+});
+

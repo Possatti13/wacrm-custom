@@ -79,6 +79,8 @@ export interface SendMessageParams {
   /** Structured payload for `messageType === 'interactive'`. */
   interactivePayload?: InteractiveMessagePayload | null;
   replyToMessageId?: string | null;
+  /** Authenticated user who authored this outbound message (CRM operator). */
+  senderUserId?: string | null;
 }
 
 export interface SendMessageResult {
@@ -498,6 +500,7 @@ export async function sendMessageToConversation(
     .insert({
       conversation_id: conversationId,
       sender_type: 'agent',
+      sender_id: params.senderUserId ?? null,
       content_type: messageType,
       content_text: displayText,
       media_url: mediaUrl || null,

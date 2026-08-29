@@ -375,5 +375,118 @@ describe('sendMessageToConversation — Provider Routing & WhatsApp LID', () => 
       status: 400,
     });
   });
+
+  it('persists sender_id from senderUserId on successful send', async () => {
+    let insertedPayload: any = null;
+
+    const mockDb: any = {
+      from: vi.fn((table: string) => {
+        if (table === 'conversations') {
+          return {
+            select: () => ({
+              eq: () => ({
+                eq: () => ({
+                  single: async () => ({
+                    data: {
+                      id: 'conv-1',
+                      account_id: 'acct-1',
+                      contact: {
+                        id: 'contact-1',
+                        phone: '5511999999999',
+                        name: 'Test Contact',
+                      },
+                    },
+                    error: null,
+                  }),
+                }),
+              }),
+            }),
+            update: () => ({
+              eq: async () => ({ data: null, error: null }),
+            }),
+          };
+        }
+        if (table === 'whatsapp_config') {
+          return {
+            select: () => ({
+              eq: () => ({
+                single: async () => ({
+                  data: {
+                    id: 'wcfg-1',
+                    account_id: 'acct-1',
+                    provider_type: 'waha',
+                    access_token: encrypt('secret-token'),
+                    waha_api_url: 'http://waha.local',
+                    waha_session_name: 'test_session',
+                  },
+                  error: null,
+                }),
+              }),
+            }),
+          };
+        }
+        if (table === 'messages') {
+          return {
+            insert: (payload: any) => {
+              insertedPayload = payload;
+              return {
+                select: () => ({
+                  single: async () => ({
+                    data: { id: 'msg-saved-1', ...payload },
+                    error: null,
+                  }),
+                }),
+              };
+            },
+          };
+        }
+        if (table === 'flow_runs') {
+          return {
+            update: () => ({
+              eq: () => ({
+                eq: () => ({
+                  eq: async () => ({ data: null, error: null }),
+                }),
+              }),
+            }),
+          };
+        }
+        return {};
+      }),
+    };
+
+    const factory = await import('./providers/factory');
+    vi.spyOn(factory, 'getWhatsAppProvider').mockReturnValue({
+      type: 'waha',
+      getCapabilities: () => ({
+        sendText: true,
+        sendImage: true,
+        sendDocument: true,
+        sendAudio: true,
+        sendVideo: true,
+        templates: false,
+        interactiveMessages: false,
+        reactions: false,
+        qrCode: true,
+        sessionLifecycle: true,
+      }),
+      sendText: vi.fn().mockResolvedValue({ messageId: 'wa-msg-1' }),
+      sendMedia: vi.fn(),
+      getStatus: vi.fn(),
+    } as any);
+
+    const result = await sendMessageToConversation(mockDb as SupabaseClient, 'acct-1', {
+      conversationId: 'conv-1',
+      messageType: 'text',
+      contentText: 'Olá do operador',
+      senderUserId: 'user-seller-123',
+    });
+
+    expect(result.messageId).toBe('msg-saved-1');
+    expect(insertedPayload).not.toBeNull();
+    expect(insertedPayload.sender_id).toBe('user-seller-123');
+    expect(insertedPayload.sender_type).toBe('agent');
+  });
 });
+
 

@@ -82,3 +82,38 @@ export function matchesContactFilters(
 
   return true;
 }
+
+/**
+ * Filter conversations based on the tenant's seller visibility policy.
+ * OWNER and ADMIN (managers) always have visibility over all conversations.
+ * AGENT (sellers) follow the configured policy ('all', 'assigned_and_unassigned', 'assigned_only').
+ */
+export function matchesSellerVisibility(
+  conversation: Conversation,
+  userRole?: string | null,
+  userId?: string | null,
+  visibilityPolicy?: 'all' | 'assigned_and_unassigned' | 'assigned_only' | null
+): boolean {
+  if (!userRole || userRole === 'owner' || userRole === 'admin') {
+    return true;
+  }
+
+  const policy = visibilityPolicy || 'all';
+  if (policy === 'all') {
+    return true;
+  }
+
+  const isAssignedToMe = Boolean(userId && conversation.assigned_agent_id === userId);
+  const isUnassigned = !conversation.assigned_agent_id;
+
+  if (policy === 'assigned_and_unassigned') {
+    return isAssignedToMe || isUnassigned;
+  }
+
+  if (policy === 'assigned_only') {
+    return isAssignedToMe;
+  }
+
+  return true;
+}
+

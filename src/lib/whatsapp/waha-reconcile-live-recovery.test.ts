@@ -29,7 +29,7 @@ describe('WAHA Real Recovery Test — Staging Invariant', () => {
     const { data: config } = await db
       .from('whatsapp_config')
       .select('account_id, waha_session_name')
-      .eq('provider', 'waha')
+      .eq('provider_type', 'waha')
       .maybeSingle()
 
     if (!config) {

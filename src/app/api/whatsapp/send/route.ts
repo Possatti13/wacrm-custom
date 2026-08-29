@@ -174,6 +174,7 @@ export async function POST(request: Request) {
     try {
       const result = await sendMessageToConversation(supabase, accountId, {
         conversationId,
+        senderUserId: user.id,
         messageType: message_type,
         contentText: content_text,
         mediaUrl: media_url,

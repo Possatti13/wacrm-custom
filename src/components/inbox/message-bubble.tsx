@@ -27,6 +27,7 @@ interface MessageBubbleProps {
   reply?: { authorLabel: string; preview: string } | null;
   reactions?: MessageReaction[];
   currentUserId?: string;
+  senderLabel?: string | null;
   onToggleReaction?: (emoji: string) => void;
 }
 
@@ -263,6 +264,7 @@ export function MessageBubble({
   reply,
   reactions,
   currentUserId,
+  senderLabel,
   onToggleReaction,
 }: MessageBubbleProps) {
   const t = useTranslations("Inbox.bubble");
@@ -301,6 +303,14 @@ export function MessageBubble({
             isAgent ? "justify-end" : "justify-start",
           )}
         >
+          {isAgent && senderLabel && (
+            <span
+              className="text-[9px] font-medium text-primary-foreground/80 mr-1 max-w-[120px] truncate"
+              title={`Enviado por ${senderLabel}`}
+            >
+              {senderLabel}
+            </span>
+          )}
           {/* AI badge — only on replies the auto-reply bot generated
               (always outbound, so it sits on the primary fill). Lets
               agents tell an AI reply from their own / a Flow's at a

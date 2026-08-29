@@ -5,11 +5,15 @@ import { createClient } from "@/lib/supabase/client";
 import {
   CONVERSATION_SELECT,
   matchesContactFilters,
+  matchesSellerVisibility,
   normalizeConversations,
 } from "@/lib/inbox/conversations";
+import { useAuth } from "@/hooks/use-auth";
+import { fetchAccountMembers } from "@/lib/account/members";
+import type { AccountMember } from "@/types";
 import { cn } from "@/lib/utils";
 import type { Conversation, ConversationStatus, Tag } from "@/types";
-import { Search, ChevronDown, X } from "lucide-react";
+import { Search, ChevronDown, X, User } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import { useTranslations } from "next-intl";
 import { Input } from "@/components/ui/input";
@@ -55,6 +59,7 @@ export function ConversationList({
   resyncToken = 0,
 }: ConversationListProps) {
   const t = useTranslations("Inbox.conversationList");
+  const { user, accountRole, accountId } = useAuth();
   
   const FILTER_OPTIONS: { label: string; value: InboxFilter }[] = useMemo(() => [
     { label: t("filterAll"), value: "all" },
@@ -67,6 +72,9 @@ export function ConversationList({
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<InboxFilter>("all");
   const [activeView, setActiveView] = useState<InboxViewType>("all");
+  const [assignmentFilter, setAssignmentFilter] = useState<"all" | "mine" | "unassigned">("all");
+  const [members, setMembers] = useState<AccountMember[]>([]);
+  const [sellerVisibility, setSellerVisibility] = useState<"all" | "assigned_and_unassigned" | "assigned_only">("all");
   const [loading, setLoading] = useState(true);
   // Contact-based filters (issue #272). Tags use OR logic (a conversation
   // matches if its contact carries any selected tag), consistent with
@@ -75,18 +83,36 @@ export function ConversationList({
   const [selectedTagIds, setSelectedTagIds] = useState<string[]>([]);
   const [selectedCompany, setSelectedCompany] = useState<string | null>(null);
 
-  // Keep the latest callback in a ref so the fetch effect below can
-  // have a stable, empty-dep identity. Previously the fetch useCallback
-  // depended on `onConversationsLoaded`, which depends on the parent's
-  // `deepLinkConvId` — so every URL change (including one the parent
-  // triggered via router.replace after a click) caused a fresh
-  // conversations fetch. That extra refetch was the trigger for the
-  // deep-link auto-select running a second time and wiping the active
-  // thread's messages.
-  // Mutation lives in an effect (not render) per React 19's refs rule;
-  // the fetch runs once on mount so it's fine to read the slightly
-  // older value — the very next render updates the ref for any
-  // subsequent async completion.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const mems = await fetchAccountMembers();
+      if (!cancelled) setMembers(mems);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!accountId) return;
+    const supabase = createClient();
+    let cancelled = false;
+    (async () => {
+      const { data } = await supabase
+        .from("accounts")
+        .select("seller_conversation_visibility")
+        .eq("id", accountId)
+        .maybeSingle();
+      if (!cancelled && data?.seller_conversation_visibility) {
+        setSellerVisibility(data.seller_conversation_visibility as "all" | "assigned_and_unassigned" | "assigned_only");
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [accountId]);
+
   const onConversationsLoadedRef = useRef(onConversationsLoaded);
   useEffect(() => {
     onConversationsLoadedRef.current = onConversationsLoaded;
@@ -190,8 +216,28 @@ export function ConversationList({
     };
   }, [conversations]);
 
+  const membersMap = useMemo(() => {
+    const map = new Map<string, AccountMember>();
+    for (const m of members) {
+      map.set(m.user_id, m);
+    }
+    return map;
+  }, [members]);
+
   const filtered = useMemo(() => {
     let result = conversations;
+
+    // 1. Tenant seller visibility policy
+    result = result.filter((c) =>
+      matchesSellerVisibility(c, accountRole, user?.id, sellerVisibility)
+    );
+
+    // 2. Assignment filter (All / Mine / Unassigned)
+    if (assignmentFilter === "mine" && user?.id) {
+      result = result.filter((c) => c.assigned_agent_id === user.id);
+    } else if (assignmentFilter === "unassigned") {
+      result = result.filter((c) => !c.assigned_agent_id);
+    }
 
     if (activeView === "priority") {
       result = result.filter((c) => {
@@ -234,7 +280,18 @@ export function ConversationList({
     }
 
     return result;
-  }, [conversations, activeView, filter, search, selectedTagIds, selectedCompany]);
+  }, [
+    conversations,
+    activeView,
+    filter,
+    assignmentFilter,
+    sellerVisibility,
+    accountRole,
+    user?.id,
+    search,
+    selectedTagIds,
+    selectedCompany,
+  ]);
 
   const toggleTag = useCallback((id: string) => {
     setSelectedTagIds((prev) =>
@@ -289,7 +346,44 @@ export function ConversationList({
           />
         </div>
 
-        <div className="flex flex-wrap items-center gap-1">
+        <div className="flex flex-wrap items-center gap-1.5">
+          {/* Assignment Toggle */}
+          <div className="flex items-center rounded-md bg-muted/80 p-0.5 text-xs">
+            <button
+              onClick={() => setAssignmentFilter("all")}
+              className={cn(
+                "px-2 py-0.5 rounded text-[11px] font-medium transition-colors",
+                assignmentFilter === "all"
+                  ? "bg-background text-foreground shadow-xs"
+                  : "text-muted-foreground hover:text-foreground"
+              )}
+            >
+              Todas
+            </button>
+            <button
+              onClick={() => setAssignmentFilter("mine")}
+              className={cn(
+                "px-2 py-0.5 rounded text-[11px] font-medium transition-colors",
+                assignmentFilter === "mine"
+                  ? "bg-background text-foreground shadow-xs"
+                  : "text-muted-foreground hover:text-foreground"
+              )}
+            >
+              Minhas
+            </button>
+            <button
+              onClick={() => setAssignmentFilter("unassigned")}
+              className={cn(
+                "px-2 py-0.5 rounded text-[11px] font-medium transition-colors",
+                assignmentFilter === "unassigned"
+                  ? "bg-background text-foreground shadow-xs"
+                  : "text-muted-foreground hover:text-foreground"
+              )}
+            >
+              Sem Responsável
+            </button>
+          </div>
+
           <DropdownMenu>
             <DropdownMenuTrigger className="inline-flex items-center justify-center h-7 gap-1 px-2 text-xs text-muted-foreground hover:text-foreground rounded-md hover:bg-muted">
                 {activeFilter?.label ?? t("filterAll")}
@@ -328,7 +422,7 @@ export function ConversationList({
               >
                 {t("tags")}
                 {selectedTagIds.length > 0 && (
-                  <span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-bold text-primary-foreground">
+                  <span className="ml-1 rounded-full bg-primary/20 px-1 text-[10px] font-bold text-primary">
                     {selectedTagIds.length}
                   </span>
                 )}
@@ -336,22 +430,20 @@ export function ConversationList({
               </DropdownMenuTrigger>
               <DropdownMenuContent
                 align="start"
-                className="max-h-64 w-56 border-border bg-popover"
+                className="max-h-60 w-48 overflow-y-auto border-border bg-popover"
               >
-                {tags.map((t) => (
+                {tags.map((tag) => (
                   <DropdownMenuCheckboxItem
-                    key={t.id}
-                    checked={selectedTagIds.includes(t.id)}
-                    onCheckedChange={() => toggleTag(t.id)}
-                    className="text-sm text-popover-foreground"
+                    key={tag.id}
+                    checked={selectedTagIds.includes(tag.id)}
+                    onCheckedChange={() => toggleTag(tag.id)}
+                    className="text-sm"
                   >
-                    <span className="flex items-center gap-2">
-                      <span
-                        className="h-2 w-2 shrink-0 rounded-full"
-                        style={{ backgroundColor: t.color }}
-                      />
-                      <span className="truncate">{t.name}</span>
-                    </span>
+                    <span
+                      className="mr-2 h-2 w-2 rounded-full"
+                      style={{ backgroundColor: tag.color ?? "var(--muted-foreground)" }}
+                    />
+                    <span className="truncate">{tag.name}</span>
                   </DropdownMenuCheckboxItem>
                 ))}
               </DropdownMenuContent>
@@ -362,18 +454,20 @@ export function ConversationList({
             <DropdownMenu>
               <DropdownMenuTrigger
                 className={cn(
-                  "inline-flex max-w-40 items-center justify-center h-7 gap-1 px-2 text-xs rounded-md hover:bg-muted",
-                  selectedCompany
+                  "inline-flex items-center justify-center h-7 gap-1 px-2 text-xs rounded-md hover:bg-muted",
+                  selectedCompany !== null
                     ? "text-primary"
                     : "text-muted-foreground hover:text-foreground"
                 )}
               >
-                <span className="truncate">{selectedCompany ?? t("company")}</span>
-                <ChevronDown className="h-3 w-3 shrink-0" />
+                <span className="max-w-24 truncate">
+                  {selectedCompany ?? t("companies")}
+                </span>
+                <ChevronDown className="h-3 w-3" />
               </DropdownMenuTrigger>
               <DropdownMenuContent
                 align="start"
-                className="max-h-64 w-56 border-border bg-popover"
+                className="max-h-60 w-48 overflow-y-auto border-border bg-popover"
               >
                 <DropdownMenuItem
                   onClick={() => setSelectedCompany(null)}
@@ -464,6 +558,7 @@ export function ConversationList({
               <ConversationItem
                 key={conv.id}
                 conversation={conv}
+                assignedMember={conv.assigned_agent_id ? membersMap.get(conv.assigned_agent_id) : null}
                 isActive={conv.id === activeConversationId}
                 onSelect={handleSelect}
                 t={t}
@@ -478,6 +573,7 @@ export function ConversationList({
 
 interface ConversationItemProps {
   conversation: Conversation;
+  assignedMember?: AccountMember | null;
   isActive: boolean;
   onSelect: (conversation: Conversation) => void;
   t: ReturnType<typeof useTranslations>;
@@ -485,6 +581,7 @@ interface ConversationItemProps {
 
 function ConversationItem({
   conversation,
+  assignedMember,
   isActive,
   onSelect,
   t,
@@ -542,35 +639,42 @@ function ConversationItem({
           <span className="shrink-0 text-[10px] text-muted-foreground">{timeAgo}</span>
         </div>
 
-        {/* Commercial Signals Pill Bar */}
-        {(score !== null || intent || urgency === "high") && (
-          <div className="mt-1 flex items-center gap-1.5 flex-wrap">
-            {score !== null && (
-              <span
-                className={cn(
-                  "inline-flex items-center gap-0.5 rounded px-1.5 py-0.2 text-[10px] font-mono font-bold",
-                  isHot
-                    ? "bg-emerald-500/15 text-emerald-600 border border-emerald-500/30"
-                    : isWarm
-                    ? "bg-amber-500/15 text-amber-600 border border-amber-500/30"
-                    : "bg-slate-200 text-slate-700 dark:bg-slate-800 dark:text-slate-300"
-                )}
-              >
-                {isHot ? "🔥" : ""} {score}
-              </span>
-            )}
-            {intent && (
-              <span className="rounded bg-primary/10 px-1.5 py-0.2 text-[10px] font-medium text-primary capitalize">
-                {intent}
-              </span>
-            )}
-            {urgency === "high" && (
-              <span className="rounded bg-rose-500/15 text-rose-600 border border-rose-500/30 px-1 py-0.2 text-[9px] font-bold uppercase">
-                Urgente
-              </span>
-            )}
-          </div>
-        )}
+        {/* Commercial Signals Pill Bar & Assigned Operator */}
+        <div className="mt-1 flex items-center gap-1.5 flex-wrap">
+          {score !== null && (
+            <span
+              className={cn(
+                "inline-flex items-center gap-0.5 rounded px-1.5 py-0.2 text-[10px] font-mono font-bold",
+                isHot
+                  ? "bg-emerald-500/15 text-emerald-600 border border-emerald-500/30"
+                  : isWarm
+                  ? "bg-amber-500/15 text-amber-600 border border-amber-500/30"
+                  : "bg-slate-200 text-slate-700 dark:bg-slate-800 dark:text-slate-300"
+              )}
+            >
+              {isHot ? "🔥" : ""} {score}
+            </span>
+          )}
+          {intent && (
+            <span className="rounded bg-primary/10 px-1.5 py-0.2 text-[10px] font-medium text-primary capitalize">
+              {intent}
+            </span>
+          )}
+          {urgency === "high" && (
+            <span className="rounded bg-rose-500/15 text-rose-600 border border-rose-500/30 px-1 py-0.2 text-[9px] font-bold uppercase">
+              Urgente
+            </span>
+          )}
+          {assignedMember && (
+            <span
+              className="inline-flex items-center gap-0.5 rounded bg-muted/80 px-1.5 py-0.2 text-[10px] text-muted-foreground font-medium max-w-[100px] truncate"
+              title={`Atribuído a ${assignedMember.full_name}`}
+            >
+              <User className="h-2.5 w-2.5 shrink-0" />
+              <span className="truncate">{assignedMember.full_name.split(' ')[0]}</span>
+            </span>
+          )}
+        </div>
 
         <div className="mt-1 flex items-center justify-between gap-2">
           <p className="truncate text-xs text-muted-foreground">

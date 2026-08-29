@@ -57,6 +57,7 @@ export interface Account {
   name: string;
   /** auth.users.id of the immutable owner. */
   owner_user_id: string;
+  seller_conversation_visibility?: 'all' | 'assigned_and_unassigned' | 'assigned_only';
   created_at: string;
   updated_at: string;
 }
@@ -187,6 +188,15 @@ export interface Conversation {
   updated_at: string;
   contact?: Contact;
   /**
+   * Operational metrics for response time & attention tracking (migration 070)
+   */
+  first_customer_message_at?: string | null;
+  first_response_at?: string | null;
+  first_response_duration_seconds?: number | null;
+  last_customer_message_at?: string | null;
+  last_agent_message_at?: string | null;
+  unattended_since?: string | null;
+  /**
    * AI auto-reply state for this thread (migration 029 + 033):
    *  - `ai_autoreply_disabled` — the bot is paused here (a human took
    *    over, or the model handed off). Sticky until re-enabled.
@@ -198,6 +208,32 @@ export interface Conversation {
   ai_autoreply_disabled?: boolean;
   ai_reply_count?: number;
   ai_handoff_summary?: string | null;
+}
+
+// ============================================================
+// Conversation Assignment History (migration 070)
+// ============================================================
+
+export type AssignmentEventType =
+  | 'assigned'
+  | 'reassigned'
+  | 'unassigned'
+  | 'claimed'
+  | 'transferred';
+
+export interface ConversationAssignmentHistory {
+  id: string;
+  account_id: string;
+  conversation_id: string;
+  assigned_by_user_id: string | null;
+  from_user_id: string | null;
+  to_user_id: string | null;
+  event_type: AssignmentEventType;
+  reason: string | null;
+  created_at: string;
+  assigned_by?: { id?: string; full_name: string; email?: string | null; avatar_url?: string | null } | null;
+  from_user?: { id?: string; full_name: string; email?: string | null; avatar_url?: string | null } | null;
+  to_user?: { id?: string; full_name: string; email?: string | null; avatar_url?: string | null } | null;
 }
 
 // ============================================================

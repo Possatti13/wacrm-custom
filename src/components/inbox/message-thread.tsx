@@ -821,24 +821,46 @@ export function MessageThread({
   );
 
   const handleAssignChange = useCallback(
-    async (agentId: string | null) => {
+    async (agentId: string | null, reason?: string) => {
       if (!conversation) return;
 
-      const supabase = createClient();
-      const { error } = await supabase
-        .from("conversations")
-        .update({ assigned_agent_id: agentId })
-        .eq("id", conversation.id);
+      try {
+        const res = await fetch(`/api/conversations/${conversation.id}/assign`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            target_user_id: agentId,
+            reason: reason || null,
+            expected_current_agent_id: conversation.assigned_agent_id ?? null,
+          }),
+        });
 
-      if (error) {
-        console.error("Failed to update assignment:", error);
-        toast.error("Failed to update assignment");
-        return;
+        const data = await res.json().catch(() => ({}));
+
+        if (!res.ok) {
+          if (res.status === 409) {
+            toast.error("Esta conversa foi modificada por outro operador.");
+            onAssignChange(conversation.id, data.current_assigned_agent_id ?? null);
+            return;
+          }
+          toast.error(data.error || "Falha ao atualizar atribuição");
+          return;
+        }
+
+        toast.success(
+          agentId
+            ? agentId === user?.id
+              ? "Você assumiu esta conversa"
+              : "Conversa atribuída"
+            : "Conversa desatribuída"
+        );
+        onAssignChange(conversation.id, agentId);
+      } catch (err) {
+        console.error("Failed to update assignment:", err);
+        toast.error("Erro de conexão ao atualizar atribuição");
       }
-
-      onAssignChange(conversation.id, agentId);
     },
-    [conversation, onAssignChange],
+    [conversation, user?.id, onAssignChange],
   );
 
   // Empty state — same WhatsApp-style doodle background as the active
@@ -1128,6 +1150,9 @@ export function MessageThread({
                       const next = own?.emoji === emoji ? "" : emoji;
                       void postReaction(msg.id, next);
                     };
+                    const senderProfile = msg.sender_id ? profiles.find((p) => p.user_id === msg.sender_id) : null;
+                    const senderLabel = senderProfile?.full_name || (msg.sender_id && msg.sender_id === user?.id ? t("me") : null);
+
                     return (
                       <div id={`msg-${msg.id}`} key={msg.id} className="scroll-mt-6 transition-all duration-300">
                         <MessageActions
@@ -1142,6 +1167,7 @@ export function MessageThread({
                             reply={reply}
                             reactions={msgReactions}
                             currentUserId={user?.id}
+                            senderLabel={senderLabel}
                             onToggleReaction={handlePillToggle}
                           />
                         </MessageActions>
