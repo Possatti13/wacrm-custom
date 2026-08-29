@@ -1,11 +1,17 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
-import type { Task, CreateTaskInput, UpdateTaskInput, TaskFilter } from '@/types/tasks';
+import type {
+  Task,
+  CreateTaskInput,
+  UpdateTaskInput,
+  SnoozeTaskInput,
+  TaskFilter,
+  CockpitView,
+  NoNextActionLeadItem,
+  ForgottenLeadItem,
+} from '@/types/tasks';
 
 /**
  * Enriches tasks with assigned user profile data scoped strictly to the current account.
- * Since `tasks.assigned_user_id` and `tasks.created_by_user_id` reference `auth.users(id)`
- * rather than a direct PostgREST FK to `public.profiles`, we load matching profiles
- * in a tenant-isolated secondary query to avoid PGRST200 schema cache lookup failures.
  */
 async function attachTaskProfiles(
   db: SupabaseClient,
@@ -17,7 +23,7 @@ async function attachTaskProfiles(
   const userIds = Array.from(
     new Set(
       tasks
-        .flatMap((t) => [t.assigned_user_id, t.created_by_user_id])
+        .flatMap((t) => [t.assigned_user_id, t.created_by_user_id, t.completed_by_user_id])
         .filter((id): id is string => typeof id === 'string' && id.trim().length > 0)
     )
   );
@@ -25,6 +31,9 @@ async function attachTaskProfiles(
   if (userIds.length === 0) {
     return tasks.map((t) => ({
       ...t,
+      action_type: (t.action_type as string) || 'other',
+      snooze_count: Number(t.snooze_count || 0),
+      effective_due_at: (t.snoozed_until as string) || (t.due_at as string) || null,
       assigned_user: null,
     })) as unknown as Task[];
   }
@@ -56,6 +65,9 @@ async function attachTaskProfiles(
 
   return tasks.map((t) => ({
     ...t,
+    action_type: (t.action_type as string) || 'other',
+    snooze_count: Number(t.snooze_count || 0),
+    effective_due_at: (t.snoozed_until as string) || (t.due_at as string) || null,
     assigned_user: typeof t.assigned_user_id === 'string' ? profileMap.get(t.assigned_user_id) || null : null,
   })) as unknown as Task[];
 }
@@ -104,6 +116,12 @@ export async function listTasks(
   }
   if (filter?.priority) {
     query = query.eq('priority', filter.priority);
+  }
+  if (filter?.action_type) {
+    query = query.eq('action_type', filter.action_type);
+  }
+  if (filter?.waiting_on) {
+    query = query.eq('waiting_on', filter.waiting_on);
   }
   if (filter?.assigned_user_id) {
     query = query.eq('assigned_user_id', filter.assigned_user_id);
@@ -165,12 +183,15 @@ export async function createTask(
     description: input.description?.trim() || null,
     priority: input.priority || 'medium',
     status: 'pending',
+    action_type: input.action_type || 'other',
+    waiting_on: input.waiting_on || null,
     contact_id: input.contact_id || null,
     conversation_id: input.conversation_id || null,
     deal_id: input.deal_id || null,
     assigned_user_id: input.assigned_user_id || null,
     created_by_user_id: input.created_by_user_id || null,
     due_at: input.due_at || null,
+    original_due_at: input.due_at || null,
     source: input.source || 'manual',
     ai_suggestion_provenance: input.ai_suggestion_provenance || {},
   };
@@ -205,17 +226,21 @@ export async function updateTask(
   if (updates.title !== undefined) payload.title = updates.title.trim();
   if (updates.description !== undefined) payload.description = updates.description?.trim() || null;
   if (updates.priority !== undefined) payload.priority = updates.priority;
+  if (updates.action_type !== undefined) payload.action_type = updates.action_type;
+  if (updates.waiting_on !== undefined) payload.waiting_on = updates.waiting_on;
   if (updates.status !== undefined) {
     payload.status = updates.status;
     if (updates.status === 'completed' && updates.completed_at === undefined) {
       payload.completed_at = new Date().toISOString();
     } else if (updates.status !== 'completed') {
       payload.completed_at = null;
+      payload.completed_by_user_id = null;
     }
   }
   if (updates.due_at !== undefined) payload.due_at = updates.due_at;
   if (updates.assigned_user_id !== undefined) payload.assigned_user_id = updates.assigned_user_id;
   if (updates.completed_at !== undefined) payload.completed_at = updates.completed_at;
+  if (updates.completed_by_user_id !== undefined) payload.completed_by_user_id = updates.completed_by_user_id;
 
   const { data, error } = await db
     .from('tasks')
@@ -236,6 +261,90 @@ export async function updateTask(
   return enriched;
 }
 
+export async function snoozeFollowup(
+  db: SupabaseClient,
+  accountId: string,
+  taskId: string,
+  input: SnoozeTaskInput
+): Promise<Task> {
+  // Try atomic stored procedure first
+  const { data: rpcData, error: rpcError } = await db.rpc('snooze_followup_atomic', {
+    p_account_id: accountId,
+    p_task_id: taskId,
+    p_snooze_until: input.snooze_until,
+    p_reason: input.reason || null,
+  });
+
+  if (!rpcError && rpcData?.success) {
+    const updated = await getTaskById(db, accountId, taskId);
+    if (updated) return updated;
+  }
+
+  // Fallback direct update
+  const existing = await getTaskById(db, accountId, taskId);
+  if (!existing) throw new Error('Task not found');
+
+  const { data, error } = await db
+    .from('tasks')
+    .update({
+      snoozed_until: input.snooze_until,
+      snooze_count: (existing.snooze_count || 0) + 1,
+      snooze_reason: input.reason || existing.snooze_reason || null,
+      original_due_at: existing.original_due_at || existing.due_at || null,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('account_id', accountId)
+    .eq('id', taskId)
+    .select(`
+      *,
+      contact:contacts(id, name, phone, avatar_url)
+    `)
+    .single();
+
+  if (error) throw new Error(`snoozeFollowup failed: ${error.message}`);
+  const [enriched] = await attachTaskProfiles(db, accountId, [data]);
+  return enriched;
+}
+
+export async function completeFollowup(
+  db: SupabaseClient,
+  accountId: string,
+  taskId: string,
+  completedByUserId?: string | null
+): Promise<Task> {
+  const { data: rpcData, error: rpcError } = await db.rpc('complete_followup_atomic', {
+    p_account_id: accountId,
+    p_task_id: taskId,
+    p_completed_by: completedByUserId || null,
+  });
+
+  if (!rpcError && rpcData?.success) {
+    const updated = await getTaskById(db, accountId, taskId);
+    if (updated) return updated;
+  }
+
+  // Fallback direct update
+  const { data, error } = await db
+    .from('tasks')
+    .update({
+      status: 'completed',
+      completed_at: new Date().toISOString(),
+      completed_by_user_id: completedByUserId || null,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('account_id', accountId)
+    .eq('id', taskId)
+    .select(`
+      *,
+      contact:contacts(id, name, phone, avatar_url)
+    `)
+    .single();
+
+  if (error) throw new Error(`completeFollowup failed: ${error.message}`);
+  const [enriched] = await attachTaskProfiles(db, accountId, [data]);
+  return enriched;
+}
+
 export async function deleteTask(
   db: SupabaseClient,
   accountId: string,
@@ -252,4 +361,183 @@ export async function deleteTask(
   }
 
   return true;
+}
+
+/**
+ * Creates a Follow-up task from an AI Suggestion with strict deduplication / idempotency.
+ * If an active task already exists with the same insight_id or matching action text on the conversation,
+ * it returns the existing task rather than creating a duplicate.
+ */
+export async function createFollowupFromAiSuggestion(
+  db: SupabaseClient,
+  accountId: string,
+  input: {
+    contact_id: string;
+    conversation_id?: string | null;
+    action_text: string;
+    action_type?: string;
+    due_at?: string | null;
+    assigned_user_id?: string | null;
+    created_by_user_id?: string | null;
+    insight_id?: string;
+    analysis_run_id?: string;
+  }
+): Promise<{ task: Task; duplicated: boolean }> {
+  // 1. Check for existing active task for the same contact / conversation with same insight_id
+  if (input.insight_id) {
+    const { data: existingByInsight } = await db
+      .from('tasks')
+      .select('id')
+      .eq('account_id', accountId)
+      .eq('contact_id', input.contact_id)
+      .in('status', ['pending', 'in_progress'])
+      .contains('ai_suggestion_provenance', { insight_id: input.insight_id })
+      .maybeSingle();
+
+    if (existingByInsight) {
+      const fullTask = await getTaskById(db, accountId, existingByInsight.id);
+      if (fullTask) return { task: fullTask, duplicated: true };
+    }
+  }
+
+  // 2. Check for duplicate pending task with same title/content on same contact created in last 24h
+  const { data: duplicateTask } = await db
+    .from('tasks')
+    .select('id')
+    .eq('account_id', accountId)
+    .eq('contact_id', input.contact_id)
+    .eq('title', input.action_text.trim())
+    .in('status', ['pending', 'in_progress'])
+    .maybeSingle();
+
+  if (duplicateTask) {
+    const fullTask = await getTaskById(db, accountId, duplicateTask.id);
+    if (fullTask) return { task: fullTask, duplicated: true };
+  }
+
+  // 3. Create fresh task
+  const created = await createTask(db, accountId, {
+    contact_id: input.contact_id,
+    conversation_id: input.conversation_id || null,
+    title: input.action_text.trim(),
+    action_type: (input.action_type as any) || 'recontact',
+    due_at: input.due_at || null,
+    assigned_user_id: input.assigned_user_id || null,
+    created_by_user_id: input.created_by_user_id || null,
+    source: 'intelligence',
+    ai_suggestion_provenance: {
+      insight_id: input.insight_id,
+      analysis_run_id: input.analysis_run_id,
+      suggested_action: input.action_text.trim(),
+    },
+  });
+
+  return { task: created, duplicated: false };
+}
+
+/**
+ * Cockpit Aggregation Query (Server-side RPC)
+ */
+export async function getCockpitFollowups(
+  db: SupabaseClient,
+  accountId: string,
+  options: {
+    assigned_user_id?: string | null;
+    view?: CockpitView;
+    limit?: number;
+    offset?: number;
+  }
+): Promise<{ total: number; timezone: string; view: CockpitView; items: Task[] }> {
+  const { data, error } = await db.rpc('get_followups_cockpit', {
+    p_account_id: accountId,
+    p_assigned_user_id: options.assigned_user_id || null,
+    p_view: options.view || 'today',
+    p_limit: options.limit || 50,
+    p_offset: options.offset || 0,
+  });
+
+  if (error || !data) {
+    // Fallback to client-side listTasks if RPC fails
+    const fallbackTasks = await listTasks(db, accountId, {
+      timeframe: options.view as any,
+      assigned_user_id: options.assigned_user_id,
+    });
+    return {
+      total: fallbackTasks.length,
+      timezone: 'America/Sao_Paulo',
+      view: options.view || 'today',
+      items: fallbackTasks,
+    };
+  }
+
+  const items = Array.isArray(data.items) ? data.items : [];
+  const enriched = await attachTaskProfiles(db, accountId, items);
+
+  return {
+    total: Number(data.total || 0),
+    timezone: data.timezone || 'America/Sao_Paulo',
+    view: data.view || options.view || 'today',
+    items: enriched,
+  };
+}
+
+/**
+ * Leads Without Next Action Query (Server-side RPC)
+ */
+export async function getLeadsWithoutNextAction(
+  db: SupabaseClient,
+  accountId: string,
+  options?: {
+    assigned_user_id?: string | null;
+    limit?: number;
+    offset?: number;
+  }
+): Promise<{ total: number; items: NoNextActionLeadItem[] }> {
+  const { data, error } = await db.rpc('get_leads_without_next_action', {
+    p_account_id: accountId,
+    p_assigned_user_id: options?.assigned_user_id || null,
+    p_limit: options?.limit || 50,
+    p_offset: options?.offset || 0,
+  });
+
+  if (error || !data) {
+    return { total: 0, items: [] };
+  }
+
+  return {
+    total: Number(data.total || 0),
+    items: Array.isArray(data.items) ? data.items : [],
+  };
+}
+
+/**
+ * Forgotten Leads Query (Server-side RPC)
+ */
+export async function getForgottenLeads(
+  db: SupabaseClient,
+  accountId: string,
+  options?: {
+    assigned_user_id?: string | null;
+    inactive_hours?: number;
+    limit?: number;
+    offset?: number;
+  }
+): Promise<{ total: number; inactive_threshold_hours: number; items: ForgottenLeadItem[] }> {
+  const { data, error } = await db.rpc('get_forgotten_leads', {
+    p_account_id: accountId,
+    p_assigned_user_id: options?.assigned_user_id || null,
+    p_inactive_hours: options?.inactive_hours || 72,
+    p_limit: options?.limit || 50,
+    p_offset: options?.offset || 0,
+  });
+
+  if (error || !data) {
+    return { total: 0, inactive_threshold_hours: 72, items: [] };
+  }
+
+  return {
+    total: Number(data.total || 0),
+    inactive_threshold_hours: Number(data.inactive_threshold_hours || 72),
+    items: Array.isArray(data.items) ? data.items : [],
+  };
 }

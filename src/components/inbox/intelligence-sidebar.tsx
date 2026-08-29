@@ -25,15 +25,22 @@ import {
   FileText,
   Lightbulb,
   ShieldAlert,
+  Clock,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { EvidenceDialog } from "./evidence-dialog";
-import { TaskFormDialog } from "@/components/tasks/task-form-dialog";
-import { createTask } from "@/lib/tasks/repository";
-import type { CreateTaskInput } from "@/types/tasks";
+import { CreateFollowupDialog } from "@/components/tasks/create-followup-dialog";
+import { SnoozePopover } from "@/components/tasks/snooze-popover";
+import {
+  createTask,
+  completeFollowup,
+  snoozeFollowup,
+  createFollowupFromAiSuggestion,
+} from "@/lib/tasks/repository";
+import type { CreateTaskInput, Task } from "@/types/tasks";
 import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import { toast } from "sonner";
@@ -99,9 +106,10 @@ export function IntelligenceSidebar({
     useState<ConversationInsightWithEvidence | null>(null);
   const [evidenceDialogOpen, setEvidenceDialogOpen] = useState(false);
 
-  // Task creation from AI suggestion
-  const [taskDialogOpen, setTaskDialogOpen] = useState(false);
-  const [taskActionText, setTaskActionText] = useState("");
+  // Active Follow-up & Creation Dialog
+  const [activeFollowup, setActiveFollowup] = useState<Task | null>(null);
+  const [createDialogOpen, setCreateDialogOpen] = useState(false);
+  const [dialogInitialValues, setDialogInitialValues] = useState<Partial<CreateTaskInput>>({});
 
   // Score breakdown expansion toggle
   const [showScoreBreakdown, setShowScoreBreakdown] = useState(false);
@@ -208,6 +216,22 @@ export function IntelligenceSidebar({
         setTags(flattened);
       } else {
         setTags([]);
+      }
+
+      // Fetch active follow-up for contact
+      const { data: followups } = await supabase
+        .from("tasks")
+        .select("*, contact:contacts(id, name, phone, avatar_url)")
+        .eq("account_id", accountId)
+        .eq("contact_id", contact.id)
+        .in("status", ["pending", "in_progress"])
+        .order("due_at", { ascending: true })
+        .limit(1);
+
+      if (followups && followups.length > 0) {
+        setActiveFollowup(followups[0] as Task);
+      } else {
+        setActiveFollowup(null);
       }
     } catch (err) {
       console.error("[intelligence-sidebar] Failed to load CRM data:", err);
@@ -446,7 +470,56 @@ export function IntelligenceSidebar({
     }
   };
 
-  const handleCreateTask = async (input: CreateTaskInput) => {
+  const handleCompleteFollowup = async (task: Task) => {
+    if (!accountId) return;
+    const supabase = createClient();
+    try {
+      await completeFollowup(supabase, accountId, task.id, user?.id);
+      toast.success("Follow-up concluído com sucesso!");
+      fetchCrmData();
+    } catch (err: any) {
+      toast.error("Erro ao concluir follow-up.");
+    }
+  };
+
+  const handleSnoozeFollowup = async (task: Task, snoozeUntilIso: string, reason?: string) => {
+    if (!accountId) return;
+    const supabase = createClient();
+    try {
+      await snoozeFollowup(supabase, accountId, task.id, {
+        snooze_until: snoozeUntilIso,
+        reason,
+      });
+      toast.success("Follow-up adiado.");
+      fetchCrmData();
+    } catch (err: any) {
+      toast.error("Erro ao adiar follow-up.");
+    }
+  };
+
+  const handleConvertAiSuggestion = async () => {
+    if (!accountId || !contact || !leadProfile?.next_action) return;
+    const supabase = createClient();
+    try {
+      const res = await createFollowupFromAiSuggestion(supabase, accountId, {
+        contact_id: contact.id,
+        conversation_id: conversationId,
+        action_text: leadProfile.next_action,
+        due_at: leadProfile.next_action_due_at || null,
+        created_by_user_id: user?.id,
+      });
+      if (res.duplicated) {
+        toast.info("Esta sugestão já possui um follow-up ativo.");
+      } else {
+        toast.success("Follow-up criado a partir da sugestão!");
+      }
+      fetchCrmData();
+    } catch (err: any) {
+      toast.error("Erro ao converter sugestão.");
+    }
+  };
+
+  const handleCreateFollowup = async (input: CreateTaskInput) => {
     if (!accountId) return;
     const supabase = createClient();
     try {
@@ -454,10 +527,11 @@ export function IntelligenceSidebar({
         ...input,
         created_by_user_id: user?.id,
       });
-      toast.success("Tarefa de follow-up criada com sucesso!");
-    } catch (err) {
+      toast.success("Follow-up criado com sucesso!");
+      fetchCrmData();
+    } catch (err: any) {
       const msg = err instanceof Error ? err.message : "Erro desconhecido";
-      toast.error(`Erro ao criar tarefa: ${msg}`);
+      toast.error(`Erro ao criar follow-up: ${msg}`);
     }
   };
 
@@ -519,6 +593,64 @@ export function IntelligenceSidebar({
             {copied ? <Check className="h-3 w-3 text-primary" /> : <Copy className="h-3 w-3" />}
           </button>
         </div>
+      </div>
+
+      {/* Contextual Active Follow-up Widget */}
+      <div className="p-3 border-b border-border bg-background">
+        <div className="flex items-center justify-between pb-1.5">
+          <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+            Próxima Ação
+          </span>
+          {activeFollowup && (
+            <Badge variant="outline" className="text-[10px] text-emerald-600 bg-emerald-500/10 border-emerald-500/20">
+              Ativa
+            </Badge>
+          )}
+        </div>
+
+        {activeFollowup ? (
+          <div className="rounded-lg border border-border bg-muted/30 p-2.5 space-y-2 text-xs">
+            <div className="font-semibold text-foreground leading-snug">
+              {activeFollowup.title}
+            </div>
+            {activeFollowup.due_at && (
+              <div className="text-[11px] text-muted-foreground flex items-center gap-1">
+                <Clock className="h-3 w-3" />
+                <span>Prazo: {format(new Date(activeFollowup.snoozed_until || activeFollowup.due_at), "dd/MM 'às' HH:mm", { locale: ptBR })}</span>
+              </div>
+            )}
+            <div className="flex items-center justify-end gap-1.5 pt-1 border-t border-border/60">
+              <SnoozePopover onSnooze={(iso, reason) => handleSnoozeFollowup(activeFollowup, iso, reason)} />
+              <Button
+                size="sm"
+                className="h-7 text-xs gap-1 bg-emerald-600 hover:bg-emerald-700 text-white"
+                onClick={() => handleCompleteFollowup(activeFollowup)}
+              >
+                <Check className="h-3 w-3" />
+                Concluir
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <div className="rounded-lg border border-dashed border-border p-2.5 text-center space-y-1.5">
+            <p className="text-xs text-muted-foreground">Nenhuma próxima ação agendada</p>
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 text-xs gap-1 text-primary border-primary/30 hover:bg-primary/10 w-full"
+              onClick={() => {
+                setDialogInitialValues({
+                  contact_id: contact.id,
+                  conversation_id: conversationId,
+                });
+                setCreateDialogOpen(true);
+              }}
+            >
+              <Plus className="h-3 w-3" />
+              Criar Follow-up
+            </Button>
+          </div>
+        )}
       </div>
 
       {/* Tabs Navigation */}
@@ -823,14 +955,7 @@ export function IntelligenceSidebar({
                     size="sm"
                     variant="outline"
                     className="w-full h-7 text-xs gap-1.5 mt-1 border-primary/30 text-primary hover:bg-primary/10"
-                    onClick={() => {
-                      if (onCreateTaskFromAction) {
-                        onCreateTaskFromAction(leadProfile.next_action!);
-                      } else {
-                        setTaskActionText(leadProfile.next_action!);
-                        setTaskDialogOpen(true);
-                      }
-                    }}
+                    onClick={handleConvertAiSuggestion}
                   >
                     <Plus className="h-3 w-3" />
                     Criar Tarefa de Follow-up
@@ -1036,16 +1161,12 @@ export function IntelligenceSidebar({
         onJumpToMessage={onJumpToMessage}
       />
 
-      {/* Task Creation Dialog */}
-      <TaskFormDialog
-        open={taskDialogOpen}
-        onOpenChange={setTaskDialogOpen}
-        initialSuggestion={{
-          actionText: taskActionText ? `Follow-up: ${taskActionText}` : "",
-          contactId: contact.id,
-          conversationId: conversationId || undefined,
-        }}
-        onSubmit={handleCreateTask}
+      {/* Follow-up Creation Dialog */}
+      <CreateFollowupDialog
+        open={createDialogOpen}
+        onOpenChange={setCreateDialogOpen}
+        initialValues={dialogInitialValues}
+        onSubmit={handleCreateFollowup}
       />
     </div>
   );
