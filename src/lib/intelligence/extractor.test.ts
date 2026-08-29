@@ -115,7 +115,56 @@ function createInMemoryExtractorDb() {
         return { data: { status: 'failed', run_id: runId }, error: null }
       }
 
+      if (functionName === 'ensure_tenant_default_objection_taxonomy') {
+        return { data: null, error: null }
+      }
+
       return { data: null, error: { message: `Unknown RPC ${functionName}` } }
+    },
+
+    from: (tableName: string) => {
+      if (tableName === 'tenant_intelligence_settings') {
+        return {
+          select: () => ({
+            eq: () => ({
+              maybeSingle: async () => ({ data: { monthly_budget_limit_usd: null }, error: null }),
+            }),
+          }),
+        }
+      }
+      if (tableName === 'ai_usage_log') {
+        return {
+          select: () => ({
+            eq: () => ({
+              gte: async () => ({ data: [], error: null }),
+            }),
+          }),
+          insert: async () => ({ error: null }),
+        }
+      }
+      if (tableName === 'tenant_objection_taxonomy') {
+        return {
+          select: () => ({
+            eq: () => ({
+              eq: () => ({
+                order: async () => ({
+                  data: [
+                    { id: 'tax-1', code: 'price_budget', name: 'Preço / Orçamento', position: 10, is_active: true },
+                  ],
+                  error: null,
+                }),
+              }),
+            }),
+          }),
+        }
+      }
+      return {
+        select: () => ({
+          eq: () => ({
+            maybeSingle: async () => ({ data: null, error: null }),
+          }),
+        }),
+      }
     },
   }
 

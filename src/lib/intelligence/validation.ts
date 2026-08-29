@@ -54,7 +54,18 @@ export function resolveAndValidateObservation(
   }
 
   const type = obs.type
-  if (!['interest', 'objection', 'intent', 'urgency', 'sentiment', 'next_action', 'summary', 'attribute'].includes(type)) {
+  if (![
+    'interest',
+    'objection',
+    'intent',
+    'urgency',
+    'sentiment',
+    'next_action',
+    'summary',
+    'attribute',
+    'buying_signal',
+    'loss_signal',
+  ].includes(type)) {
     return null
   }
 
@@ -131,11 +142,42 @@ export function resolveAndValidateObservation(
 
   // 4. Resolve Objection
   else if (type === 'objection') {
-    const rawVal = typeof obs.value === 'string' ? obs.value : JSON.stringify(obs.value)
+    const rawVal = typeof obs.value === 'string' ? obs.value.trim() : JSON.stringify(obs.value)
     valueText = normalizeObjection(rawVal)
+    const rawCode = (obs as any).taxonomy_code || (obs as any).taxonomyCode || 'other'
+    const allowedCodes = new Set([
+      'price_budget',
+      'payment_financing',
+      'timing',
+      'competition',
+      'trust',
+      'decision_authority',
+      'fit_requirements',
+      'availability_delivery',
+      'other',
+    ])
+    const taxCode = allowedCodes.has(String(rawCode).trim().toLowerCase())
+      ? String(rawCode).trim().toLowerCase()
+      : 'other'
+
+    valueJson = {
+      objection: rawVal,
+      taxonomy_code: taxCode,
+    }
+
+    if (obs.catalog_term) {
+      const resolved = resolveCatalogTermFromPinnedContext(ctx.catalogSnapshot, obs.catalog_term)
+      catalogItemId = resolved.catalogItemId
+    }
   }
 
-  // 5. Other Types (urgency, sentiment, next_action, summary)
+  // 5. Resolve Buying Signal / Loss Signal
+  else if (type === 'buying_signal' || type === 'loss_signal') {
+    valueText = typeof obs.value === 'string' ? obs.value.trim() : JSON.stringify(obs.value)
+    valueJson = { signal: valueText }
+  }
+
+  // 6. Other Types (urgency, sentiment, next_action, summary)
   else {
     if (typeof obs.value === 'object' && obs.value !== null) {
       valueJson = obs.value as Record<string, unknown>
@@ -145,8 +187,10 @@ export function resolveAndValidateObservation(
     }
   }
 
-  // 6. Resolve & Match Evidence
+  // 7. Resolve & Match Evidence
   const validatedEvidences: ValidatedEvidenceItem[] = []
+  let earliestEvidenceObservedAt: string | undefined = undefined
+
   if (Array.isArray(obs.evidence)) {
     for (const ev of obs.evidence) {
       if (!ev || typeof ev !== 'object') continue
@@ -159,45 +203,32 @@ export function resolveAndValidateObservation(
           message_id: msgItem.id,
           start_offset: matchRes.start_offset,
           end_offset: matchRes.end_offset,
-          snippet: matchRes.snippet || ev.quoted_text,
+          snippet: matchRes.snippet || '',
         })
+        if (!earliestEvidenceObservedAt || msgItem.created_at < earliestEvidenceObservedAt) {
+          earliestEvidenceObservedAt = msgItem.created_at
+        }
       }
     }
   }
 
-  // Deduplication Key (using deterministic SHA-256 fingerprint from Phase 3C)
+  // 8. Reject Unverified Factual Claims (Must have valid matched evidence)
+  if (['interest', 'objection', 'intent', 'attribute', 'buying_signal', 'loss_signal'].includes(type) && validatedEvidences.length === 0) {
+    return null
+  }
+
+  // 9. Compute Dedupe Key
   const dedupeKey = computeInsightDedupeKey({
     insightType: type,
-    catalogItemId,
     valueText,
-    evidence: validatedEvidences.map((e) => ({
-      message_id: e.message_id,
-      start_offset: e.start_offset,
-      end_offset: e.end_offset,
-      snippet: e.snippet,
-    })),
-    extractorVersion: ctx.extractorVersion,
+    catalogItemId,
+    evidence: validatedEvidences,
   })
 
-  const confidence = typeof obs.confidence === 'number' && obs.confidence >= 0 && obs.confidence <= 1
-    ? Math.round(obs.confidence * 1000) / 1000
-    : null
-
-  // Derive chronological observed_at from cited evidence messages
-  let observedAt: string | undefined = undefined
-  if (validatedEvidences.length > 0) {
-    let latestTs: number | null = null
-    for (const ev of validatedEvidences) {
-      for (const msg of ctx.messageRefMap.values()) {
-        if (msg.id === ev.message_id && msg.created_at) {
-          const ts = new Date(msg.created_at).getTime()
-          if (latestTs === null || ts > latestTs) {
-            latestTs = ts
-            observedAt = msg.created_at
-          }
-        }
-      }
-    }
+  // 10. Normalize Confidence
+  let conf: number | null = null
+  if (typeof obs.confidence === 'number' && !isNaN(obs.confidence)) {
+    conf = Math.max(0, Math.min(1, Math.round(obs.confidence * 1000) / 1000))
   }
 
   return {
@@ -205,10 +236,10 @@ export function resolveAndValidateObservation(
     value_text: valueText,
     value_json: valueJson,
     catalog_item_id: catalogItemId,
-    confidence,
+    confidence: conf,
     source: 'intelligence',
     dedupe_key: dedupeKey,
     evidence: validatedEvidences,
-    observed_at: observedAt,
+    observed_at: earliestEvidenceObservedAt,
   }
 }

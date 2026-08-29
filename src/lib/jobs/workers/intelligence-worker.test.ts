@@ -53,7 +53,17 @@ describe('Intelligence Worker', () => {
     })
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const mockDb = { rpc: rpcMock } as any
+    const mockDb = {
+      rpc: rpcMock,
+      from: () => ({
+        select: () => ({
+          eq: () => ({
+            maybeSingle: () => Promise.resolve({ data: null, error: null }),
+            gte: () => Promise.resolve({ data: [], error: null }),
+          }),
+        }),
+      }),
+    } as any
 
     const stats = await processIntelligenceBatch({
       db: mockDb,

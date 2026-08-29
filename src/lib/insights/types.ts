@@ -11,6 +11,8 @@ export type InsightType =
   | 'next_action'
   | 'summary'
   | 'attribute'
+  | 'buying_signal'
+  | 'loss_signal'
 
 export type InsightStatus = 'active' | 'superseded' | 'retracted'
 

@@ -162,5 +162,59 @@ describe('Intelligence Observation Validation & Pinned Resolution', () => {
       )
       expect(invalidObs).toBeNull()
     })
+
+    it('validates objection with taxonomy code and maps properly', () => {
+      const obs = resolveAndValidateObservation(
+        {
+          type: 'objection',
+          value: 'preço alto fora do orçamento',
+          taxonomy_code: 'price_budget',
+          evidence: [{ message_ref: 'M1', quoted_text: 'achei o preço alto' }],
+        },
+        { configSnapshot, catalogSnapshot, messageRefMap, extractorVersion: 'v1' }
+      )
+      expect(obs).not.toBeNull()
+      expect(obs?.insight_type).toBe('objection')
+      expect(obs?.value_json.taxonomy_code).toBe('price_budget')
+      expect(obs?.evidence.length).toBe(1)
+    })
+
+    it('falls back invalid objection taxonomy code to other', () => {
+      const obs = resolveAndValidateObservation(
+        {
+          type: 'objection',
+          value: 'preço alto',
+          taxonomy_code: 'completely_unknown_category',
+          evidence: [{ message_ref: 'M1', quoted_text: 'preço alto' }],
+        },
+        { configSnapshot, catalogSnapshot, messageRefMap, extractorVersion: 'v1' }
+      )
+      expect(obs).not.toBeNull()
+      expect(obs?.value_json.taxonomy_code).toBe('other')
+    })
+
+    it('validates buying_signal and loss_signal with evidence', () => {
+      const buyingObs = resolveAndValidateObservation(
+        {
+          type: 'buying_signal',
+          value: 'Cliente adorou a moto X13',
+          evidence: [{ message_ref: 'M1', quoted_text: 'Gostei muito da moto X13' }],
+        },
+        { configSnapshot, catalogSnapshot, messageRefMap, extractorVersion: 'v1' }
+      )
+      expect(buyingObs).not.toBeNull()
+      expect(buyingObs?.insight_type).toBe('buying_signal')
+      expect(buyingObs?.value_text).toBe('Cliente adorou a moto X13')
+
+      const unverifiedSignal = resolveAndValidateObservation(
+        {
+          type: 'buying_signal',
+          value: 'Cliente quer comprar agora',
+          evidence: [],
+        },
+        { configSnapshot, catalogSnapshot, messageRefMap, extractorVersion: 'v1' }
+      )
+      expect(unverifiedSignal).toBeNull()
+    })
   })
 })

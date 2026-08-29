@@ -34,6 +34,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { EvidenceDialog } from "./evidence-dialog";
 import { CreateFollowupDialog } from "@/components/tasks/create-followup-dialog";
 import { SnoozePopover } from "@/components/tasks/snooze-popover";
+import { ObjectionOverrideDialog } from "./objection-override-dialog";
+import type { ConversationObjectionOccurrence } from "@/lib/intelligence/types";
 import {
   createTask,
   completeFollowup,
@@ -90,8 +92,14 @@ export function IntelligenceSidebar({
   const [leadScore, setLeadScore] = useState<LeadScoreRecord | null>(null);
   const [interests, setInterests] = useState<ContactCatalogInterestWithItem[]>([]);
   const [objections, setObjections] = useState<ContactObjection[]>([]);
+  const [objectionOccurrences, setObjectionOccurrences] = useState<ConversationObjectionOccurrence[]>([]);
   const [insights, setInsights] = useState<ConversationInsightWithEvidence[]>([]);
   const [loadingIntel, setLoadingIntel] = useState(false);
+  const [isDirty, setIsDirty] = useState(false);
+
+  // Objection Override Dialog State
+  const [overrideDialogOpen, setOverrideDialogOpen] = useState(false);
+  const [selectedOccurrence, setSelectedOccurrence] = useState<ConversationObjectionOccurrence | null>(null);
 
   // On-Demand AI Execution & Freshness State
   const [freshness, setFreshness] = useState<"not_analyzed" | "fresh" | "stale">("not_analyzed");
@@ -285,7 +293,7 @@ export function IntelligenceSidebar({
 
       // Check conversation message count & last analysis boundary
       if (conversationId) {
-        const [msgsRes, lastReqRes, insightsDataRes] = await Promise.all([
+        const [msgsRes, lastReqRes, insightsDataRes, convRes, occurrencesRes] = await Promise.all([
           supabase
             .from("messages")
             .select("id, created_at", { count: "exact" })
@@ -317,7 +325,35 @@ export function IntelligenceSidebar({
             .eq("conversation_id", conversationId)
             .eq("status", "active")
             .order("observed_at", { ascending: false }),
+          supabase
+            .from("conversations")
+            .select("commercial_state_dirty, intelligence_eligible_at, pending_message_count")
+            .eq("id", conversationId)
+            .maybeSingle(),
+          supabase
+            .from("conversation_objection_occurrences")
+            .select(`
+              *,
+              effective_taxonomy:effective_taxonomy_id (
+                id,
+                name,
+                code
+              )
+            `)
+            .eq("account_id", accountId)
+            .eq("conversation_id", conversationId)
+            .order("occurred_at", { ascending: false }),
         ]);
+
+        if (convRes.data) {
+          setIsDirty(Boolean(convRes.data.commercial_state_dirty));
+        }
+
+        if (occurrencesRes.data) {
+          setObjectionOccurrences(occurrencesRes.data as unknown as ConversationObjectionOccurrence[]);
+        } else {
+          setObjectionOccurrences([]);
+        }
 
         const totalMsgs = msgsRes.count || 0;
         const lastReq = lastReqRes.data;
@@ -681,17 +717,19 @@ export function IntelligenceSidebar({
                   <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
                     Status da Análise
                   </span>
-                  {freshness === "fresh" && (
-                    <Badge variant="outline" className="text-[10px] text-emerald-600 dark:text-emerald-400 border-emerald-500/30 bg-emerald-50/50 dark:bg-emerald-950/20">
-                      ✓ Em dia
+                  {isDirty ? (
+                    <Badge variant="outline" className="text-[10px] text-amber-600 dark:text-amber-400 border-amber-500/30 bg-amber-50/50 dark:bg-amber-950/20">
+                      ⏱ Análise pendente
                     </Badge>
-                  )}
-                  {freshness === "stale" && (
+                  ) : freshness === "fresh" ? (
+                    <Badge variant="outline" className="text-[10px] text-emerald-600 dark:text-emerald-400 border-emerald-500/30 bg-emerald-50/50 dark:bg-emerald-950/20">
+                      ✓ Atualizado
+                    </Badge>
+                  ) : freshness === "stale" ? (
                     <Badge variant="outline" className="text-[10px] text-amber-600 dark:text-amber-400 border-amber-500/30 bg-amber-50/50 dark:bg-amber-950/20">
                       ⚠️ {messageDeltaCount} nova(s) msg(s)
                     </Badge>
-                  )}
-                  {freshness === "not_analyzed" && (
+                  ) : (
                     <Badge variant="outline" className="text-[10px] text-muted-foreground">
                       Não analisado
                     </Badge>
@@ -918,25 +956,56 @@ export function IntelligenceSidebar({
                   </div>
                 ) : (
                   <div className="space-y-2">
-                    {objections.map((obj) => (
-                      <div
-                        key={obj.id}
-                        className="rounded-lg border border-border bg-background p-2.5 text-xs space-y-1.5"
-                      >
-                        <div className="flex items-center justify-between">
-                          <span className="font-medium text-foreground">{obj.objection}</span>
-                          <Badge
-                            variant={obj.status === "open" ? "destructive" : "secondary"}
-                            className="text-[10px] uppercase"
-                          >
-                            {obj.status === "open" ? "Aberta" : obj.status}
-                          </Badge>
+                    {objections.map((obj) => {
+                      const occ = objectionOccurrences.find(
+                        (o) => o.raw_objection.toLowerCase().trim() === obj.normalized_objection
+                      );
+                      const taxName = occ?.effective_taxonomy?.name || "Objeção Comercial";
+
+                      return (
+                        <div
+                          key={obj.id}
+                          className="rounded-lg border border-border bg-background p-2.5 text-xs space-y-2"
+                        >
+                          <div className="flex items-start justify-between gap-1.5">
+                            <div className="space-y-1 min-w-0 flex-1">
+                              <Badge
+                                variant="outline"
+                                className="text-[10px] bg-amber-500/10 text-amber-600 border-amber-500/20 font-medium"
+                              >
+                                {taxName}
+                              </Badge>
+                              <p className="font-medium text-foreground text-xs leading-snug">{obj.objection}</p>
+                            </div>
+                            <Badge
+                              variant={obj.status === "open" ? "destructive" : "secondary"}
+                              className="text-[10px] uppercase shrink-0"
+                            >
+                              {obj.status === "open" ? "Aberta" : obj.status}
+                            </Badge>
+                          </div>
+
+                          <div className="flex items-center justify-between pt-1 border-t border-border/50 text-[10px] text-muted-foreground">
+                            <span>
+                              {format(new Date(obj.first_seen_at || obj.created_at), "dd/MM/yyyy", { locale: ptBR })}
+                            </span>
+                            {occ && (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-5 px-1.5 text-[10px] text-amber-600 hover:text-amber-700 hover:bg-amber-500/10"
+                                onClick={() => {
+                                  setSelectedOccurrence(occ);
+                                  setOverrideDialogOpen(true);
+                                }}
+                              >
+                                Corrigir Categoria
+                              </Button>
+                            )}
+                          </div>
                         </div>
-                        <div className="text-[10px] text-muted-foreground">
-                          Detectada em {format(new Date(obj.created_at), "dd/MM/yyyy", { locale: ptBR })}
-                        </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
               </div>
@@ -1167,6 +1236,16 @@ export function IntelligenceSidebar({
         onOpenChange={setCreateDialogOpen}
         initialValues={dialogInitialValues}
         onSubmit={handleCreateFollowup}
+      />
+
+      {/* Objection Category Override Dialog */}
+      <ObjectionOverrideDialog
+        open={overrideDialogOpen}
+        onOpenChange={setOverrideDialogOpen}
+        occurrenceId={selectedOccurrence?.id}
+        currentTaxonomyId={selectedOccurrence?.effective_taxonomy_id}
+        rawObjectionText={selectedOccurrence?.raw_objection}
+        onOverridden={fetchIntelligenceData}
       />
     </div>
   );

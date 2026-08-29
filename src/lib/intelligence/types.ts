@@ -5,7 +5,7 @@
 import type { InsightType, InformationSource } from '@/lib/insights/types'
 import type { CanonicalConfigSnapshot } from '@/lib/commercial-config/types'
 
-export type InvocationMode = 'off' | 'on_demand' | 'automatic'
+export type InvocationMode = 'off' | 'on_demand' | 'manual' | 'automatic' | 'smart_auto'
 
 export type ActionType =
   | 'summarize_conversation'
@@ -95,6 +95,7 @@ export interface RawObservationEvidence {
 export interface RawModelObservation {
   type: InsightType
   value: string | number | boolean | Record<string, unknown>
+  taxonomy_code?: string | null
   catalog_term?: string | null
   attribute_key?: string | null
   confidence?: number | null
@@ -210,3 +211,60 @@ export interface CommercialIntelligenceProvider {
   readonly providerName: string
   extract(request: ExtractionProviderRequest): Promise<ExtractionProviderResult>
 }
+
+// ============================================================
+// Objection Taxonomy & Occurrence Ledger Models (V1.3)
+// ============================================================
+
+export interface TenantObjectionTaxonomy {
+  id: string
+  account_id: string
+  code: string
+  name: string
+  description: string | null
+  is_active: boolean
+  is_default: boolean
+  position: number
+  created_at: string
+  updated_at: string
+}
+
+export interface ConversationObjectionOccurrence {
+  id: string
+  account_id: string
+  conversation_id: string
+  contact_id: string
+  insight_id: string
+  original_taxonomy_id: string
+  effective_taxonomy_id: string
+  catalog_item_id: string | null
+  responsible_user_id: string | null
+  raw_objection: string
+  confidence: number | null
+  source: InformationSource
+  occurred_at: string
+  override_by_user_id: string | null
+  override_at: string | null
+  override_reason: string | null
+  created_at: string
+  updated_at: string
+  original_taxonomy?: TenantObjectionTaxonomy | null
+  effective_taxonomy?: TenantObjectionTaxonomy | null
+}
+
+export interface ObjectionSummaryItem {
+  taxonomy_id: string
+  taxonomy_code: string
+  taxonomy_name: string
+  taxonomy_description: string | null
+  count: number
+  percentage: number
+}
+
+export interface ObjectionSummaryResult {
+  total: number
+  from: string
+  to: string
+  items: ObjectionSummaryItem[]
+}
+

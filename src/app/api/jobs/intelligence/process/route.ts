@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server'
 import { processIntelligenceBatch } from '@/lib/jobs/workers/intelligence-worker'
+import { sweepAndEnqueueDueIntelligence } from '@/lib/intelligence/sweep'
+import { createClient } from '@supabase/supabase-js'
 
 export const maxDuration = 60
 
@@ -20,8 +22,25 @@ export async function POST(request: Request) {
   }
 
   try {
-    const stats = await processIntelligenceBatch()
-    return NextResponse.json({ ok: true, stats }, { status: 200 })
+    const adminDb = createClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.SUPABASE_SERVICE_ROLE_KEY!
+    )
+
+    // 1. Sweep eligible debounced conversations into PGMQ
+    const sweepStats = await sweepAndEnqueueDueIntelligence(adminDb, { batchLimit: 25 })
+
+    // 2. Process queued extraction batch
+    const workerStats = await processIntelligenceBatch({ db: adminDb })
+
+    return NextResponse.json(
+      {
+        ok: true,
+        sweep: sweepStats,
+        worker: workerStats,
+      },
+      { status: 200 }
+    )
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err)
     return NextResponse.json({ ok: false, error }, { status: 500 })

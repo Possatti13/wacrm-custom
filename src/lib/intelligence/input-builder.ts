@@ -1,6 +1,7 @@
 import type {
   ClaimMessageItem,
   CatalogItemContextSnapshot,
+  TenantObjectionTaxonomy,
 } from './types'
 import type { CanonicalConfigSnapshot } from '@/lib/commercial-config/types'
 
@@ -8,6 +9,7 @@ export interface BuildInputParams {
   messages: ClaimMessageItem[]
   configSnapshot: CanonicalConfigSnapshot
   catalogSnapshot: CatalogItemContextSnapshot[]
+  taxonomies?: TenantObjectionTaxonomy[]
   promptVersion?: string
 }
 
@@ -18,7 +20,7 @@ export interface BuiltAnalysisInput {
 }
 
 export function buildAnalysisInput(params: BuildInputParams): BuiltAnalysisInput {
-  const { messages, configSnapshot, catalogSnapshot, promptVersion = 'v1' } = params
+  const { messages, configSnapshot, catalogSnapshot, taxonomies, promptVersion = 'v1' } = params
 
   const messageRefMap = new Map<string, ClaimMessageItem>()
 
@@ -51,10 +53,15 @@ export function buildAnalysisInput(params: BuildInputParams): BuiltAnalysisInput
     return `- item_name: "${c.name}" | type: "${c.type}" | sku: "${c.sku || 'N/A'}" | terms: [${terms}]`
   })
 
+  // 5. Objection Taxonomies
+  const activeTaxonomies = (taxonomies || []).map((t) => {
+    return `- code: "${t.code}" | label: "${t.name}" | description: "${t.description || 'N/A'}"`
+  })
+
   const ctx = configSnapshot.context || {}
   const term = configSnapshot.terminology || {}
 
-  // 5. System Prompt with Strict Boundaries & Prompt Injection Guard
+  // 6. System Prompt with Strict Boundaries & Prompt Injection Guard
   const systemPrompt = `You are the Commercial Intelligence Extraction Engine for a CRM system (Prompt Version: ${promptVersion}).
 Your mission is to extract structured factual commercial observations from customer conversations with strict evidence citations.
 
@@ -68,15 +75,19 @@ ${activeIntents.length > 0 ? activeIntents.join('\n') : 'None defined. Do not in
 ALLOWED ATTRIBUTES:
 ${activeAttributes.length > 0 ? activeAttributes.join('\n') : 'None defined. Do not invent attribute keys.'}
 
+ALLOWED OBJECTION TAXONOMY CODES:
+${activeTaxonomies.length > 0 ? activeTaxonomies.join('\n') : '- code: "price_budget"\n- code: "payment_financing"\n- code: "timing"\n- code: "competition"\n- code: "trust"\n- code: "decision_authority"\n- code: "fit_requirements"\n- code: "availability_delivery"\n- code: "other"'}
+
 ACTIVE CATALOG PRODUCTS & SERVICES:
 ${activeCatalog.length > 0 ? activeCatalog.join('\n') : 'No products or services defined.'}
 
 EXTRACTION RULES:
 1. Extract observations only when there is explicit factual evidence in the conversation.
 2. For each observation, provide:
-   - type: One of 'interest', 'objection', 'intent', 'urgency', 'sentiment', 'next_action', 'summary', 'attribute'
-   - value: The extracted semantic value (use exact allowed keys for intent and select attributes)
-   - catalog_term: (For 'interest') The mentioned product or term from the catalog
+   - type: One of 'interest', 'objection', 'intent', 'urgency', 'sentiment', 'next_action', 'summary', 'attribute', 'buying_signal', 'loss_signal'
+   - value: The extracted semantic value (for intent and attribute use exact keys; for objection provide explanation)
+   - taxonomy_code: (For 'objection') One of the allowed objection taxonomy codes above (default to 'other' if unclassified)
+   - catalog_term: (For 'interest' or product-related 'objection') The mentioned product or term from the catalog
    - attribute_key: (For 'attribute') The exact allowed attribute key
    - confidence: A numeric confidence value between 0.0 and 1.0 representing extraction certainty
    - evidence: An array of evidence items. Each item MUST specify:
@@ -84,7 +95,7 @@ EXTRACTION RULES:
      - quoted_text: An exact substring quote from that message providing proof
 3. Output MUST strictly adhere to the JSON schema: {"observations": [...]}.`
 
-  // 6. User Prompt with Business Context & Untrusted Messages
+  // 7. User Prompt with Business Context & Untrusted Messages
   const userPrompt = `BUSINESS CONTEXT:
 - Company Description: ${ctx.company_description || 'N/A'}
 - Commercial Objectives: ${ctx.commercial_objectives || 'N/A'}
