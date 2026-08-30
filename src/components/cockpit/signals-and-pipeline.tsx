@@ -5,7 +5,7 @@ import Link from "next/link";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Sparkles, ArrowRight, CheckCircle2, AlertCircle, GitBranch, DollarSign } from "lucide-react";
+import { ArrowRight, CheckCircle2, AlertCircle } from "lucide-react";
 import { formatCurrency } from "@/lib/currency";
 import type { SignalsAndPipelineResponse } from "@/lib/analytics/types";
 
@@ -101,7 +101,7 @@ export function SignalsAndPipeline({
                 </div>
 
                 <p className="text-xs text-foreground/90 bg-background/60 p-2 rounded-lg border border-border/30 italic">
-                  "{sig.signal_text}"
+                  &ldquo;{sig.signal_text}&rdquo;
                 </p>
               </div>
             ))

@@ -1,17 +1,15 @@
 "use client";
 
-import React, { useState } from "react";
+import React from "react";
 import Link from "next/link";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
-  AlertTriangle,
   Flame,
   Clock,
   User,
   ArrowRight,
-  ShieldAlert,
   CheckCircle2,
   Phone,
   Package,
@@ -213,7 +211,7 @@ export function AttentionQueue({
 
                   {item.signal_text && (
                     <p className="text-xs text-muted-foreground/90 line-clamp-1 italic bg-secondary/30 px-2.5 py-1 rounded border border-border/40">
-                      "{item.signal_text}"
+                      &ldquo;{item.signal_text}&rdquo;
                     </p>
                   )}
                 </div>

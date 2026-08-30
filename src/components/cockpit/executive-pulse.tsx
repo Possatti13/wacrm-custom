@@ -66,7 +66,7 @@ export function ExecutivePulse({ pulse, loading }: ExecutivePulseProps) {
       delta: formatDelta(pulse.active_leads.delta_pct),
       icon: Users,
       iconColor: "text-blue-400 bg-blue-500/10 border-blue-500/20",
-      description: "Contatos com conversas no período",
+      description: "Contatos com mensagens no período",
     },
     {
       title: "Leads Quentes",
@@ -83,10 +83,14 @@ export function ExecutivePulse({ pulse, loading }: ExecutivePulseProps) {
     {
       title: "Follow-ups Atrasados",
       value: pulse.overdue_followups.current,
-      delta: formatDelta(pulse.overdue_followups.delta_pct, true),
+      delta: (
+        <span className="text-xs text-rose-400/90 font-medium">
+          Backlog atual pendente
+        </span>
+      ),
       icon: ClockAlert,
       iconColor: "text-rose-400 bg-rose-500/10 border-rose-500/20",
-      description: "Tarefas pendentes vencidas",
+      description: "Tarefas vencidas no momento",
     },
     {
       title: "Sem Próxima Ação",

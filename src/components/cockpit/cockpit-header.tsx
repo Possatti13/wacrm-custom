@@ -11,6 +11,7 @@ interface CockpitHeaderProps {
   onRangeChange: (range: PeriodRange) => void;
   timezone?: string;
   lastAnalysisAt?: string | null;
+  evaluatedAt?: string | null;
   loading: boolean;
   onRefresh: () => void;
 }
@@ -20,12 +21,18 @@ export function CockpitHeader({
   onRangeChange,
   timezone = "America/Sao_Paulo",
   lastAnalysisAt,
+  evaluatedAt,
   loading,
   onRefresh,
 }: CockpitHeaderProps) {
   const getFreshnessText = () => {
     if (!lastAnalysisAt) return "Dados atualizados recentemente";
-    const diffMs = Date.now() - new Date(lastAnalysisAt).getTime();
+    const evalTime = evaluatedAt ? new Date(evaluatedAt).getTime() : 0;
+    const analysisTime = new Date(lastAnalysisAt).getTime();
+    if (!evalTime || isNaN(evalTime) || isNaN(analysisTime)) {
+      return "Dados atualizados";
+    }
+    const diffMs = Math.max(0, evalTime - analysisTime);
     const diffMins = Math.floor(diffMs / 60000);
     if (diffMins < 1) return "Atualizado agora";
     if (diffMins < 60) return `Atualizado há ${diffMins} min`;
@@ -51,7 +58,7 @@ export function CockpitHeader({
             variant="outline"
             className="border-blue-500/30 bg-blue-500/10 text-blue-400 text-xs font-sans font-medium"
           >
-            V1.4 Operating View
+            V1.4.1 Certified
           </Badge>
         </div>
         <p className="text-sm text-muted-foreground mt-1">

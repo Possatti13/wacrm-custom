@@ -3,7 +3,7 @@
 import React from "react";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Package, Users, ShieldAlert, AlertCircle } from "lucide-react";
+import { Package, Users, ShieldAlert } from "lucide-react";
 import type { ProductIntelligenceResponse } from "@/lib/analytics/types";
 
 interface ProductFrictionMatrixProps {

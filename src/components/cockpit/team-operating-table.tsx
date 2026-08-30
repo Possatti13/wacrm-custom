@@ -66,7 +66,7 @@ export function TeamOperatingTable({ data, loading }: TeamOperatingTableProps) {
               </Badge>
             </div>
             <p className="text-xs text-muted-foreground mt-0.5">
-              Métricas factuais de conversas atendidas, velocidade de resposta e disciplina de follow-up.
+              Métricas factuais de conversas atendidas, velocidade histórica de primeira resposta e disciplina de follow-up.
             </p>
           </div>
         </div>
@@ -84,7 +84,7 @@ export function TeamOperatingTable({ data, loading }: TeamOperatingTableProps) {
                 key={idx}
                 className="p-4 sm:p-5 flex flex-col lg:flex-row lg:items-center justify-between gap-4 hover:bg-muted/20 transition-colors"
               >
-                {/* Member Identity */}
+                {/* Member Identity (PII minimized) */}
                 <div className="flex items-center gap-3 min-w-[200px]">
                   <Avatar className="h-9 w-9 border border-border">
                     <AvatarImage src={member.avatar_url || undefined} alt={member.full_name} />
@@ -101,7 +101,6 @@ export function TeamOperatingTable({ data, loading }: TeamOperatingTableProps) {
                         {member.role}
                       </Badge>
                     </div>
-                    <span className="text-xs text-muted-foreground">{member.email}</span>
                   </div>
                 </div>
 
@@ -116,7 +115,7 @@ export function TeamOperatingTable({ data, loading }: TeamOperatingTableProps) {
                     </span>
                   </div>
 
-                  {/* Response Speed */}
+                  {/* Response Speed (Historical First Responder Attribution) */}
                   <div>
                     <span className="text-muted-foreground block text-[11px]">Resposta Mediana (P90)</span>
                     <span className="font-bold text-foreground text-sm flex items-center gap-1 mt-0.5">
@@ -142,9 +141,9 @@ export function TeamOperatingTable({ data, loading }: TeamOperatingTableProps) {
                     </span>
                   </div>
 
-                  {/* Overdue */}
+                  {/* Overdue Backlog */}
                   <div>
-                    <span className="text-muted-foreground block text-[11px]">Tarefas Atrasadas</span>
+                    <span className="text-muted-foreground block text-[11px]">Tarefas Atrasadas (Atual)</span>
                     <span
                       className={`font-bold text-sm flex items-center gap-1 mt-0.5 ${
                         member.followups_overdue > 0 ? "text-rose-400" : "text-foreground"

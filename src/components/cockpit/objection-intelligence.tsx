@@ -4,7 +4,7 @@ import React, { useState } from "react";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { ShieldAlert, Quote, ArrowRight, TrendingUp, TrendingDown, Minus } from "lucide-react";
+import { Quote, ArrowRight, TrendingUp, TrendingDown, Minus } from "lucide-react";
 import { ObjectionDrilldownDrawer } from "./objection-drilldown-drawer";
 import type { ObjectionAnalyticsResponse, PeriodRange } from "@/lib/analytics/types";
 
@@ -133,7 +133,7 @@ export function ObjectionIntelligence({
                 {item.sample_quote && (
                   <div className="flex items-start gap-2 text-xs text-muted-foreground italic bg-background/60 p-2.5 rounded-lg border border-border/40">
                     <Quote className="h-3.5 w-3.5 text-blue-400 shrink-0 mt-0.5" />
-                    <span className="line-clamp-2">"{item.sample_quote}"</span>
+                    <span className="line-clamp-2">&ldquo;{item.sample_quote}&rdquo;</span>
                   </div>
                 )}
               </div>

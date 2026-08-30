@@ -1,5 +1,5 @@
 /**
- * TypeScript types for Manager Cockpit Analytics RPCs and Components (V1.4)
+ * TypeScript types for Manager Cockpit Analytics RPCs and Components (V1.4.1)
  */
 
 export type PeriodRange = 'today' | '7d' | '30d' | 'month' | 'custom';
@@ -17,24 +17,27 @@ export interface KpiValueWithDelta {
   current: number;
   previous?: number | null;
   delta_pct?: number | null;
+  is_snapshot?: boolean;
 }
 
 export interface LeadScoreTiers {
   current: number;
   warm: number;
   cold: number;
+  is_snapshot?: boolean;
 }
 
 export interface PipelineSnapshotKpi {
   open_deals_count: number;
   open_deals_value: number;
+  is_snapshot?: boolean;
 }
 
 export interface ExecutivePulse {
   active_leads: KpiValueWithDelta;
   hot_leads: LeadScoreTiers;
-  overdue_followups: KpiValueWithDelta;
-  leads_without_next_action: { current: number };
+  overdue_followups: { current: number; is_snapshot: boolean };
+  leads_without_next_action: { current: number; is_snapshot: boolean };
   period_objections: KpiValueWithDelta;
   pipeline_snapshot: PipelineSnapshotKpi;
 }
@@ -180,7 +183,6 @@ export interface ProductIntelligenceResponse {
 export interface TeamMemberPerformance {
   user_id: string;
   full_name: string;
-  email: string;
   avatar_url: string | null;
   role: string;
   conversations_handled: number;

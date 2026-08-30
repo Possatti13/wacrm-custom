@@ -41,25 +41,36 @@ export function ObjectionDrilldownDrawer({
 
   useEffect(() => {
     if (!open || !accountId || !taxonomyCode) return;
-    setLoading(true);
 
-    const db = createClient();
-    loadManagerObjectionDrilldown(db, accountId, {
-      taxonomyCode,
-      range,
-      limit: pageSize,
-      offset: (page - 1) * pageSize,
-    })
-      .then((res) => {
-        setItems(res.items || []);
-        setTotalCount(res.total_count || 0);
-      })
-      .catch((err) => {
+    let isMounted = true;
+    const fetchDrilldown = async () => {
+      setLoading(true);
+      try {
+        const db = createClient();
+        const res = await loadManagerObjectionDrilldown(db, accountId, {
+          taxonomyCode,
+          range,
+          limit: pageSize,
+          offset: (page - 1) * pageSize,
+        });
+        if (isMounted) {
+          setItems(res.items || []);
+          setTotalCount(res.total_count || 0);
+        }
+      } catch (err) {
         console.error("Failed to load objection drilldown:", err);
-      })
-      .finally(() => {
-        setLoading(false);
-      });
+      } finally {
+        if (isMounted) {
+          setLoading(false);
+        }
+      }
+    };
+
+    fetchDrilldown().catch((err) => console.error("Drilldown fetch error:", err));
+
+    return () => {
+      isMounted = false;
+    };
   }, [open, accountId, taxonomyCode, range, page]);
 
   const totalPages = Math.ceil(totalCount / pageSize) || 1;
@@ -134,7 +145,7 @@ export function ObjectionDrilldownDrawer({
                 {item.evidence_snippet && (
                   <div className="flex items-start gap-2 p-2.5 rounded-lg bg-background/80 border border-border/50 text-xs text-foreground/90 italic">
                     <Quote className="h-3.5 w-3.5 text-blue-400 shrink-0 mt-0.5" />
-                    <span>"{item.evidence_snippet}"</span>
+                    <span>&ldquo;{item.evidence_snippet}&rdquo;</span>
                   </div>
                 )}
 

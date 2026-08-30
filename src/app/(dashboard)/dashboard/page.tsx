@@ -30,7 +30,7 @@ import { ProductFrictionMatrix } from "@/components/cockpit/product-friction-mat
 import { TeamOperatingTable } from "@/components/cockpit/team-operating-table";
 import { SignalsAndPipeline } from "@/components/cockpit/signals-and-pipeline";
 import { OperationalHealthFooter } from "@/components/cockpit/operational-health-footer";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import Link from "next/link";
 import { ListTodo, MessageSquare, ShieldAlert } from "lucide-react";
@@ -80,9 +80,10 @@ export default function DashboardPage() {
         setTeam(teamRes);
         setSignals(sigRes);
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error("[DashboardPage] loadAll failed:", err);
-      setError(err?.message || "Erro ao carregar dados do cockpit.");
+      const msg = err instanceof Error ? err.message : "Erro ao carregar dados do cockpit.";
+      setError(msg);
     } finally {
       setLoading(false);
     }
@@ -164,6 +165,7 @@ export default function DashboardPage() {
         onRangeChange={setRange}
         timezone={summary?.period.timezone}
         lastAnalysisAt={summary?.data_freshness.last_analysis_at}
+        evaluatedAt={summary?.data_freshness.evaluated_at}
         loading={loading}
         onRefresh={loadAll}
       />

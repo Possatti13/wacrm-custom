@@ -1,9 +1,8 @@
 "use client";
 
 import React from "react";
-import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Activity, UserX, AlertCircle, Cpu, Clock } from "lucide-react";
+import { Activity, UserX, AlertCircle, Cpu } from "lucide-react";
 import type { OperationalHealth as OperationalHealthData } from "@/lib/analytics/types";
 
 interface OperationalHealthFooterProps {
