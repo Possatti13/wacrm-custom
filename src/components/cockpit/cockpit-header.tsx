@@ -1,10 +1,10 @@
-"use client";
+'use client';
 
-import React from "react";
-import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { Clock, RefreshCw, Globe } from "lucide-react";
-import type { PeriodRange } from "@/lib/analytics/types";
+import React from 'react';
+import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
+import { Clock, RefreshCw, Globe, Sparkles } from 'lucide-react';
+import type { PeriodRange } from '@/lib/analytics/types';
 
 interface CockpitHeaderProps {
   range: PeriodRange;
@@ -14,37 +14,39 @@ interface CockpitHeaderProps {
   evaluatedAt?: string | null;
   loading: boolean;
   onRefresh: () => void;
+  onOpenAskCiclopes?: () => void;
 }
 
 export function CockpitHeader({
   range,
   onRangeChange,
-  timezone = "America/Sao_Paulo",
+  timezone = 'America/Sao_Paulo',
   lastAnalysisAt,
   evaluatedAt,
   loading,
   onRefresh,
+  onOpenAskCiclopes,
 }: CockpitHeaderProps) {
   const getFreshnessText = () => {
-    if (!lastAnalysisAt) return "Dados atualizados recentemente";
+    if (!lastAnalysisAt) return 'Dados atualizados recentemente';
     const evalTime = evaluatedAt ? new Date(evaluatedAt).getTime() : 0;
     const analysisTime = new Date(lastAnalysisAt).getTime();
     if (!evalTime || isNaN(evalTime) || isNaN(analysisTime)) {
-      return "Dados atualizados";
+      return 'Dados atualizados';
     }
     const diffMs = Math.max(0, evalTime - analysisTime);
     const diffMins = Math.floor(diffMs / 60000);
-    if (diffMins < 1) return "Atualizado agora";
+    if (diffMins < 1) return 'Atualizado agora';
     if (diffMins < 60) return `Atualizado há ${diffMins} min`;
     const diffHours = Math.floor(diffMins / 60);
     return `Atualizado há ${diffHours}h`;
   };
 
   const ranges: { key: PeriodRange; label: string }[] = [
-    { key: "today", label: "Hoje" },
-    { key: "7d", label: "7 dias" },
-    { key: "30d", label: "30 dias" },
-    { key: "month", label: "Este mês" },
+    { key: 'today', label: 'Hoje' },
+    { key: '7d', label: '7 dias' },
+    { key: '30d', label: '30 dias' },
+    { key: 'month', label: 'Este mês' },
   ];
 
   return (
@@ -56,9 +58,9 @@ export function CockpitHeader({
           </h1>
           <Badge
             variant="outline"
-            className="border-blue-500/30 bg-blue-500/10 text-blue-400 text-xs font-sans font-medium"
+            className="border-emerald-500/30 bg-emerald-500/10 text-emerald-400 text-xs font-sans font-medium"
           >
-            V1.4.1 Certified
+            V1.5 Certified
           </Badge>
         </div>
         <p className="text-sm text-muted-foreground mt-1">
@@ -67,6 +69,18 @@ export function CockpitHeader({
       </div>
 
       <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+        {/* Ask Ciclopes AI Action Button */}
+        {onOpenAskCiclopes && (
+          <Button
+            onClick={onOpenAskCiclopes}
+            size="sm"
+            className="h-8 gap-1.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-medium shadow-sm border border-emerald-500/30 cursor-pointer"
+          >
+            <Sparkles className="h-3.5 w-3.5" />
+            <span>Ask Ciclopes</span>
+          </Button>
+        )}
+
         {/* Timezone pill */}
         <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-secondary/50 border border-border/60 text-xs text-muted-foreground">
           <Globe className="h-3.5 w-3.5" />
@@ -87,8 +101,8 @@ export function CockpitHeader({
               onClick={() => onRangeChange(r.key)}
               className={`px-3 py-1 text-xs font-medium rounded-md transition-all ${
                 range === r.key
-                  ? "bg-background text-foreground shadow-sm font-semibold"
-                  : "text-muted-foreground hover:text-foreground"
+                  ? 'bg-background text-foreground shadow-sm font-semibold'
+                  : 'text-muted-foreground hover:text-foreground'
               }`}
             >
               {r.label}
@@ -104,7 +118,7 @@ export function CockpitHeader({
           disabled={loading}
           className="h-8 px-2.5 border-border hover:bg-secondary"
         >
-          <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin text-blue-400" : ""}`} />
+          <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin text-blue-400' : ''}`} />
         </Button>
       </div>
     </div>

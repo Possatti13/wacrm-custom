@@ -1,8 +1,8 @@
-"use client";
+'use client';
 
-import React, { useState, useEffect, useCallback } from "react";
-import { useAuth } from "@/hooks/use-auth";
-import { createClient } from "@/lib/supabase/client";
+import React, { useState, useEffect, useCallback } from 'react';
+import { useAuth } from '@/hooks/use-auth';
+import { createClient } from '@/lib/supabase/client';
 import {
   loadManagerCockpitSummary,
   loadManagerAttentionQueue,
@@ -10,7 +10,7 @@ import {
   loadManagerProductIntelligence,
   loadManagerTeamPerformance,
   loadManagerSignalsAndPipeline,
-} from "@/lib/analytics/manager-cockpit-repository";
+} from '@/lib/analytics/manager-cockpit-repository';
 import type {
   ManagerCockpitSummary,
   AttentionQueueResponse,
@@ -19,27 +19,29 @@ import type {
   TeamPerformanceResponse,
   SignalsAndPipelineResponse,
   PeriodRange,
-} from "@/lib/analytics/types";
+} from '@/lib/analytics/types';
 
-import { CockpitHeader } from "@/components/cockpit/cockpit-header";
-import { ExecutivePulse } from "@/components/cockpit/executive-pulse";
-import { WhatChanged } from "@/components/cockpit/what-changed";
-import { AttentionQueue } from "@/components/cockpit/attention-queue";
-import { ObjectionIntelligence } from "@/components/cockpit/objection-intelligence";
-import { ProductFrictionMatrix } from "@/components/cockpit/product-friction-matrix";
-import { TeamOperatingTable } from "@/components/cockpit/team-operating-table";
-import { SignalsAndPipeline } from "@/components/cockpit/signals-and-pipeline";
-import { OperationalHealthFooter } from "@/components/cockpit/operational-health-footer";
-import { Card } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import Link from "next/link";
-import { ListTodo, MessageSquare, ShieldAlert } from "lucide-react";
+import { CockpitHeader } from '@/components/cockpit/cockpit-header';
+import { ExecutivePulse } from '@/components/cockpit/executive-pulse';
+import { WhatChanged } from '@/components/cockpit/what-changed';
+import { AttentionQueue } from '@/components/cockpit/attention-queue';
+import { ObjectionIntelligence } from '@/components/cockpit/objection-intelligence';
+import { ProductFrictionMatrix } from '@/components/cockpit/product-friction-matrix';
+import { TeamOperatingTable } from '@/components/cockpit/team-operating-table';
+import { SignalsAndPipeline } from '@/components/cockpit/signals-and-pipeline';
+import { OperationalHealthFooter } from '@/components/cockpit/operational-health-footer';
+import { AskCiclopesPanel } from '@/components/cockpit/ask-ciclopes-panel';
+import { Card } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import Link from 'next/link';
+import { ListTodo, MessageSquare, ShieldAlert } from 'lucide-react';
 
 export default function DashboardPage() {
   const { accountId, profile, defaultCurrency, loading: authLoading } = useAuth();
 
-  const [range, setRange] = useState<PeriodRange>("30d");
-  const [priorityFilter, setPriorityFilter] = useState<"all" | "urgent" | "high" | "medium">("all");
+  const [range, setRange] = useState<PeriodRange>('30d');
+  const [priorityFilter, setPriorityFilter] = useState<'all' | 'urgent' | 'high' | 'medium'>('all');
+  const [isAskCiclopesOpen, setIsAskCiclopesOpen] = useState(false);
 
   const [summary, setSummary] = useState<ManagerCockpitSummary | null>(null);
   const [attention, setAttention] = useState<AttentionQueueResponse | null>(null);
@@ -52,8 +54,8 @@ export default function DashboardPage() {
   const [attentionLoading, setAttentionLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const userRole = profile?.account_role || "agent";
-  const isManager = userRole === "owner" || userRole === "admin";
+  const userRole = profile?.account_role || 'agent';
+  const isManager = userRole === 'owner' || userRole === 'admin';
 
   const loadAll = useCallback(async () => {
     if (!accountId) return;
@@ -81,8 +83,8 @@ export default function DashboardPage() {
         setSignals(sigRes);
       }
     } catch (err: unknown) {
-      console.error("[DashboardPage] loadAll failed:", err);
-      const msg = err instanceof Error ? err.message : "Erro ao carregar dados do cockpit.";
+      console.error('[DashboardPage] loadAll failed:', err);
+      const msg = err instanceof Error ? err.message : 'Erro ao carregar dados do cockpit.';
       setError(msg);
     } finally {
       setLoading(false);
@@ -91,11 +93,11 @@ export default function DashboardPage() {
 
   useEffect(() => {
     if (!authLoading && accountId) {
-      loadAll().catch((err) => console.error("Error loading cockpit:", err));
+      loadAll().catch((err) => console.error('Error loading cockpit:', err));
     }
   }, [authLoading, accountId, loadAll]);
 
-  const handlePriorityFilterChange = async (newFilter: "all" | "urgent" | "high" | "medium") => {
+  const handlePriorityFilterChange = async (newFilter: 'all' | 'urgent' | 'high' | 'medium') => {
     setPriorityFilter(newFilter);
     if (!accountId || !isManager) return;
 
@@ -105,7 +107,7 @@ export default function DashboardPage() {
       const attRes = await loadManagerAttentionQueue(db, accountId, newFilter, 20, 0);
       setAttention(attRes);
     } catch (err) {
-      console.error("Failed to filter attention queue:", err);
+      console.error('Failed to filter attention queue:', err);
     } finally {
       setAttentionLoading(false);
     }
@@ -168,6 +170,7 @@ export default function DashboardPage() {
         evaluatedAt={summary?.data_freshness.evaluated_at}
         loading={loading}
         onRefresh={loadAll}
+        onOpenAskCiclopes={() => setIsAskCiclopesOpen(true)}
       />
 
       {/* Error alert if any */}
@@ -248,6 +251,12 @@ export default function DashboardPage() {
           loading={loading}
         />
       )}
+
+      {/* 9. Ask Ciclopes Grounded AI Drawer */}
+      <AskCiclopesPanel
+        isOpen={isAskCiclopesOpen}
+        onClose={() => setIsAskCiclopesOpen(false)}
+      />
     </div>
   );
 }
