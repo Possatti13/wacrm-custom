@@ -93,22 +93,29 @@ export async function processIntelligenceBatch(options?: {
     const readCt = Number(row.read_ct)
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const envelope = row.message as any
-    const payload = envelope?.payload || {}
+    const payload = envelope?.payload || envelope || {}
 
     try {
       const accountId = payload.accountId || envelope?.accountId
-      const conversationId = payload.conversationId
+      const conversationId = payload.conversationId || envelope?.conversationId
 
       if (!accountId || !conversationId) {
         throw new Error('Invalid intelligence job envelope: missing accountId or conversationId')
       }
+
+      // Fetch tenant intelligence settings for defaults
+      const { data: tenantSettings } = await db
+        .from('tenant_intelligence_settings')
+        .select('provider, model, extractor_version, prompt_version')
+        .eq('account_id', accountId)
+        .maybeSingle()
 
       // Resolve provider
       let provider: CommercialIntelligenceProvider
       if (options?.providerOverride) {
         provider = options.providerOverride
       } else {
-        const providerName = payload.provider || 'openai'
+        const providerName = payload.provider || tenantSettings?.provider || 'openai'
         if (providerName === 'mock') {
           provider = new MockStructuredExtractor()
         } else {
@@ -122,9 +129,9 @@ export async function processIntelligenceBatch(options?: {
         provider,
         accountId,
         conversationId,
-        extractorVersion: payload.extractorVersion || 'v1',
-        promptVersion: payload.promptVersion || 'v1',
-        model: payload.model,
+        extractorVersion: payload.extractorVersion || tenantSettings?.extractor_version || 'v1',
+        promptVersion: payload.promptVersion || tenantSettings?.prompt_version || 'v1',
+        model: payload.model || tenantSettings?.model,
       })
 
       if (!extractionRes.processed && extractionRes.reason === 'failed') {

@@ -177,7 +177,7 @@ export class GeminiStructuredExtractor implements CommercialIntelligenceProvider
       let parsed: unknown
       try {
         parsed = JSON.parse(cleanJsonStr)
-      } catch (jsonErr) {
+      } catch {
         throw new AiError(`Google Gemini returned invalid JSON: ${cleanJsonStr.slice(0, 100)}`, {
           code: 'invalid_json',
           status: 502,

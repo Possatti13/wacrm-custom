@@ -144,7 +144,8 @@ export function resolveAndValidateObservation(
   else if (type === 'objection') {
     const rawVal = typeof obs.value === 'string' ? obs.value.trim() : JSON.stringify(obs.value)
     valueText = normalizeObjection(rawVal)
-    const rawCode = (obs as any).taxonomy_code || (obs as any).taxonomyCode || 'other'
+    const obsRecord = obs as unknown as Record<string, unknown>
+    const rawCode = obsRecord.taxonomy_code || obsRecord.taxonomyCode || 'other'
     const allowedCodes = new Set([
       'price_budget',
       'payment_financing',
@@ -177,7 +178,35 @@ export function resolveAndValidateObservation(
     valueJson = { signal: valueText }
   }
 
-  // 6. Other Types (urgency, sentiment, next_action, summary)
+  // 6. Urgency Normalization
+  else if (type === 'urgency') {
+    const raw = typeof obs.value === 'string' ? obs.value.trim().toLowerCase() : String(obs.value).toLowerCase()
+    if (['high', 'alta', 'urgent', 'urgente', 'altíssima'].some((w) => raw.includes(w))) {
+      valueText = 'high'
+    } else if (['low', 'baixa', 'pouca'].some((w) => raw.includes(w))) {
+      valueText = 'low'
+    } else {
+      valueText = 'medium'
+    }
+    valueJson = { urgency: valueText }
+  }
+
+  // 7. Sentiment Normalization
+  else if (type === 'sentiment') {
+    const raw = typeof obs.value === 'string' ? obs.value.trim().toLowerCase() : String(obs.value).toLowerCase()
+    if (['positive', 'positivo', 'boa', 'ótima'].some((w) => raw.includes(w))) {
+      valueText = 'positive'
+    } else if (['negative', 'negativo', 'ruim', 'crítica'].some((w) => raw.includes(w))) {
+      valueText = 'negative'
+    } else if (['mixed', 'misto', 'neutro/misto'].some((w) => raw.includes(w))) {
+      valueText = 'mixed'
+    } else {
+      valueText = 'neutral'
+    }
+    valueJson = { sentiment: valueText }
+  }
+
+  // 8. Other Types (next_action, summary)
   else {
     if (typeof obs.value === 'object' && obs.value !== null) {
       valueJson = obs.value as Record<string, unknown>

@@ -164,7 +164,7 @@ export async function executeConversationExtraction(
         accountId,
         conversationId,
         mode: 'auto_reply', // using compatible mode for log table
-        provider: provider.providerName as any,
+        provider: provider.providerName as Parameters<typeof logAiUsage>[1]['provider'],
         model: extractionResult.model || model || 'default',
         usage: {
           promptTokens: extractionResult.usage.promptTokens,
