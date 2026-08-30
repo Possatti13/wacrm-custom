@@ -406,7 +406,12 @@ export function buildFactPacket(params: {
     const oppRes = toolOutputs['manager.coaching_opportunities'] as CoachingOpportunitiesResponse;
     for (const opp of (oppRes.items || []).slice(0, 10)) {
       const leadToken = `LEAD_${leadIndex++}`;
-      const sellerToken = getOrAssignSellerToken(opp.responsible_user_id, opp.responsible_user_name);
+      const eventSellerToken = opp.event_responsible_user_id
+        ? getOrAssignSellerToken(opp.event_responsible_user_id, opp.event_responsible_user_name || 'Vendedor')
+        : 'UNASSIGNED_AT_EVENT';
+      const currentSellerToken = opp.current_assigned_user_id
+        ? getOrAssignSellerToken(opp.current_assigned_user_id, opp.current_assigned_user_name || 'Vendedor')
+        : 'UNASSIGNED';
 
       privateEntityMap[leadToken] = {
         lead_token: leadToken,
@@ -427,7 +432,9 @@ export function buildFactPacket(params: {
         source: 'manager.coaching_opportunities',
         metadata: {
           lead_token: leadToken,
-          seller_token: sellerToken,
+          seller_token: eventSellerToken,
+          event_seller_token: eventSellerToken,
+          current_seller_token: currentSellerToken,
           category: opp.category,
           severity: opp.severity,
           primary_reason: opp.primary_reason,

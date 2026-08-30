@@ -30,7 +30,7 @@ const OWNER_USER_ID = 'b4a10080-263b-4bf8-a22a-7a6741a27bc1';
 const ADMIN_USER_ID = '8033db8d-f918-46cf-811c-d9a5e38f5467';
 const AGENT_USER_ID = 'a1111111-1111-4111-a111-111111111111';
 
-describe('CICLOPES V1.6.1 — Coaching Security, Attribution & Review Integrity', () => {
+describe('CICLOPES V1.6.2 — Final Coaching Semantic Integrity Gate', () => {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let adminDb: any;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -57,8 +57,8 @@ describe('CICLOPES V1.6.1 — Coaching Security, Attribution & Review Integrity'
     expect(data).toBeDefined();
   });
 
-  it('B. verifies table privileges on coaching_opportunity_reviews (authenticated is SELECT-only, no direct mutations)', async () => {
-    // Attempting a direct insert as anonymous/unauthenticated client MUST fail
+  it('B. verifies table privileges and DB check constraint on coaching_opportunity_reviews', async () => {
+    // 1. Anon direct mutation fails
     const { error: insertErr } = await anonDb
       .from('coaching_opportunity_reviews')
       .insert({
@@ -66,8 +66,18 @@ describe('CICLOPES V1.6.1 — Coaching Security, Attribution & Review Integrity'
         opportunity_key: 'test:unauthorized',
         status: 'open',
       });
-
     expect(insertErr).not.toBeNull();
+
+    // 2. Direct violation of DB check constraint (status open with reviewed_at set) fails
+    const { error: invalidCheckErr } = await adminDb
+      .from('coaching_opportunity_reviews')
+      .insert({
+        account_id: TEST_TENANT_ID,
+        opportunity_key: 'test:invalid_check',
+        status: 'open',
+        reviewed_at: new Date().toISOString(), // Violates chk_coaching_review_status_invariants
+      });
+    expect(invalidCheckErr).not.toBeNull();
   });
 
   // ==========================================
@@ -169,7 +179,6 @@ describe('CICLOPES V1.6.1 — Coaching Security, Attribution & Review Integrity'
     expect(reopenRes.status).toBe('open');
     expect(reopenRes.reviewed_at).toBeNull();
     expect(reopenRes.dismissed_reason).toBeNull();
-    // Notes are preserved
     expect(reopenRes.notes).toBe('Notas de descarte');
 
     // 4. Transition OPEN -> REVIEWED
@@ -206,7 +215,7 @@ describe('CICLOPES V1.6.1 — Coaching Security, Attribution & Review Integrity'
     }
   });
 
-  it('F. rejects invalid review statuses strictly', async () => {
+  it('F. rejects invalid review statuses and missing dismissed reasons strictly', async () => {
     await expect(
       updateManagerCoachingOpportunityStatus(
         adminDb,
@@ -215,6 +224,17 @@ describe('CICLOPES V1.6.1 — Coaching Security, Attribution & Review Integrity'
         'invalid_status_code' as unknown as CoachingReviewStatus
       )
     ).rejects.toThrow(/Invalid status/);
+
+    await expect(
+      updateManagerCoachingOpportunityStatus(
+        adminDb,
+        TEST_TENANT_ID,
+        'test_key:invalid_dismiss',
+        'dismissed',
+        'sem motivo',
+        '' // Empty dismissed reason
+      )
+    ).rejects.toThrow(/Dismissed status requires a dismissed_reason/);
   });
 
   // ==========================================
@@ -236,12 +256,13 @@ describe('CICLOPES V1.6.1 — Coaching Security, Attribution & Review Integrity'
       expect(opp).toHaveProperty('responsible_user_name');
 
       if (opp.category === 'buying_signal_missed' && opp.event_responsible_user_id === null) {
-        expect(opp.event_responsible_user_name).toBe('Não atribuído no evento');
+        expect(opp.event_responsible_user_name).toBe('Não identificado');
+        expect(opp.responsible_user_id).toBeNull();
       }
     }
   });
 
-  it('G1. CONTROLLED ATTRIBUTION FIXTURE: proves historical signal remains with Seller A after reassignment to Seller B', async () => {
+  it('G1. CONTROLLED FIXTURE A: historical signal remains with Seller A after reassignment to Seller B', async () => {
     const contactPhone = `+5511999${Math.floor(10000 + Math.random() * 90000)}`;
     const now = new Date();
     const t1 = new Date(now.getTime() - 7200 * 1000); // 2 hours ago
@@ -254,7 +275,7 @@ describe('CICLOPES V1.6.1 — Coaching Security, Attribution & Review Integrity'
       .insert({
         account_id: TEST_TENANT_ID,
         user_id: OWNER_USER_ID,
-        name: 'Cliente Teste Atribuicao',
+        name: 'Cliente Teste Atribuicao A',
         phone: contactPhone,
       })
       .select()
@@ -322,10 +343,9 @@ describe('CICLOPES V1.6.1 — Coaching Security, Attribution & Review Integrity'
 
     const targetItem = allOpps.items.find((i) => i.conversation_id === conv!.id);
     expect(targetItem).toBeDefined();
-    // Historical event responsible is Seller A (Owner)
     expect(targetItem!.event_responsible_user_id).toBe(OWNER_USER_ID);
-    // Current assignee is Seller B (Admin)
     expect(targetItem!.current_assigned_user_id).toBe(ADMIN_USER_ID);
+    expect(targetItem!.responsible_user_id).toBe(OWNER_USER_ID);
 
     // 6. Filter by Seller A (Owner) -> MUST find the opportunity
     const oppsSellerA = await getManagerCoachingOpportunities(adminDb, TEST_TENANT_ID, {
@@ -346,6 +366,410 @@ describe('CICLOPES V1.6.1 — Coaching Security, Attribution & Review Integrity'
     // Cleanup fixture
     await adminDb.from('conversation_insights').delete().eq('id', insight!.id);
     await adminDb.from('conversation_assignment_history').delete().eq('conversation_id', conv!.id);
+    await adminDb.from('conversations').delete().eq('id', conv!.id);
+    await adminDb.from('contacts').delete().eq('id', contact!.id);
+  });
+
+  it('G2. CONTROLLED FIXTURE B (UNKNOWN HISTORY): buying signal with no prior assignment history returns NULL event actor (NEVER falls back to current Seller B)', async () => {
+    const contactPhone = `+5511999${Math.floor(10000 + Math.random() * 90000)}`;
+    const now = new Date();
+    const t1 = new Date(now.getTime() - 7200 * 1000); // 2 hours ago (Buying signal at T1 with NO assignment history)
+    const t2 = new Date(now.getTime() - 1800 * 1000); // 30 mins ago (Assigned to Seller B at T2)
+
+    // 1. Create contact & conversation
+    const { data: contact } = await adminDb
+      .from('contacts')
+      .insert({
+        account_id: TEST_TENANT_ID,
+        user_id: OWNER_USER_ID,
+        name: 'Cliente Teste Unknown History',
+        phone: contactPhone,
+      })
+      .select()
+      .single();
+
+    const { data: conv } = await adminDb
+      .from('conversations')
+      .insert({
+        account_id: TEST_TENANT_ID,
+        user_id: OWNER_USER_ID,
+        contact_id: contact!.id,
+        status: 'open',
+        assigned_agent_id: ADMIN_USER_ID, // Currently assigned to Seller B
+        created_at: t1.toISOString(),
+      })
+      .select()
+      .single();
+
+    // 2. Buying signal at T1
+    const { data: insight } = await adminDb
+      .from('conversation_insights')
+      .insert({
+        account_id: TEST_TENANT_ID,
+        conversation_id: conv!.id,
+        insight_type: 'buying_signal',
+        value_text: 'Cliente quer plano avançado',
+        observed_at: t1.toISOString(),
+        status: 'active',
+        confidence: 0.95,
+      })
+      .select()
+      .single();
+
+    // 3. Assignment at T2 (AFTER the signal)
+    await adminDb.from('conversation_assignment_history').insert({
+      account_id: TEST_TENANT_ID,
+      conversation_id: conv!.id,
+      from_user_id: null,
+      to_user_id: ADMIN_USER_ID,
+      event_type: 'assigned',
+      created_at: t2.toISOString(),
+    });
+
+    // 4. Query candidate:
+    const allOpps = await getManagerCoachingOpportunities(adminDb, TEST_TENANT_ID, {
+      range: 'today',
+      category: 'buying_signal_missed',
+    });
+
+    const targetItem = allOpps.items.find((i) => i.conversation_id === conv!.id);
+    expect(targetItem).toBeDefined();
+    // Historical event responsible MUST BE NULL (never falsely attributed to Seller B)
+    expect(targetItem!.event_responsible_user_id).toBeNull();
+    expect(targetItem!.event_responsible_user_name).toBe('Não identificado');
+    // Current assignee is Seller B
+    expect(targetItem!.current_assigned_user_id).toBe(ADMIN_USER_ID);
+    // Canonical responsible_user_id is NULL (no fallback)
+    expect(targetItem!.responsible_user_id).toBeNull();
+    expect(targetItem!.responsible_user_name).toBe('Não identificado');
+
+    // Cleanup fixture
+    await adminDb.from('conversation_insights').delete().eq('id', insight!.id);
+    await adminDb.from('conversation_assignment_history').delete().eq('conversation_id', conv!.id);
+    await adminDb.from('conversations').delete().eq('id', conv!.id);
+    await adminDb.from('contacts').delete().eq('id', contact!.id);
+  });
+
+  it('G3. CONTROLLED FIXTURE C (SAME-PRIORITY DEDUPE): tie-break selects most recent unresolved event deterministically', async () => {
+    const contactPhone = `+5511999${Math.floor(10000 + Math.random() * 90000)}`;
+    const now = new Date();
+    const t1 = new Date(now.getTime() - 7200 * 1000); // 10:00 under Seller A
+    const t2 = new Date(now.getTime() - 5400 * 1000); // 11:00 reassigned to Seller B
+    const t3 = new Date(now.getTime() - 3600 * 1000); // 12:00 second buying signal under Seller B
+
+    const { data: contact } = await adminDb
+      .from('contacts')
+      .insert({
+        account_id: TEST_TENANT_ID,
+        user_id: OWNER_USER_ID,
+        name: 'Cliente Teste Same Priority',
+        phone: contactPhone,
+      })
+      .select()
+      .single();
+
+    const { data: conv } = await adminDb
+      .from('conversations')
+      .insert({
+        account_id: TEST_TENANT_ID,
+        user_id: OWNER_USER_ID,
+        contact_id: contact!.id,
+        status: 'open',
+        assigned_agent_id: ADMIN_USER_ID,
+        created_at: t1.toISOString(),
+      })
+      .select()
+      .single();
+
+    // Assignment 1 at T1 (Seller A - Owner)
+    await adminDb.from('conversation_assignment_history').insert({
+      account_id: TEST_TENANT_ID,
+      conversation_id: conv!.id,
+      to_user_id: OWNER_USER_ID,
+      event_type: 'assigned',
+      created_at: t1.toISOString(),
+    });
+
+    // Buying signal 1 at T1 under Seller A
+    const { data: insight1 } = await adminDb
+      .from('conversation_insights')
+      .insert({
+        account_id: TEST_TENANT_ID,
+        conversation_id: conv!.id,
+        insight_type: 'buying_signal',
+        value_text: 'Sinal 1 às 10:00 sob Seller A',
+        observed_at: t1.toISOString(),
+        status: 'active',
+        confidence: 0.9,
+      })
+      .select()
+      .single();
+
+    // Assignment 2 at T2 (Seller B - Admin)
+    await adminDb.from('conversation_assignment_history').insert({
+      account_id: TEST_TENANT_ID,
+      conversation_id: conv!.id,
+      from_user_id: OWNER_USER_ID,
+      to_user_id: ADMIN_USER_ID,
+      event_type: 'reassigned',
+      created_at: t2.toISOString(),
+    });
+
+    // Buying signal 2 at T3 under Seller B
+    const { data: insight2 } = await adminDb
+      .from('conversation_insights')
+      .insert({
+        account_id: TEST_TENANT_ID,
+        conversation_id: conv!.id,
+        insight_type: 'buying_signal',
+        value_text: 'Sinal 2 às 12:00 sob Seller B',
+        observed_at: t3.toISOString(),
+        status: 'active',
+        confidence: 0.95,
+      })
+      .select()
+      .single();
+
+    const allOpps = await getManagerCoachingOpportunities(adminDb, TEST_TENANT_ID, {
+      range: 'today',
+      category: 'buying_signal_missed',
+    });
+
+    const targetItem = allOpps.items.find((i) => i.conversation_id === conv!.id);
+    expect(targetItem).toBeDefined();
+    // Primary event MUST BE the most recent unresolved signal (T3 at 12:00 under Seller B)
+    expect(new Date(targetItem!.detected_at).getTime()).toBe(t3.getTime());
+    expect(targetItem!.event_responsible_user_id).toBe(ADMIN_USER_ID);
+    expect(targetItem!.responsible_user_id).toBe(ADMIN_USER_ID);
+    // Evidence contains both signals
+    expect(targetItem!.evidence.length).toBe(2);
+
+    // Cleanup fixture
+    await adminDb.from('conversation_insights').delete().in('id', [insight1!.id, insight2!.id]);
+    await adminDb.from('conversation_assignment_history').delete().eq('conversation_id', conv!.id);
+    await adminDb.from('conversations').delete().eq('id', conv!.id);
+    await adminDb.from('contacts').delete().eq('id', contact!.id);
+  });
+
+  it('G4. CONTROLLED FIXTURE D (PRIMARY ROW COHERENCE & OLDER SECONDARY): older secondary unassigned signal does not alter primary detected_at', async () => {
+    const contactPhone = `+5511999${Math.floor(10000 + Math.random() * 90000)}`;
+    const now = new Date();
+    const tUnassigned = new Date(now.getTime() - 14400 * 1000); // 09:00 (4 hours ago) Unassigned conversation
+    const tSignal = new Date(now.getTime() - 3600 * 1000); // 14:00 (1 hour ago) Buying signal
+
+    const { data: contact } = await adminDb
+      .from('contacts')
+      .insert({
+        account_id: TEST_TENANT_ID,
+        user_id: OWNER_USER_ID,
+        name: 'Cliente Teste Older Secondary',
+        phone: contactPhone,
+      })
+      .select()
+      .single();
+
+    const { data: conv } = await adminDb
+      .from('conversations')
+      .insert({
+        account_id: TEST_TENANT_ID,
+        user_id: OWNER_USER_ID,
+        contact_id: contact!.id,
+        status: 'open',
+        assigned_agent_id: null,
+        unread_count: 1,
+        pending_message_count: 1,
+        created_at: tUnassigned.toISOString(),
+      })
+      .select()
+      .single();
+
+    // Buying signal at 14:00
+    const { data: insight } = await adminDb
+      .from('conversation_insights')
+      .insert({
+        account_id: TEST_TENANT_ID,
+        conversation_id: conv!.id,
+        insight_type: 'buying_signal',
+        value_text: 'Sinal de compra às 14:00',
+        observed_at: tSignal.toISOString(),
+        status: 'active',
+        confidence: 0.95,
+      })
+      .select()
+      .single();
+
+    const allOpps = await getManagerCoachingOpportunities(adminDb, TEST_TENANT_ID, {
+      range: 'today',
+    });
+
+    const targetItem = allOpps.items.find((i) => i.conversation_id === conv!.id);
+    expect(targetItem).toBeDefined();
+    // Primary category MUST be buying_signal_missed (Rank 1 vs Rank 6)
+    expect(targetItem!.category).toBe('buying_signal_missed');
+    // detected_at MUST be 14:00 (from primary row), NOT 09:00 from the older unassigned secondary signal!
+    expect(new Date(targetItem!.detected_at).getTime()).toBe(tSignal.getTime());
+    // secondary_signals contains unassigned_commercial
+    expect(targetItem!.secondary_signals).toContain('unassigned_commercial');
+
+    // Cleanup fixture
+    await adminDb.from('conversation_insights').delete().eq('id', insight!.id);
+    await adminDb.from('conversations').delete().eq('id', conv!.id);
+    await adminDb.from('contacts').delete().eq('id', contact!.id);
+  });
+
+  it('G5. CONTROLLED FIXTURE E (OVERALL SEVERITY FROM SECONDARY SIGNAL): overall severity reflects strongest secondary signal', async () => {
+    const contactPhone = `+5511999${Math.floor(10000 + Math.random() * 90000)}`;
+    const now = new Date();
+    const tTask = new Date(now.getTime() - 7200 * 1000); // 2 hours ago (Overdue task created and due)
+    const tSignal = new Date(now.getTime() - 3600 * 1000); // 1 hour ago (Buying signal after task, no subsequent task)
+
+    const { data: contact } = await adminDb
+      .from('contacts')
+      .insert({
+        account_id: TEST_TENANT_ID,
+        user_id: OWNER_USER_ID,
+        name: 'Cliente Teste Severity Aggregation',
+        phone: contactPhone,
+      })
+      .select()
+      .single();
+
+    const { data: conv } = await adminDb
+      .from('conversations')
+      .insert({
+        account_id: TEST_TENANT_ID,
+        user_id: OWNER_USER_ID,
+        contact_id: contact!.id,
+        status: 'open',
+        assigned_agent_id: OWNER_USER_ID,
+        created_at: tTask.toISOString(),
+      })
+      .select()
+      .single();
+
+    // Assignment
+    await adminDb.from('conversation_assignment_history').insert({
+      account_id: TEST_TENANT_ID,
+      conversation_id: conv!.id,
+      to_user_id: OWNER_USER_ID,
+      event_type: 'assigned',
+      created_at: tTask.toISOString(),
+    });
+
+    // Primary candidate: Buying signal with HIGH severity (lead score = 50 -> high)
+    const { data: insight } = await adminDb
+      .from('conversation_insights')
+      .insert({
+        account_id: TEST_TENANT_ID,
+        conversation_id: conv!.id,
+        insight_type: 'buying_signal',
+        value_text: 'Sinal de compra score normal',
+        observed_at: tSignal.toISOString(),
+        status: 'active',
+        confidence: 0.9,
+      })
+      .select()
+      .single();
+
+    // Secondary candidate: Overdue task with URGENT priority
+    const { data: task } = await adminDb
+      .from('tasks')
+      .insert({
+        account_id: TEST_TENANT_ID,
+        conversation_id: conv!.id,
+        contact_id: contact!.id,
+        assigned_user_id: OWNER_USER_ID,
+        title: 'Follow-up urgente atrasado',
+        priority: 'urgent',
+        status: 'pending',
+        due_at: tTask.toISOString(),
+        created_at: tTask.toISOString(),
+      })
+      .select()
+      .single();
+
+    const allOpps = await getManagerCoachingOpportunities(adminDb, TEST_TENANT_ID, {
+      range: 'today',
+    });
+
+    const targetItem = allOpps.items.find((i) => i.conversation_id === conv!.id);
+    expect(targetItem).toBeDefined();
+    // Primary category is buying_signal_missed (Rank 1)
+    expect(targetItem!.category).toBe('buying_signal_missed');
+    // Primary reason reflects buying signal
+    expect(targetItem!.primary_reason).toBe('Sinal de compra identificado sem ação posterior registrada');
+    // Overall opportunity severity is elevated to URGENT due to the secondary urgent task!
+    expect(targetItem!.severity).toBe('urgent');
+    // secondary_signals contains overdue_followup
+    expect(targetItem!.secondary_signals).toContain('overdue_followup');
+
+    // Cleanup fixture
+    await adminDb.from('tasks').delete().eq('id', task!.id);
+    await adminDb.from('conversation_insights').delete().eq('id', insight!.id);
+    await adminDb.from('conversation_assignment_history').delete().eq('conversation_id', conv!.id);
+    await adminDb.from('conversations').delete().eq('id', conv!.id);
+    await adminDb.from('contacts').delete().eq('id', contact!.id);
+  });
+
+  it('G6. CONTROLLED FIXTURE F (HALF-OPEN PERIOD END BOUNDARY): event at exactly period end is excluded [curr_start, curr_end)', async () => {
+    // Custom window: [2026-01-01T00:00:00Z, 2026-01-02T00:00:00Z)
+    const customStart = '2026-01-01T00:00:00.000Z';
+    const customEnd = '2026-01-02T00:00:00.000Z';
+    const exactEndTimestamp = customEnd; // Exactly at the end boundary
+
+    const contactPhone = `+5511999${Math.floor(10000 + Math.random() * 90000)}`;
+
+    const { data: contact } = await adminDb
+      .from('contacts')
+      .insert({
+        account_id: TEST_TENANT_ID,
+        user_id: OWNER_USER_ID,
+        name: 'Cliente Teste Half Open Boundary',
+        phone: contactPhone,
+      })
+      .select()
+      .single();
+
+    const { data: conv } = await adminDb
+      .from('conversations')
+      .insert({
+        account_id: TEST_TENANT_ID,
+        user_id: OWNER_USER_ID,
+        contact_id: contact!.id,
+        status: 'open',
+        assigned_agent_id: OWNER_USER_ID,
+        created_at: customStart,
+      })
+      .select()
+      .single();
+
+    // Signal observed at exactEndTimestamp (should be EXCLUDED by < curr_end)
+    const { data: insight } = await adminDb
+      .from('conversation_insights')
+      .insert({
+        account_id: TEST_TENANT_ID,
+        conversation_id: conv!.id,
+        insight_type: 'buying_signal',
+        value_text: 'Sinal exatamente na borda final',
+        observed_at: exactEndTimestamp,
+        status: 'active',
+        confidence: 0.95,
+      })
+      .select()
+      .single();
+
+    const opps = await getManagerCoachingOpportunities(adminDb, TEST_TENANT_ID, {
+      range: 'custom',
+      customStart,
+      customEnd,
+      category: 'buying_signal_missed',
+    });
+
+    // Must NOT contain the boundary event
+    expect(opps.items.some((i) => i.conversation_id === conv!.id)).toBe(false);
+
+    // Cleanup fixture
+    await adminDb.from('conversation_insights').delete().eq('id', insight!.id);
     await adminDb.from('conversations').delete().eq('id', conv!.id);
     await adminDb.from('contacts').delete().eq('id', contact!.id);
   });

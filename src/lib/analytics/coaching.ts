@@ -104,7 +104,8 @@ export async function updateManagerCoachingOpportunityStatus(
   opportunityKey: string,
   status: CoachingReviewStatus,
   notes?: string,
-  dismissedReason?: string
+  dismissedReason?: string,
+  reviewedByUserId?: string
 ): Promise<UpdateCoachingOpportunityStatusResult> {
   const { data, error } = await supabase.rpc('update_manager_coaching_opportunity_status', {
     p_account_id: accountId,
@@ -112,6 +113,7 @@ export async function updateManagerCoachingOpportunityStatus(
     p_status: status,
     p_notes: notes || null,
     p_dismissed_reason: dismissedReason || null,
+    p_reviewed_by_user_id: reviewedByUserId || null,
   });
 
   if (error) throw error;
