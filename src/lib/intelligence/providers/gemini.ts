@@ -107,7 +107,7 @@ export class GeminiStructuredExtractor implements CommercialIntelligenceProvider
   async extract(request: ExtractionProviderRequest): Promise<ExtractionProviderResult> {
     const startTime = Date.now()
     const model = request.model || DEFAULT_GEMINI_MODEL
-    const timeoutMs = request.timeoutMs || 30000
+    const timeoutMs = request.timeoutMs || 60000
 
     const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`
 

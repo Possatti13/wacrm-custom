@@ -143,6 +143,7 @@ export async function processIntelligenceBatch(options?: {
       result.succeeded++
     } catch (err: unknown) {
       const errorMsg = err instanceof Error ? err.message : String(err)
+      console.error('[intelligence worker error]:', err)
       result.failed++
 
       if (readCt >= MAX_JOB_ATTEMPTS) {

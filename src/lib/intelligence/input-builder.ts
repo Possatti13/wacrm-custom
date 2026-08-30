@@ -82,18 +82,27 @@ ACTIVE CATALOG PRODUCTS & SERVICES:
 ${activeCatalog.length > 0 ? activeCatalog.join('\n') : 'No products or services defined.'}
 
 EXTRACTION RULES:
-1. Extract observations only when there is explicit factual evidence in the conversation.
-2. For each observation, provide:
-   - type: One of 'interest', 'objection', 'intent', 'urgency', 'sentiment', 'next_action', 'summary', 'attribute', 'buying_signal', 'loss_signal'
-   - value: The extracted semantic value (for intent and attribute use exact keys; for objection provide explanation)
+1. Extract observations only when supported by the conversation.
+2. OBSERVATION TYPES & RULES:
+   - 'summary': Always provide 1 concise commercial summary of the current stage, customer needs, objections, and next steps (evidence can cite 1 or more relevant messages).
+   - 'intent': If customer intent matches one of the ALLOWED INTENTS keys (e.g. "purchase"), output the exact intent key with evidence.
+   - 'interest': Extracted interest in products/services or catalog items with evidence.
+   - 'objection': Commercial objections (price, timing, competition, etc.) with the appropriate taxonomy_code and exact quoted evidence.
+   - 'urgency': Urgency level ('low', 'medium', 'high') based on customer time constraints.
+   - 'next_action': Recommended commercial follow-up step.
+   - 'sentiment': Overall commercial sentiment ('positive', 'neutral', 'negative', 'mixed').
+   - 'buying_signal': Explicit purchase readiness or confirmation signal.
+   - 'loss_signal': Churn or drop-off signal.
+3. For each observation, provide:
+   - type: One of 'summary', 'intent', 'interest', 'objection', 'urgency', 'sentiment', 'next_action', 'attribute', 'buying_signal', 'loss_signal'
+   - value: The extracted semantic value (for intent use exact allowed intent key; for urgency use low/medium/high; for summary provide concise commercial summary)
    - taxonomy_code: (For 'objection') One of the allowed objection taxonomy codes above (default to 'other' if unclassified)
    - catalog_term: (For 'interest' or product-related 'objection') The mentioned product or term from the catalog
-   - attribute_key: (For 'attribute') The exact allowed attribute key
    - confidence: A numeric confidence value between 0.0 and 1.0 representing extraction certainty
    - evidence: An array of evidence items. Each item MUST specify:
      - message_ref: The message reference identifier (e.g. "M1", "M2")
      - quoted_text: An exact substring quote from that message providing proof
-3. Output MUST strictly adhere to the JSON schema: {"observations": [...]}.`
+4. Output MUST strictly adhere to the JSON schema: {"observations": [...]}.`
 
   // 7. User Prompt with Business Context & Untrusted Messages
   const userPrompt = `BUSINESS CONTEXT:

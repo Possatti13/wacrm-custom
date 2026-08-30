@@ -88,7 +88,20 @@ export function resolveAndValidateObservation(
   else if (type === 'intent') {
     const rawKey = typeof obs.value === 'string' ? obs.value.trim().toLowerCase() : ''
     const activeIntents = (ctx.configSnapshot.intents || []).filter((i) => i.status === 'active')
-    const matchedIntent = activeIntents.find((i) => i.key === rawKey)
+    let matchedIntent = activeIntents.find((i) => i.key === rawKey)
+    if (!matchedIntent) {
+      if (['compra', 'contratação', 'fechamento', 'purchase', 'buy'].some((w) => rawKey.includes(w))) {
+        matchedIntent = activeIntents.find((i) => i.key === 'purchase')
+      } else if (['orçamento', 'cotação', 'quote', 'budget', 'proposta'].some((w) => rawKey.includes(w))) {
+        matchedIntent = activeIntents.find((i) => i.key === 'budget_quote')
+      } else if (['informação', 'informacoes', 'duvida', 'dúvida', 'info', 'information'].some((w) => rawKey.includes(w))) {
+        matchedIntent = activeIntents.find((i) => i.key === 'information')
+      } else if (['suporte', 'atendimento', 'support'].some((w) => rawKey.includes(w))) {
+        matchedIntent = activeIntents.find((i) => i.key === 'support')
+      } else if (['recusa', 'sem interesse', 'not_interested', 'cancel'].some((w) => rawKey.includes(w))) {
+        matchedIntent = activeIntents.find((i) => i.key === 'not_interested')
+      }
+    }
     if (!matchedIntent) {
       // Rejects invented intent keys
       return null
@@ -206,7 +219,20 @@ export function resolveAndValidateObservation(
     valueJson = { sentiment: valueText }
   }
 
-  // 8. Other Types (next_action, summary)
+  // 8. Summary Normalization
+  else if (type === 'summary') {
+    const raw =
+      typeof obs.value === 'string'
+        ? obs.value.trim()
+        : obs.value && typeof obs.value === 'object'
+          ? ((obs.value as Record<string, unknown>).summary as string) || JSON.stringify(obs.value)
+          : ''
+    if (!raw || raw.trim().length === 0) return null
+    valueText = raw.trim()
+    valueJson = { summary: valueText }
+  }
+
+  // 9. Other Types (next_action, attribute)
   else {
     if (typeof obs.value === 'object' && obs.value !== null) {
       valueJson = obs.value as Record<string, unknown>
