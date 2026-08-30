@@ -14,6 +14,7 @@ import {
 } from "@/lib/catalog/repository";
 import { CatalogItemDialog } from "./catalog-item-dialog";
 import { EmptyState } from "@/components/ui/empty-state";
+import { PageHeader } from "@/components/layout/page-header";
 import {
   Package,
   Plus,
@@ -150,28 +151,23 @@ export function CatalogView() {
 
   return (
     <div className="space-y-6">
-      {/* Header & Primary Action */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div>
-          <h2 className="text-xl font-bold text-foreground font-sans flex items-center gap-2">
-            <Package className="h-5 w-5 text-[#1E3A5F] dark:text-[#5B8EC2]" />
-            Catálogo de Produtos & Serviços
-          </h2>
-          <p className="text-xs text-muted-foreground mt-0.5">
-            Cadastre os itens da sua empresa para que a IA reconheça automaticamente intenções e interesses de compra nas conversas.
-          </p>
-        </div>
-        <Button
-          onClick={() => {
-            setEditingItem(null);
-            setDialogOpen(true);
-          }}
-          className="bg-[#1E3A5F] hover:bg-[#162B46] text-[#F7F3EC] dark:bg-primary dark:text-primary-foreground gap-2 font-medium text-xs shadow-sm"
-        >
-          <Plus className="h-4 w-4" />
-          Novo Item
-        </Button>
-      </div>
+      {/* Standardized PageHeader */}
+      <PageHeader
+        title="Catálogo de Produtos & Serviços"
+        subtitle="Cadastre os itens da sua empresa para que a IA reconheça automaticamente intenções e interesses de compra"
+        actions={
+          <Button
+            onClick={() => {
+              setEditingItem(null);
+              setDialogOpen(true);
+            }}
+            className="h-8.5 px-3.5 text-xs font-semibold gap-1.5 bg-[#1E3A5F] hover:bg-[#162B46] text-white shadow-xs rounded-lg cursor-pointer"
+          >
+            <Plus className="size-3.5" />
+            <span>Novo Item</span>
+          </Button>
+        }
+      />
 
       {/* Filters and Search Bar */}
       <div className="flex flex-col md:flex-row gap-3 items-center justify-between">

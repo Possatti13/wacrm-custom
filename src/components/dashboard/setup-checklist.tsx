@@ -81,7 +81,7 @@ const ITEMS: SetupItem[] = [
     key: "hasAiConfig",
     title: "5. Configurar inteligência interna",
     description: "Ative sua OpenAI API Key e defina o modelo para síntese e extração sob demanda.",
-    href: "/settings?tab=ai-config",
+    href: "/settings?tab=intelligence",
     cta: "Configurar IA",
     icon: Sparkles,
   },

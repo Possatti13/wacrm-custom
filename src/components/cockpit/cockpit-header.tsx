@@ -50,58 +50,52 @@ export function CockpitHeader({
   ];
 
   return (
-    <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-6 border-b border-border/50">
+    <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-4 border-b border-border/70">
       <div>
         <div className="flex items-center gap-2">
-          <h1 className="text-2xl sm:text-3xl font-bold tracking-tight font-serif text-foreground">
-            Manager Cockpit
+          <h1 className="text-2xl sm:text-3xl font-bold tracking-tight font-sans text-foreground">
+            Cockpit Operacional
           </h1>
           <Badge
             variant="outline"
-            className="border-emerald-500/30 bg-emerald-500/10 text-emerald-400 text-xs font-sans font-medium"
+            className="border-primary/30 bg-primary/10 text-primary text-[11px] font-sans font-semibold"
           >
-            V1.5 Certified
+            Gestão Ativa
           </Badge>
         </div>
-        <p className="text-sm text-muted-foreground mt-1">
-          Visão gerencial da operação comercial, triagem de atenção e inteligência de conversas.
+        <p className="text-xs text-muted-foreground mt-1">
+          Visão estratégica da operação comercial, triagem de atenção e inteligência de conversas.
         </p>
       </div>
 
-      <div className="flex flex-wrap items-center gap-2 sm:gap-3">
-        {/* Ask Ciclopes AI Action Button */}
+      <div className="flex flex-wrap items-center gap-2 sm:gap-2.5">
+        {/* Ask Ciclopes AI Action Button matching Visual Reference 3 */}
         {onOpenAskCiclopes && (
           <Button
             onClick={onOpenAskCiclopes}
             size="sm"
-            className="h-8 gap-1.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-medium shadow-sm border border-emerald-500/30 cursor-pointer"
+            className="h-8 text-xs gap-1.5 bg-[#1E3A5F] hover:bg-[#162B46] text-white font-semibold shadow-xs rounded-lg cursor-pointer"
           >
-            <Sparkles className="h-3.5 w-3.5" />
-            <span>Ask Ciclopes</span>
+            <Sparkles className="size-3.5 text-[#D16A3A]" />
+            <span>Pergunte ao Ciclopes</span>
           </Button>
         )}
 
-        {/* Timezone pill */}
-        <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-secondary/50 border border-border/60 text-xs text-muted-foreground">
-          <Globe className="h-3.5 w-3.5" />
-          <span>{timezone}</span>
-        </div>
-
         {/* Freshness indicator */}
-        <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-secondary/50 border border-border/60 text-xs text-muted-foreground">
-          <Clock className="h-3.5 w-3.5 text-blue-400" />
+        <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-card border border-border/70 text-xs text-muted-foreground">
+          <Clock className="size-3 text-primary" />
           <span>{getFreshnessText()}</span>
         </div>
 
         {/* Period Selector Tabs */}
-        <div className="inline-flex rounded-lg bg-secondary/80 p-1 border border-border">
+        <div className="inline-flex rounded-lg bg-muted/60 p-0.5 border border-border/70">
           {ranges.map((r) => (
             <button
               key={r.key}
               onClick={() => onRangeChange(r.key)}
-              className={`px-3 py-1 text-xs font-medium rounded-md transition-all ${
+              className={`px-2.5 py-1 text-xs font-semibold rounded-md transition-all ${
                 range === r.key
-                  ? 'bg-background text-foreground shadow-sm font-semibold'
+                  ? 'bg-card text-foreground shadow-2xs'
                   : 'text-muted-foreground hover:text-foreground'
               }`}
             >
@@ -116,9 +110,10 @@ export function CockpitHeader({
           size="sm"
           onClick={onRefresh}
           disabled={loading}
-          className="h-8 px-2.5 border-border hover:bg-secondary"
+          className="size-8 p-0 border-border/70 hover:bg-muted"
+          title="Atualizar dados"
         >
-          <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin text-blue-400' : ''}`} />
+          <RefreshCw className={`size-3.5 ${loading ? 'animate-spin text-primary' : 'text-muted-foreground'}`} />
         </Button>
       </div>
     </div>

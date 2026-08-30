@@ -84,7 +84,7 @@ export function SettingsRail({
                     'flex shrink-0 items-center gap-2.5 rounded-lg px-3 py-2 text-left text-sm font-medium whitespace-nowrap transition-colors',
                     'lg:w-full',
                     isActive
-                      ? 'bg-primary-soft text-primary'
+                      ? 'bg-[#1E3A5F] text-white shadow-xs font-semibold'
                       : 'text-muted-foreground hover:bg-muted hover:text-foreground',
                   )}
                 >

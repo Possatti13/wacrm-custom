@@ -54,6 +54,7 @@ import { ContactForm } from '@/components/contacts/contact-form';
 import { ContactDetailView } from '@/components/contacts/contact-detail-view';
 import { ImportModal } from '@/components/contacts/import-modal';
 import { CustomFieldsManager } from '@/components/contacts/custom-fields-manager';
+import { PageHeader } from '@/components/layout/page-header';
 import { useCan } from '@/hooks/use-can';
 import { GatedButton } from '@/components/ui/gated-button';
 import { useTranslations } from 'next-intl';
@@ -341,46 +342,46 @@ export default function ContactsPage() {
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold text-foreground">{t('title')}</h1>
-          <p className="text-sm text-muted-foreground mt-1">
-            {totalCount > 0 ? t('subtitle', { count: totalCount }) : t('subtitleZero')}
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          {canEditSettings && (
-            <Button
+      <PageHeader
+        title="Contatos"
+        subtitle="Gerencie a base de clientes, leads e dados cadastrais"
+        actions={
+          <div className="flex flex-wrap items-center gap-2">
+            {canEditSettings && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setCustomFieldsOpen(true)}
+                className="h-8.5 text-xs border-border text-foreground hover:bg-muted"
+              >
+                <SlidersHorizontal className="size-3.5 mr-1" />
+                {t('customFieldsBtn')}
+              </Button>
+            )}
+            <GatedButton
               variant="outline"
-              onClick={() => setCustomFieldsOpen(true)}
-              className="border-border text-muted-foreground hover:bg-muted"
+              size="sm"
+              canAct={canEdit}
+              gateReason="add or import contacts"
+              onClick={() => setImportOpen(true)}
+              className="h-8.5 text-xs border-border text-foreground hover:bg-muted"
             >
-              <SlidersHorizontal className="size-4" />
-              {t('customFieldsBtn')}
-            </Button>
-          )}
-          <GatedButton
-            variant="outline"
-            canAct={canEdit}
-            gateReason="add or import contacts"
-            onClick={() => setImportOpen(true)}
-            className="border-border text-muted-foreground hover:bg-muted"
-          >
-            <Upload className="size-4" />
-            {t('importBtn')}
-          </GatedButton>
-          <GatedButton
-            canAct={canEdit}
-            gateReason="add or import contacts"
-            onClick={openAddForm}
-            className="bg-primary hover:bg-primary/90 text-primary-foreground"
-          >
-            <Plus className="size-4" />
-            {t('addContactBtn')}
-          </GatedButton>
-        </div>
-      </div>
+              <Upload className="size-3.5 mr-1" />
+              {t('importBtn')}
+            </GatedButton>
+            <GatedButton
+              size="sm"
+              canAct={canEdit}
+              gateReason="add or import contacts"
+              onClick={openAddForm}
+              className="h-8.5 text-xs font-semibold gap-1.5 bg-[#1E3A5F] hover:bg-[#162B46] text-white shadow-xs rounded-lg cursor-pointer"
+            >
+              <Plus className="size-3.5" />
+              {t('addContactBtn')}
+            </GatedButton>
+          </div>
+        }
+      />
 
       {/* Search + tag filter */}
       <div className="space-y-2">

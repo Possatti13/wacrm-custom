@@ -366,6 +366,15 @@ describe('V1.3.3 Completeness & Projection Integrity Matrix', () => {
         const tenantId = 'ec86e41e-6fec-41b8-a83f-64922c45d5ed'
         const ownerId = 'b4a10080-263b-4bf8-a22a-7a6741a27bc1'
         const contactId = 'c0000000-0000-0000-0000-000000000003'
+
+        await adminDb.from('account_ai_configs').upsert({
+          account_id: tenantId,
+          is_enabled: true,
+          invocation_mode: 'automatic',
+          provider: 'openai',
+          model: 'gpt-4o-mini',
+        })
+
         await adminDb.from('contacts').upsert({
           id: contactId,
           account_id: tenantId,

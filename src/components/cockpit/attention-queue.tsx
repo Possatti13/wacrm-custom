@@ -217,10 +217,10 @@ export function AttentionQueue({
                 </div>
 
                 <div className="flex items-center gap-2 shrink-0 self-end md:self-center">
-                  <Link href={`/inbox?conversationId=${item.conversation_id}`}>
-                    <Button size="sm" variant="default" className="h-8 text-xs font-semibold gap-1">
+                  <Link href={`/inbox?c=${item.conversation_id}`}>
+                    <Button size="sm" className="h-8 text-xs font-semibold gap-1 bg-[#1E3A5F] hover:bg-[#162B46] text-white shadow-xs">
                       <span>Abrir conversa</span>
-                      <ArrowRight className="h-3.5 w-3.5" />
+                      <ArrowRight className="size-3" />
                     </Button>
                   </Link>
                 </div>

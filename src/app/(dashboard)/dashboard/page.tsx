@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useCallback } from 'react';
+import { useRouter } from 'next/navigation';
 import { useAuth } from '@/hooks/use-auth';
 import { createClient } from '@/lib/supabase/client';
 import {
@@ -115,7 +116,16 @@ export default function DashboardPage() {
     }
   };
 
-  if (authLoading) {
+  const router = useRouter();
+
+  // Redirect agents and viewers directly to inbox
+  useEffect(() => {
+    if (!authLoading && !isManager) {
+      router.replace('/inbox');
+    }
+  }, [authLoading, isManager, router]);
+
+  if (authLoading || !isManager) {
     return (
       <div className="container mx-auto p-4 sm:p-6 max-w-7xl space-y-6">
         <div className="h-10 w-48 bg-muted animate-pulse rounded-lg" />
@@ -124,39 +134,6 @@ export default function DashboardPage() {
             <div key={i} className="h-28 bg-muted/60 animate-pulse rounded-xl" />
           ))}
         </div>
-      </div>
-    );
-  }
-
-  // Seller View (Role Isolation)
-  if (!isManager) {
-    return (
-      <div className="container mx-auto p-4 sm:p-6 max-w-4xl space-y-6 py-12">
-        <Card className="border-border text-center p-8 space-y-4 shadow-sm">
-          <div className="p-3 bg-blue-500/10 text-blue-400 rounded-full w-12 h-12 flex items-center justify-center mx-auto">
-            <MessageSquare className="h-6 w-6" />
-          </div>
-          <h2 className="text-xl font-bold font-serif text-foreground">
-            Painel do Vendedor
-          </h2>
-          <p className="text-sm text-muted-foreground max-w-md mx-auto">
-            O Manager Cockpit é restrito à gestão comercial. Como vendedor, utilize sua fila de atendimento na Caixa de Entrada e gerencie seus follow-ups diários.
-          </p>
-          <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
-            <Link href="/inbox">
-              <Button variant="default" className="gap-2 font-semibold">
-                <MessageSquare className="h-4 w-4" />
-                <span>Minha Caixa de Entrada</span>
-              </Button>
-            </Link>
-            <Link href="/tasks">
-              <Button variant="outline" className="gap-2 font-semibold border-border">
-                <ListTodo className="h-4 w-4" />
-                <span>Meus Follow-ups</span>
-              </Button>
-            </Link>
-          </div>
-        </Card>
       </div>
     );
   }
