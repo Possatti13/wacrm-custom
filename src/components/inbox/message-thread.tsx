@@ -997,14 +997,14 @@ export function MessageThread({
             </button>
           )}
 
-          {/* Copilot button */}
+          {/* Copilot button matching Visual Reference 4 */}
           <button
             type="button"
             onClick={() => setCopilotOpen(true)}
-            className="inline-flex items-center gap-1.5 h-7 px-2.5 text-xs font-semibold rounded-md border border-primary/40 bg-primary/10 text-primary hover:bg-primary/20 transition-colors shadow-sm"
+            className="inline-flex items-center gap-1.5 h-8 px-3 text-xs font-semibold rounded-lg bg-[#1E3A5F] hover:bg-[#162B46] text-white transition-all shadow-xs cursor-pointer"
             title="Abrir Copiloto Comercial"
           >
-            <Sparkles className="h-3.5 w-3.5" />
+            <Sparkles className="size-3.5 text-[#D16A3A]" />
             <span className="hidden sm:inline">Copiloto</span>
           </button>
 

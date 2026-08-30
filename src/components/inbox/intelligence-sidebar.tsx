@@ -7,31 +7,25 @@ import { cn } from "@/lib/utils";
 import type { Contact, Deal, ContactNote, Tag } from "@/types";
 import type { ConversationInsightWithEvidence } from "@/lib/insights/types";
 import type { ContactLeadProfile, ContactCatalogInterestWithItem, ContactObjection } from "@/lib/leads/types";
-import type { ActionType } from "@/lib/intelligence/types";
 import {
   Copy,
   Check,
   Sparkles,
-  Flame,
   AlertCircle,
-  HelpCircle,
   ShoppingBag,
-  Tag as TagIcon,
-  DollarSign,
   StickyNote,
   Plus,
   Briefcase,
-  RefreshCw,
   FileText,
-  Lightbulb,
   ShieldAlert,
   Clock,
+  ChevronDown,
+  ChevronUp,
+  Calendar,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { EvidenceDialog } from "./evidence-dialog";
 import { CreateFollowupDialog } from "@/components/tasks/create-followup-dialog";
 import { SnoozePopover } from "@/components/tasks/snooze-popover";
 import { ObjectionOverrideDialog } from "./objection-override-dialog";
@@ -40,12 +34,12 @@ import {
   createTask,
   completeFollowup,
   snoozeFollowup,
-  createFollowupFromAiSuggestion,
 } from "@/lib/tasks/repository";
 import type { CreateTaskInput, Task } from "@/types/tasks";
 import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import { toast } from "sonner";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 
 interface IntelligenceSidebarProps {
   contact: Contact | null;
@@ -70,6 +64,10 @@ interface LeadScoreRecord {
   calculated_at: string;
 }
 
+interface EnrichedNote extends ContactNote {
+  author_name?: string;
+}
+
 export function IntelligenceSidebar({
   contact,
   conversationId,
@@ -77,15 +75,15 @@ export function IntelligenceSidebar({
   onCreateTaskFromAction,
 }: IntelligenceSidebarProps) {
   const { accountId, user } = useAuth();
-  const [activeTab, setActiveTab] = useState<"intelligence" | "crm">("intelligence");
   const [copied, setCopied] = useState(false);
 
   // CRM Data
   const [deals, setDeals] = useState<Deal[]>([]);
-  const [notes, setNotes] = useState<ContactNote[]>([]);
+  const [notes, setNotes] = useState<EnrichedNote[]>([]);
   const [tags, setTags] = useState<(Tag & { contact_tag_id: string })[]>([]);
   const [newNote, setNewNote] = useState("");
   const [addingNote, setAddingNote] = useState(false);
+  const [showNoteInput, setShowNoteInput] = useState(false);
 
   // Commercial Intelligence Data
   const [leadProfile, setLeadProfile] = useState<ContactLeadProfile | null>(null);
@@ -95,32 +93,23 @@ export function IntelligenceSidebar({
   const [objectionOccurrences, setObjectionOccurrences] = useState<ConversationObjectionOccurrence[]>([]);
   const [insights, setInsights] = useState<ConversationInsightWithEvidence[]>([]);
   const [loadingIntel, setLoadingIntel] = useState(false);
-  const [isDirty, setIsDirty] = useState(false);
+
+  // Score breakdown expansion toggle
+  const [showScoreBreakdown, setShowScoreBreakdown] = useState(false);
+  // Inline evidence disclosure expansion map
+  const [expandedEvidenceIds, setExpandedEvidenceIds] = useState<Record<string, boolean>>({});
 
   // Objection Override Dialog State
   const [overrideDialogOpen, setOverrideDialogOpen] = useState(false);
   const [selectedOccurrence, setSelectedOccurrence] = useState<ConversationObjectionOccurrence | null>(null);
-
-  // On-Demand AI Execution & Freshness State
-  const [freshness, setFreshness] = useState<"not_analyzed" | "fresh" | "stale">("not_analyzed");
-  const [messageDeltaCount, setMessageDeltaCount] = useState(0);
-  const [lastAnalysisAt, setLastAnalysisAt] = useState<string | null>(null);
-  const [executingAiAction, setExecutingAiAction] = useState<string | null>(null);
-  const [aiActionResultText, setAiActionResultText] = useState<string | null>(null);
-  const [aiActionTitle, setAiActionTitle] = useState<string | null>(null);
-
-  // Evidence Dialog State
-  const [selectedInsightForEvidence, setSelectedInsightForEvidence] =
-    useState<ConversationInsightWithEvidence | null>(null);
-  const [evidenceDialogOpen, setEvidenceDialogOpen] = useState(false);
 
   // Active Follow-up & Creation Dialog
   const [activeFollowup, setActiveFollowup] = useState<Task | null>(null);
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [dialogInitialValues, setDialogInitialValues] = useState<Partial<CreateTaskInput>>({});
 
-  // Score breakdown expansion toggle
-  const [showScoreBreakdown, setShowScoreBreakdown] = useState(false);
+  // Freshness calculation
+  const [lastAnalysisAt, setLastAnalysisAt] = useState<string | null>(null);
 
   // 1. Fetch CRM & Contact Details
   const fetchCrmData = useCallback(async () => {
@@ -147,27 +136,10 @@ export function IntelligenceSidebar({
           .eq("contact_id", contact.id),
       ]);
 
-      if (dealsRes.error) {
-        console.error("[intelligence-sidebar] Failed to load deals:", {
-          message: dealsRes.error.message,
-          code: dealsRes.error.code,
-          details: dealsRes.error.details,
-          hint: dealsRes.error.hint,
-        });
-        setDeals([]);
-      } else if (dealsRes.data) {
-        setDeals(dealsRes.data as unknown as Deal[]);
-      }
+      if (dealsRes.data) setDeals(dealsRes.data as unknown as Deal[]);
+      else setDeals([]);
 
-      if (notesRes.error) {
-        console.error("[intelligence-sidebar] Failed to load contact notes:", {
-          message: notesRes.error.message,
-          code: notesRes.error.code,
-          details: notesRes.error.details,
-          hint: notesRes.error.hint,
-        });
-        setNotes([]);
-      } else if (notesRes.data) {
+      if (notesRes.data) {
         const rawNotes = notesRes.data as unknown as ContactNote[];
         const userIds = Array.from(
           new Set(rawNotes.map((n) => n.user_id).filter((id): id is string => Boolean(id)))
@@ -175,40 +147,29 @@ export function IntelligenceSidebar({
 
         const profileNameMap = new Map<string, string>();
         if (userIds.length > 0) {
-          const { data: profs, error: profError } = await supabase
+          const { data: profs } = await supabase
             .from("profiles")
             .select("user_id, full_name")
             .eq("account_id", accountId)
             .in("user_id", userIds);
 
-          if (profError) {
-            console.error("[intelligence-sidebar] Failed to load note author profiles:", {
-              message: profError.message,
-              code: profError.code,
-            });
-          } else if (profs) {
+          if (profs) {
             for (const p of profs) {
               if (p.user_id) profileNameMap.set(p.user_id, p.full_name);
             }
           }
         }
 
-        const enrichedNotes = rawNotes.map((n) => ({
+        const enrichedNotes: EnrichedNote[] = rawNotes.map((n) => ({
           ...n,
-          profiles: { name: profileNameMap.get(n.user_id) || "Atendente" },
+          author_name: profileNameMap.get(n.user_id) || "Atendente",
         }));
-        setNotes(enrichedNotes as ContactNote[]);
+        setNotes(enrichedNotes);
+      } else {
+        setNotes([]);
       }
 
-      if (tagsRes.error) {
-        console.error("[intelligence-sidebar] Failed to load tags:", {
-          message: tagsRes.error.message,
-          code: tagsRes.error.code,
-          details: tagsRes.error.details,
-          hint: tagsRes.error.hint,
-        });
-        setTags([]);
-      } else if (tagsRes.data) {
+      if (tagsRes.data) {
         interface TagJoinRow {
           id: string;
           tag_id: string;
@@ -226,7 +187,7 @@ export function IntelligenceSidebar({
         setTags([]);
       }
 
-      // Fetch active follow-up for contact
+      // Fetch active follow-up
       const { data: followups } = await supabase
         .from("tasks")
         .select("*, contact:contacts(id, name, phone, avatar_url)")
@@ -246,7 +207,7 @@ export function IntelligenceSidebar({
     }
   }, [contact, accountId]);
 
-  // 2. Fetch Commercial Intelligence & Lead Scoring Data
+  // 2. Fetch Commercial Intelligence Data
   const fetchIntelligenceData = useCallback(async () => {
     if (!contact || !accountId) return;
     setLoadingIntel(true);
@@ -268,7 +229,7 @@ export function IntelligenceSidebar({
           .maybeSingle(),
         supabase
           .from("contact_catalog_interests")
-          .select("*, catalog_item:catalog_items(*)")
+          .select("*, item:catalog_items(*)")
           .eq("account_id", accountId)
           .eq("contact_id", contact.id),
         supabase
@@ -291,962 +252,636 @@ export function IntelligenceSidebar({
       if (objectionsRes.data) setObjections(objectionsRes.data as ContactObjection[]);
       else setObjections([]);
 
-      // Check conversation message count & last analysis boundary
       if (conversationId) {
-        const [msgsRes, lastReqRes, insightsDataRes, convRes, occurrencesRes] = await Promise.all([
+        const [insightsDataRes, occurrencesRes, lastReqRes] = await Promise.all([
           supabase
-            .from("messages")
-            .select("id, created_at", { count: "exact" })
-            .eq("conversation_id", conversationId),
+            .from("conversation_insights")
+            .select("*, evidence:conversation_insight_evidence(*)")
+            .eq("conversation_id", conversationId)
+            .order("created_at", { ascending: false }),
+          supabase
+            .from("conversation_objection_occurrences")
+            .select("*")
+            .eq("conversation_id", conversationId)
+            .order("created_at", { ascending: false }),
           supabase
             .from("internal_ai_requests")
-            .select("id, created_at, message_count, status")
-            .eq("account_id", accountId)
-            .eq("target_type", "conversation")
-            .eq("target_id", conversationId)
-            .eq("action_type", "analyze_conversation")
-            .eq("status", "completed")
+            .select("completed_at")
+            .eq("conversation_id", conversationId)
             .order("created_at", { ascending: false })
             .limit(1)
             .maybeSingle(),
-          supabase
-            .from("conversation_insights")
-            .select(`
-              *,
-              catalog_items:catalog_item_id (
-                id,
-                name,
-                type,
-                sku,
-                status
-              )
-            `)
-            .eq("account_id", accountId)
-            .eq("conversation_id", conversationId)
-            .eq("status", "active")
-            .order("observed_at", { ascending: false }),
-          supabase
-            .from("conversations")
-            .select("commercial_state_dirty, intelligence_eligible_at, pending_message_count")
-            .eq("id", conversationId)
-            .maybeSingle(),
-          supabase
-            .from("conversation_objection_occurrences")
-            .select(`
-              *,
-              effective_taxonomy:effective_taxonomy_id (
-                id,
-                name,
-                code
-              )
-            `)
-            .eq("account_id", accountId)
-            .eq("conversation_id", conversationId)
-            .order("occurred_at", { ascending: false }),
         ]);
 
-        if (convRes.data) {
-          setIsDirty(Boolean(convRes.data.commercial_state_dirty));
+        if (insightsDataRes.data) {
+          setInsights(insightsDataRes.data as ConversationInsightWithEvidence[]);
+        } else {
+          setInsights([]);
         }
 
         if (occurrencesRes.data) {
-          setObjectionOccurrences(occurrencesRes.data as unknown as ConversationObjectionOccurrence[]);
+          setObjectionOccurrences(occurrencesRes.data as ConversationObjectionOccurrence[]);
         } else {
           setObjectionOccurrences([]);
         }
 
-        const totalMsgs = msgsRes.count || 0;
-        const lastReq = lastReqRes.data;
-
-        if (!lastReq) {
-          setFreshness("not_analyzed");
-          setMessageDeltaCount(totalMsgs);
-          setLastAnalysisAt(null);
-        } else {
-          setLastAnalysisAt(lastReq.created_at);
-          const analyzedCount = lastReq.message_count || 0;
-          const delta = Math.max(0, totalMsgs - analyzedCount);
-          setMessageDeltaCount(delta);
-          setFreshness(delta === 0 ? "fresh" : "stale");
-        }
-
-        const insightsData = insightsDataRes.data;
-        if (insightsData && insightsData.length > 0) {
-          const insightIds = insightsData.map((i: { id: string }) => i.id);
-          const { data: evidenceData } = await supabase
-            .from("conversation_insight_evidence")
-            .select("*")
-            .eq("account_id", accountId)
-            .eq("conversation_id", conversationId)
-            .in("insight_id", insightIds);
-
-          const joined = insightsData.map((ins) => ({
-            ...ins,
-            evidence: evidenceData?.filter((e) => e.insight_id === ins.id) || [],
-          }));
-          setInsights(joined as unknown as ConversationInsightWithEvidence[]);
-        } else {
-          setInsights([]);
+        if (lastReqRes.data?.completed_at) {
+          setLastAnalysisAt(lastReqRes.data.completed_at);
         }
       }
     } catch (err) {
-      console.error("Failed to load commercial intelligence:", err);
+      console.error("[intelligence-sidebar] Failed to load intelligence data:", err);
     } finally {
       setLoadingIntel(false);
     }
   }, [contact, accountId, conversationId]);
 
   useEffect(() => {
-    fetchCrmData();
-    fetchIntelligenceData();
-  }, [fetchCrmData, fetchIntelligenceData]);
+    if (contact && accountId) {
+      void fetchCrmData();
+      void fetchIntelligenceData();
+    }
+  }, [contact, accountId, conversationId, fetchCrmData, fetchIntelligenceData]);
 
-  // Execute explicit On-Demand AI action
-  const handleTriggerAiAction = async (actionType: ActionType, label: string) => {
-    if (!conversationId || !accountId) return;
-    setExecutingAiAction(actionType);
-    setAiActionTitle(label);
+  // Handle adding a note
+  const handleAddNote = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newNote.trim() || !contact || !accountId || !user) return;
 
+    setAddingNote(true);
+    const supabase = createClient();
     try {
-      const res = await fetch("/api/ai/on-demand", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          targetType: "conversation",
-          targetId: conversationId,
-          actionType,
-        }),
-      });
+      const { error } = await supabase
+        .from("contact_notes")
+        .insert({
+          account_id: accountId,
+          contact_id: contact.id,
+          user_id: user.id,
+          note_text: newNote.trim(),
+        });
 
-      if (!res.ok) {
-        const errJson = await res.json();
-        throw new Error(errJson.error || "Erro ao executar ação de IA");
-      }
-
-      const data = await res.json();
-      setAiActionResultText(data.request?.result_text || "Análise concluída com sucesso.");
-      toast.success(
-        data.cached
-          ? `Resultado obtido instantaneamente do cache!`
-          : `Inteligência executada com sucesso!`
-      );
-      fetchIntelligenceData();
+      if (error) throw error;
+      toast.success("Nota interna adicionada.");
+      setNewNote("");
+      setShowNoteInput(false);
+      void fetchCrmData();
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "Erro desconhecido";
-      toast.error(`Falha na inteligência: ${msg}`);
+      toast.error("Erro ao adicionar nota.");
     } finally {
-      setExecutingAiAction(null);
+      setAddingNote(false);
     }
   };
 
-  const handleCopyPhone = useCallback(async () => {
-    const textToCopy = contact?.phone || contact?.whatsapp_lid;
-    if (!textToCopy) return;
-    await navigator.clipboard.writeText(textToCopy);
+  const handleCopyPhone = async () => {
+    if (!contact?.phone) return;
+    await navigator.clipboard.writeText(contact.phone);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
-  }, [contact]);
-
-  const handleAddNote = useCallback(async () => {
-    if (!contact || !newNote.trim() || !accountId) return;
-    setAddingNote(true);
-
-    const supabase = createClient();
-    const {
-      data: { session },
-    } = await supabase.auth.getSession();
-
-    const { data, error } = await supabase
-      .from("contact_notes")
-      .insert({
-        contact_id: contact.id,
-        account_id: accountId,
-        user_id: session?.user?.id,
-        note_text: newNote.trim(),
-      })
-      .select()
-      .single();
-
-    if (!error && data) {
-      const enrichedNote = {
-        ...data,
-        profiles: { name: (session?.user?.user_metadata?.full_name as string) || "Você" },
-      };
-      setNotes((prev) => [enrichedNote as unknown as ContactNote, ...prev]);
-      setNewNote("");
-      toast.success("Nota interna adicionada.");
-    } else if (error) {
-      console.error("Failed to add contact note:", error);
-      toast.error("Erro ao adicionar nota interna.");
-    }
-    setAddingNote(false);
-  }, [contact, newNote, accountId]);
-
-  const handleOpenEvidence = (insight: ConversationInsightWithEvidence) => {
-    setSelectedInsightForEvidence(insight);
-    setEvidenceDialogOpen(true);
+    toast.success("Telefone copiado.");
   };
 
-  const handleRetractInsight = async (insightId: string) => {
-    if (!accountId || !conversationId) return;
-    const supabase = createClient();
-    try {
-      const { error } = await supabase.rpc("retract_conversation_insight", {
-        p_account_id: accountId,
-        p_conversation_id: conversationId,
-        p_insight_id: insightId,
-        p_retracted_reason: "Retratado manualmente pelo atendente via Inbox",
-      });
-      if (error) throw error;
-      toast.success("Insight retratado com sucesso.");
-      fetchIntelligenceData();
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : "Erro desconhecido";
-      toast.error(`Erro ao retratar: ${msg}`);
-    }
-  };
-
-  const handleCompleteFollowup = async (task: Task) => {
-    if (!accountId) return;
-    const supabase = createClient();
-    try {
-      await completeFollowup(supabase, accountId, task.id, user?.id);
-      toast.success("Follow-up concluído com sucesso!");
-      fetchCrmData();
-    } catch (err: any) {
-      toast.error("Erro ao concluir follow-up.");
-    }
-  };
-
-  const handleSnoozeFollowup = async (task: Task, snoozeUntilIso: string, reason?: string) => {
-    if (!accountId) return;
-    const supabase = createClient();
-    try {
-      await snoozeFollowup(supabase, accountId, task.id, {
-        snooze_until: snoozeUntilIso,
-        reason,
-      });
-      toast.success("Follow-up adiado.");
-      fetchCrmData();
-    } catch (err: any) {
-      toast.error("Erro ao adiar follow-up.");
-    }
-  };
-
-  const handleConvertAiSuggestion = async () => {
-    if (!accountId || !contact || !leadProfile?.next_action) return;
-    const supabase = createClient();
-    try {
-      const res = await createFollowupFromAiSuggestion(supabase, accountId, {
-        contact_id: contact.id,
-        conversation_id: conversationId,
-        action_text: leadProfile.next_action,
-        due_at: leadProfile.next_action_due_at || null,
-        created_by_user_id: user?.id,
-      });
-      if (res.duplicated) {
-        toast.info("Esta sugestão já possui um follow-up ativo.");
-      } else {
-        toast.success("Follow-up criado a partir da sugestão!");
-      }
-      fetchCrmData();
-    } catch (err: any) {
-      toast.error("Erro ao converter sugestão.");
-    }
-  };
-
-  const handleCreateFollowup = async (input: CreateTaskInput) => {
-    if (!accountId) return;
-    const supabase = createClient();
-    try {
-      await createTask(supabase, accountId, {
-        ...input,
-        created_by_user_id: user?.id,
-      });
-      toast.success("Follow-up criado com sucesso!");
-      fetchCrmData();
-    } catch (err: any) {
-      const msg = err instanceof Error ? err.message : "Erro desconhecido";
-      toast.error(`Erro ao criar follow-up: ${msg}`);
-    }
+  const toggleEvidence = (id: string) => {
+    setExpandedEvidenceIds((prev) => ({ ...prev, [id]: !prev[id] }));
   };
 
   if (!contact) {
     return (
-      <div className="flex h-full w-80 items-center justify-center border-l border-border bg-card p-4 text-center">
-        <p className="text-sm text-muted-foreground">Selecione uma conversa para visualizar a inteligência</p>
+      <div className="flex h-full w-full flex-col items-center justify-center p-6 text-center text-muted-foreground">
+        <AlertCircle className="size-8 opacity-40 mb-2" />
+        <p className="text-xs">Selecione uma conversa para ver os dados comerciais do contato.</p>
       </div>
     );
   }
 
-  const displayName =
-    contact.name ||
-    contact.phone ||
-    (contact.whatsapp_lid ? "Contato WhatsApp" : "Contato");
-  const displayPhone =
-    contact.phone || (contact.whatsapp_lid ? "Identidade WhatsApp" : "Sem telefone");
-  const initials = displayName.charAt(0).toUpperCase();
-
-  // Score Visual Properties
-  const scoreVal = leadScore?.score ?? null;
-  const isHot = scoreVal !== null && scoreVal >= 70;
-  const isWarm = scoreVal !== null && scoreVal >= 40 && scoreVal < 70;
-  const isCold = scoreVal !== null && scoreVal < 40;
+  const scoreValue = leadScore?.score ?? 0;
+  const isHot = scoreValue >= 70;
+  const isWarm = scoreValue >= 40 && scoreValue < 70;
 
   return (
-    <div className="flex h-full w-80 flex-col border-l border-border bg-card select-none">
-      {/* Contact Summary Header */}
-      <div className="p-3.5 border-b border-border/80 bg-muted/20">
-        <div className="flex items-center gap-3">
-          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-primary/10 text-sm font-semibold text-primary">
-            {contact.avatar_url ? (
-              <img
-                src={contact.avatar_url}
-                alt={displayName}
-                className="h-11 w-11 rounded-full object-cover"
-              />
-            ) : (
-              initials
-            )}
-          </div>
-          <div className="min-w-0 flex-1">
-            <h3 className="truncate text-sm font-semibold text-foreground leading-tight">
-              {displayName}
-            </h3>
-            <p className="truncate text-xs text-muted-foreground mt-0.5">
-              {contact.company || displayPhone}
-            </p>
-          </div>
-        </div>
-
-        {/* Quick Phone / Copy Button */}
-        <div className="mt-2.5 flex items-center gap-1.5">
-          <button
-            onClick={handleCopyPhone}
-            className="flex flex-1 items-center justify-between rounded-md border border-border bg-background px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted"
-          >
-            <span className="truncate">{displayPhone}</span>
-            {copied ? <Check className="h-3 w-3 text-primary" /> : <Copy className="h-3 w-3" />}
-          </button>
-        </div>
-      </div>
-
-      {/* Contextual Active Follow-up Widget */}
-      <div className="p-3 border-b border-border bg-background">
-        <div className="flex items-center justify-between pb-1.5">
-          <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-            Próxima Ação
-          </span>
-          {activeFollowup && (
-            <Badge variant="outline" className="text-[10px] text-emerald-600 bg-emerald-500/10 border-emerald-500/20">
-              Ativa
-            </Badge>
-          )}
-        </div>
-
-        {activeFollowup ? (
-          <div className="rounded-lg border border-border bg-muted/30 p-2.5 space-y-2 text-xs">
-            <div className="font-semibold text-foreground leading-snug">
-              {activeFollowup.title}
-            </div>
-            {activeFollowup.due_at && (
-              <div className="text-[11px] text-muted-foreground flex items-center gap-1">
-                <Clock className="h-3 w-3" />
-                <span>Prazo: {format(new Date(activeFollowup.snoozed_until || activeFollowup.due_at), "dd/MM 'às' HH:mm", { locale: ptBR })}</span>
-              </div>
-            )}
-            <div className="flex items-center justify-end gap-1.5 pt-1 border-t border-border/60">
-              <SnoozePopover onSnooze={(iso, reason) => handleSnoozeFollowup(activeFollowup, iso, reason)} />
-              <Button
-                size="sm"
-                className="h-7 text-xs gap-1 bg-emerald-600 hover:bg-emerald-700 text-white"
-                onClick={() => handleCompleteFollowup(activeFollowup)}
-              >
-                <Check className="h-3 w-3" />
-                Concluir
-              </Button>
-            </div>
-          </div>
-        ) : (
-          <div className="rounded-lg border border-dashed border-border p-2.5 text-center space-y-1.5">
-            <p className="text-xs text-muted-foreground">Nenhuma próxima ação agendada</p>
-            <Button
-              size="sm"
-              variant="outline"
-              className="h-7 text-xs gap-1 text-primary border-primary/30 hover:bg-primary/10 w-full"
-              onClick={() => {
-                setDialogInitialValues({
-                  contact_id: contact.id,
-                  conversation_id: conversationId,
-                });
-                setCreateDialogOpen(true);
-              }}
-            >
-              <Plus className="h-3 w-3" />
-              Criar Follow-up
-            </Button>
-          </div>
-        )}
-      </div>
-
-      {/* Tabs Navigation */}
-      <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as "intelligence" | "crm")} className="flex-1 flex flex-col min-h-0">
-        <div className="px-3 pt-2 border-b border-border">
-          <TabsList className="grid w-full grid-cols-2 h-8">
-            <TabsTrigger value="intelligence" className="text-xs gap-1.5 py-1">
-              <Sparkles className="h-3.5 w-3.5 text-primary" />
-              <span>Inteligência</span>
-              {loadingIntel && <div className="h-2.5 w-2.5 animate-spin rounded-full border-2 border-primary border-t-transparent" />}
-            </TabsTrigger>
-            <TabsTrigger value="crm" className="text-xs gap-1.5 py-1">
-              <Briefcase className="h-3.5 w-3.5" />
-              CRM
-            </TabsTrigger>
-          </TabsList>
-        </div>
-
-        {/* ============================================================ */}
-        {/* TAB 1: COMMERCIAL INTELLIGENCE */}
-        {/* ============================================================ */}
-        <TabsContent value="intelligence" className="flex-1 min-h-0 m-0">
-          <ScrollArea className="h-full">
-            <div className="p-3.5 space-y-4">
-              {/* ON-DEMAND CONTROL & FRESHNESS BANNER */}
-              <div className="rounded-xl border border-border bg-background p-3 shadow-sm space-y-2.5">
-                <div className="flex items-center justify-between">
-                  <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-                    Status da Análise
-                  </span>
-                  {isDirty ? (
-                    <Badge variant="outline" className="text-[10px] text-amber-600 dark:text-amber-400 border-amber-500/30 bg-amber-50/50 dark:bg-amber-950/20">
-                      ⏱ Análise pendente
-                    </Badge>
-                  ) : freshness === "fresh" ? (
-                    <Badge variant="outline" className="text-[10px] text-emerald-600 dark:text-emerald-400 border-emerald-500/30 bg-emerald-50/50 dark:bg-emerald-950/20">
-                      ✓ Atualizado
-                    </Badge>
-                  ) : freshness === "stale" ? (
-                    <Badge variant="outline" className="text-[10px] text-amber-600 dark:text-amber-400 border-amber-500/30 bg-amber-50/50 dark:bg-amber-950/20">
-                      ⚠️ {messageDeltaCount} nova(s) msg(s)
-                    </Badge>
-                  ) : (
-                    <Badge variant="outline" className="text-[10px] text-muted-foreground">
-                      Não analisado
-                    </Badge>
-                  )}
-                </div>
-
-                {lastAnalysisAt && (
-                  <div className="text-[10px] text-muted-foreground">
-                    Última análise: {format(new Date(lastAnalysisAt), "dd/MM 'às' HH:mm", { locale: ptBR })}
-                  </div>
+    <div className="flex h-full w-full flex-col border-l border-border bg-card text-foreground">
+      <ScrollArea className="flex-1">
+        <div className="p-4 space-y-4">
+          {/* 1. CONTACT SUMMARY (Clean & Compact) */}
+          <div className="rounded-xl border border-border/80 bg-muted/20 p-3.5 space-y-2">
+            <div className="flex items-center gap-3">
+              <Avatar className="size-10 border border-border">
+                {contact.avatar_url ? (
+                  <AvatarImage src={contact.avatar_url} alt={contact.name || "Contato"} />
+                ) : null}
+                <AvatarFallback className="bg-primary/10 text-primary font-semibold text-xs">
+                  {contact.name?.charAt(0)?.toUpperCase() || "C"}
+                </AvatarFallback>
+              </Avatar>
+              <div className="min-w-0 flex-1">
+                <h3 className="text-sm font-bold text-foreground truncate font-sans">
+                  {contact.name || "Contato sem nome"}
+                </h3>
+                {contact.company && (
+                  <p className="text-xs text-muted-foreground truncate">{contact.company}</p>
                 )}
-
-                {/* Primary Action Button */}
-                <Button
-                  size="sm"
-                  className="w-full h-8 text-xs gap-1.5"
-                  disabled={executingAiAction !== null}
-                  onClick={() => handleTriggerAiAction("analyze_conversation", "Extração Completa")}
-                >
-                  <RefreshCw className={cn("h-3.5 w-3.5", executingAiAction === "analyze_conversation" && "animate-spin")} />
-                  {freshness === "stale" ? "Atualizar Análise do Lead" : "Analisar Conversa Agora"}
-                </Button>
-
-                {/* Secondary Quick Actions */}
-                <div className="grid grid-cols-3 gap-1.5 pt-1">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="h-7 text-[10px] px-1 gap-1"
-                    disabled={executingAiAction !== null}
-                    onClick={() => handleTriggerAiAction("summarize_conversation", "Resumo Executivo")}
-                  >
-                    <FileText className="h-3 w-3" />
-                    Resumir
-                  </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="h-7 text-[10px] px-1 gap-1"
-                    disabled={executingAiAction !== null}
-                    onClick={() => handleTriggerAiAction("suggest_next_action", "Próximo Passo")}
-                  >
-                    <Lightbulb className="h-3 w-3" />
-                    Próx. Ação
-                  </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="h-7 text-[10px] px-1 gap-1"
-                    disabled={executingAiAction !== null}
-                    onClick={() => handleTriggerAiAction("identify_objections", "Mapeamento de Objeções")}
-                  >
-                    <ShieldAlert className="h-3 w-3" />
-                    Objeções
-                  </Button>
-                </div>
-              </div>
-
-              {/* On-Demand Result Box (When generated) */}
-              {aiActionResultText && (
-                <div className="rounded-xl border border-primary/20 bg-primary/5 p-3 text-xs space-y-2">
-                  <div className="flex items-center justify-between text-primary font-semibold text-[11px]">
-                    <span className="flex items-center gap-1.5">
-                      <Sparkles className="h-3.5 w-3.5" />
-                      {aiActionTitle || "Resultado da IA"}
+                {contact.phone && (
+                  <div className="flex items-center gap-1.5 mt-0.5">
+                    <span className="text-[11px] text-muted-foreground font-mono truncate">
+                      {contact.phone}
                     </span>
                     <button
-                      onClick={() => setAiActionResultText(null)}
-                      className="text-muted-foreground hover:text-foreground text-[10px]"
+                      type="button"
+                      onClick={handleCopyPhone}
+                      className="text-muted-foreground hover:text-foreground"
+                      title="Copiar telefone"
                     >
-                      ✕
+                      {copied ? <Check className="size-3 text-emerald-500" /> : <Copy className="size-3" />}
                     </button>
-                  </div>
-                  <div className="whitespace-pre-wrap text-foreground font-sans leading-relaxed text-[11px]">
-                    {aiActionResultText}
-                  </div>
-                </div>
-              )}
-
-              {/* Lead Score Widget */}
-              <div className="rounded-xl border border-border bg-background p-3.5 shadow-sm space-y-3">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-1.5">
-                    <Flame className={cn("h-4 w-4", isHot ? "text-emerald-500" : isWarm ? "text-amber-500" : "text-slate-400")} />
-                    <span className="text-xs font-semibold text-foreground">Lead Score Comercial</span>
-                  </div>
-                  {scoreVal !== null ? (
-                    <Badge
-                      className={cn(
-                        "font-mono text-xs px-2 py-0.5",
-                        isHot && "bg-emerald-500 text-white hover:bg-emerald-600",
-                        isWarm && "bg-amber-500 text-white hover:bg-amber-600",
-                        isCold && "bg-slate-500 text-white hover:bg-slate-600"
-                      )}
-                    >
-                      {scoreVal} / 100
-                    </Badge>
-                  ) : (
-                    <Badge variant="outline" className="text-[10px]">Sem cálculo</Badge>
-                  )}
-                </div>
-
-                {/* Score Level Description */}
-                <div className="flex items-center justify-between text-xs">
-                  <span className="text-muted-foreground">Classificação:</span>
-                  <span className="font-medium">
-                    {isHot ? "🔥 Alta Propensão (Quente)" : isWarm ? "⚡ Média Propensão (Morno)" : isCold ? "❄️ Baixa Propensão (Frio)" : "Não avaliado"}
-                  </span>
-                </div>
-
-                {/* Score Breakdown Toggle */}
-                {leadScore?.breakdown?.rule_results && leadScore.breakdown.rule_results.length > 0 && (
-                  <div className="pt-1 border-t border-border/60">
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="w-full h-6 text-[11px] text-muted-foreground hover:text-primary justify-between px-1"
-                      onClick={() => setShowScoreBreakdown(!showScoreBreakdown)}
-                    >
-                      <span>Composição dos Pontos</span>
-                      <span>{showScoreBreakdown ? "▲ Ocultar" : "▼ Detalhes"}</span>
-                    </Button>
-
-                    {showScoreBreakdown && (
-                      <div className="mt-2 space-y-1.5 text-xs bg-muted/40 rounded-lg p-2 font-mono">
-                        <div className="flex justify-between text-[11px] text-muted-foreground">
-                          <span>Pontuação Base:</span>
-                          <span>{leadScore.breakdown.base_score ?? 0} pts</span>
-                        </div>
-                        {leadScore.breakdown.rule_results.map((rule, idx) => (
-                          <div key={idx} className="flex items-center justify-between text-[11px]">
-                            <span className="truncate pr-2 text-foreground">{rule.label || rule.rule_key}:</span>
-                            <span className={cn("font-bold shrink-0", rule.points >= 0 ? "text-emerald-600" : "text-rose-600")}>
-                              {rule.points >= 0 ? `+${rule.points}` : rule.points}
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                    )}
                   </div>
                 )}
               </div>
+            </div>
 
-              {/* Signals: Intent & Urgency */}
-              <div className="space-y-2">
-                <div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-                  Intenção & Urgência
-                </div>
-                <div className="grid grid-cols-2 gap-2">
-                  <div className="rounded-lg border border-border/80 bg-background p-2.5">
-                    <div className="text-[10px] text-muted-foreground">Intenção</div>
-                    <div className="mt-1 flex items-center justify-between">
-                      <span className="text-xs font-semibold capitalize text-foreground">
-                        {leadProfile?.current_intent || "Não detectada"}
-                      </span>
-                    </div>
-                  </div>
+            {/* Freshness subtle label */}
+            {lastAnalysisAt && (
+              <div className="pt-1 border-t border-border/40 flex items-center justify-between text-[10px] text-muted-foreground">
+                <span className="flex items-center gap-1">
+                  <Sparkles className="size-2.5 text-[#D16A3A]" />
+                  Inteligência atualizada
+                </span>
+                <span>{format(new Date(lastAnalysisAt), "HH:mm", { locale: ptBR })}</span>
+              </div>
+            )}
+          </div>
 
-                  <div className="rounded-lg border border-border/80 bg-background p-2.5">
-                    <div className="text-[10px] text-muted-foreground">Urgência</div>
-                    <div className="mt-1 flex items-center justify-between">
-                      <span className={cn(
-                        "text-xs font-semibold capitalize",
-                        leadProfile?.urgency === "high" ? "text-rose-600" : leadProfile?.urgency === "medium" ? "text-amber-600" : "text-muted-foreground"
-                      )}>
-                        {leadProfile?.urgency === "high" ? "Alta" : leadProfile?.urgency === "medium" ? "Média" : leadProfile?.urgency === "low" ? "Baixa" : "Normal"}
-                      </span>
-                    </div>
+          {/* 2. ACTIVE FOLLOW-UP / PRÓXIMA AÇÃO (Prominent Action Card) */}
+          <div className="rounded-xl border border-border/80 bg-card p-3.5 space-y-2 shadow-xs">
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5 font-sans">
+                <Clock className="size-3 text-primary" />
+                Próxima Ação
+              </span>
+              {activeFollowup && (
+                <Badge
+                  variant="outline"
+                  className={cn(
+                    "text-[9px] px-1.5 py-0.2",
+                    activeFollowup.status === "in_progress"
+                      ? "border-amber-500/40 text-amber-500 bg-amber-500/10"
+                      : "border-primary/40 text-primary bg-primary/10"
+                  )}
+                >
+                  Agendado
+                </Badge>
+              )}
+            </div>
+
+            {activeFollowup ? (
+              <div className="space-y-2 bg-muted/30 p-2.5 rounded-lg border border-border/50">
+                <p className="text-xs font-semibold text-foreground leading-snug">
+                  {activeFollowup.title}
+                </p>
+                {activeFollowup.due_at && (
+                  <div className="flex items-center gap-1 text-[11px] text-muted-foreground">
+                    <Calendar className="size-3 text-muted-foreground" />
+                    <span>
+                      {format(new Date(activeFollowup.due_at), "dd/MM 'às' HH:mm", { locale: ptBR })}
+                    </span>
                   </div>
+                )}
+                <div className="flex items-center gap-2 pt-1">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-7 text-xs flex-1 gap-1 border-emerald-500/40 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/10"
+                    onClick={async () => {
+                      if (!accountId || !user) return;
+                      const db = createClient();
+                      await completeFollowup(db, accountId, activeFollowup.id, user.id);
+                      toast.success("Follow-up concluído!");
+                      void fetchCrmData();
+                    }}
+                  >
+                    <Check className="size-3" />
+                    Concluir
+                  </Button>
+                  <SnoozePopover
+                    onSnooze={async (snoozeUntil, reason) => {
+                      if (!accountId || !user) return;
+                      const db = createClient();
+                      await snoozeFollowup(db, accountId, activeFollowup.id, {
+                        snooze_until: snoozeUntil,
+                        reason: reason || undefined,
+                      });
+                      toast.success("Follow-up adiado.");
+                      void fetchCrmData();
+                    }}
+                  />
                 </div>
               </div>
+            ) : leadProfile?.next_action ? (
+              <div className="space-y-2 bg-muted/20 p-2.5 rounded-lg border border-border/40">
+                <p className="text-xs text-foreground/90 leading-snug">
+                  {leadProfile.next_action}
+                </p>
+                <Button
+                  size="sm"
+                  className="w-full h-7 text-xs font-semibold gap-1 bg-[#1E3A5F] hover:bg-[#162B46] text-white"
+                  onClick={() => {
+                    setDialogInitialValues({
+                      title: leadProfile.next_action || "Follow-up",
+                      contact_id: contact.id,
+                    });
+                    setCreateDialogOpen(true);
+                  }}
+                >
+                  <Plus className="size-3" />
+                  Criar follow-up
+                </Button>
+              </div>
+            ) : (
+              <div className="text-center py-2">
+                <p className="text-xs text-muted-foreground">Nenhuma ação pendente no momento.</p>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="mt-2 h-7 text-xs gap-1 border-border"
+                  onClick={() => {
+                    setDialogInitialValues({ contact_id: contact.id });
+                    setCreateDialogOpen(true);
+                  }}
+                >
+                  <Plus className="size-3" />
+                  Agendar Follow-up
+                </Button>
+              </div>
+            )}
+          </div>
 
-              {/* Catalog Interests */}
+          {/* 3. LEAD SCORE (Clean Gauge & Propensity) */}
+          <div className="rounded-xl border border-border/80 bg-card p-3.5 space-y-2 shadow-xs">
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground font-sans">
+                Lead Score Comercial
+              </span>
+              <Badge
+                className={cn(
+                  "text-[10px] font-bold px-2 py-0.2 uppercase tracking-wide",
+                  isHot
+                    ? "bg-[#D16A3A] text-white border-transparent"
+                    : isWarm
+                    ? "bg-amber-500/20 text-amber-600 dark:text-amber-400 border-amber-500/30"
+                    : "bg-secondary text-muted-foreground border-border"
+                )}
+              >
+                {isHot ? "🔥 Lead quente" : isWarm ? "⚡ Lead morno" : "❄️ Lead frio"}
+              </Badge>
+            </div>
+
+            <div className="flex items-baseline gap-2">
+              <span className="text-3xl font-extrabold font-sans tracking-tight text-foreground">
+                {scoreValue}
+              </span>
+              <span className="text-xs text-muted-foreground">/ 100 pontos</span>
+            </div>
+
+            {/* Score calculation disclosure */}
+            {leadScore?.breakdown?.rule_results && leadScore.breakdown.rule_results.length > 0 && (
+              <div className="pt-1">
+                <button
+                  type="button"
+                  onClick={() => setShowScoreBreakdown(!showScoreBreakdown)}
+                  className="text-[11px] text-primary hover:underline flex items-center gap-1 font-medium"
+                >
+                  {showScoreBreakdown ? <ChevronUp className="size-3" /> : <ChevronDown className="size-3" />}
+                  {showScoreBreakdown ? "Ocultar detalhes do cálculo" : "Como este score foi calculado?"}
+                </button>
+
+                {showScoreBreakdown && (
+                  <div className="mt-2 space-y-1.5 bg-muted/40 p-2.5 rounded-lg border border-border/60 text-xs">
+                    {leadScore.breakdown.rule_results.map((r, idx) => (
+                      <div key={idx} className="flex items-center justify-between text-[11px]">
+                        <span className={cn(r.matched ? "text-foreground font-medium" : "text-muted-foreground")}>
+                          {r.label || r.rule_key}
+                        </span>
+                        <span className={cn("font-mono font-semibold", r.points > 0 ? "text-emerald-500" : "text-muted-foreground")}>
+                          {r.points > 0 ? `+${r.points}` : `${r.points}`} pts
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* 4. INTENÇÃO & URGÊNCIA */}
+          {leadProfile && (leadProfile.current_intent || leadProfile.urgency) && (
+            <div className="rounded-xl border border-border/80 bg-card p-3.5 space-y-2 shadow-xs">
+              <span className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground font-sans">
+                Qualificação
+              </span>
+              <div className="flex flex-wrap gap-2">
+                {leadProfile.current_intent && (
+                  <div className="flex items-center gap-1 px-2.5 py-1 rounded-md bg-secondary text-foreground text-xs font-medium border border-border/60">
+                    <span className="text-muted-foreground text-[10px]">Intenção:</span>
+                    <span className="font-semibold capitalize">{leadProfile.current_intent}</span>
+                  </div>
+                )}
+                {leadProfile.urgency && (
+                  <div
+                    className={cn(
+                      "flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-medium border",
+                      leadProfile.urgency === "high"
+                        ? "bg-orange-500/10 text-orange-600 dark:text-orange-400 border-orange-500/30 font-semibold"
+                        : "bg-secondary text-foreground border-border/60"
+                    )}
+                  >
+                    <span className="text-muted-foreground text-[10px]">Urgência:</span>
+                    <span className="capitalize">{leadProfile.urgency === "high" ? "Alta" : leadProfile.urgency}</span>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* 5. INTERESSE NO CATÁLOGO */}
+          {interests.length > 0 && (
+            <div className="rounded-xl border border-border/80 bg-card p-3.5 space-y-2 shadow-xs">
+              <span className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5 font-sans">
+                <ShoppingBag className="size-3 text-primary" />
+                Interesse no Catálogo
+              </span>
+              <div className="space-y-1.5">
+                {interests.map((it, idx) => (
+                  <div
+                    key={idx}
+                    className="flex items-center justify-between p-2 rounded-lg bg-muted/30 border border-border/40 text-xs"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <p className="font-semibold text-foreground truncate">
+                        {it.item?.name || "Item do Catálogo"}
+                      </p>
+                      {it.item?.type && (
+                        <p className="text-[10px] text-muted-foreground capitalize">{it.item.type}</p>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* 6. OBJEÇÕES DETECTADAS */}
+          {objectionOccurrences.length > 0 && (
+            <div className="rounded-xl border border-border/80 bg-card p-3.5 space-y-2 shadow-xs">
+              <span className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5 font-sans">
+                <ShieldAlert className="size-3 text-orange-500" />
+                Objeções Identificadas
+              </span>
               <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-                    <ShoppingBag className="h-3 w-3 text-primary" />
-                    Interesses no Catálogo ({interests.length})
-                  </div>
-                </div>
-
-                {interests.length === 0 ? (
-                  <div className="rounded-lg border border-dashed border-border p-3 text-center text-xs text-muted-foreground">
-                    Nenhum produto/serviço identificado
-                  </div>
-                ) : (
-                  <div className="space-y-1.5">
-                    {interests.map((item) => (
-                      <div
-                        key={item.id}
-                        className="flex items-center justify-between rounded-lg border border-border bg-background px-2.5 py-2 text-xs"
+                {objectionOccurrences.map((occ) => (
+                  <div
+                    key={occ.id}
+                    className="p-2.5 rounded-lg bg-orange-500/5 border border-orange-500/20 text-xs space-y-1"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-orange-600 dark:text-orange-400 capitalize">
+                        {occ.raw_objection || "Objeção"}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedOccurrence(occ);
+                          setOverrideDialogOpen(true);
+                        }}
+                        className="text-[10px] text-muted-foreground hover:text-foreground underline"
                       >
-                        <div className="min-w-0 flex-1">
-                          <div className="font-medium text-foreground truncate">
-                            {item.item?.name || "Produto/Serviço"}
-                          </div>
-                          {item.item?.sku && (
-                            <div className="text-[10px] text-muted-foreground font-mono">
-                              SKU: {item.item.sku}
+                        Corrigir
+                      </button>
+                    </div>
+                    {occ.raw_objection && (
+                      <p className="text-[11px] text-muted-foreground italic line-clamp-2">
+                        &ldquo;{occ.raw_objection}&rdquo;
+                      </p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* 7. RESUMO DA CONVERSA */}
+          {leadProfile?.summary && (
+            <div className="rounded-xl border border-border/80 bg-card p-3.5 space-y-1.5 shadow-xs">
+              <span className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground font-sans">
+                Resumo da Situação
+              </span>
+              <p className="text-xs text-foreground/90 leading-relaxed bg-muted/20 p-2.5 rounded-lg border border-border/40">
+                {leadProfile.summary}
+              </p>
+            </div>
+          )}
+
+          {/* 8. SINAIS FATUAIS & EVIDÊNCIAS (Inline Disclosure) */}
+          {insights.length > 0 && (
+            <div className="rounded-xl border border-border/80 bg-card p-3.5 space-y-2 shadow-xs">
+              <span className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5 font-sans">
+                <FileText className="size-3 text-primary" />
+                Sinais Fatuais da Conversa
+              </span>
+              <div className="space-y-2">
+                {insights.map((ins) => {
+                  const isExpanded = expandedEvidenceIds[ins.id];
+                  const hasEvidence = ins.evidence && ins.evidence.length > 0;
+
+                  return (
+                    <div
+                      key={ins.id}
+                      className="p-2.5 rounded-lg bg-muted/20 border border-border/40 text-xs space-y-1.5"
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <span className="font-semibold text-foreground text-xs leading-snug">
+                          {ins.value_text || ins.insight_type}
+                        </span>
+                        {ins.confidence && (
+                          <span className="text-[10px] font-mono text-muted-foreground shrink-0">
+                            {Math.round(ins.confidence * 100)}%
+                          </span>
+                        )}
+                      </div>
+
+                      {hasEvidence && (
+                        <div>
+                          <button
+                            type="button"
+                            onClick={() => toggleEvidence(ins.id)}
+                            className="text-[10px] text-primary hover:underline flex items-center gap-1 font-medium mt-0.5"
+                          >
+                            {isExpanded ? <ChevronUp className="size-3" /> : <ChevronDown className="size-3" />}
+                            {isExpanded ? "Ocultar evidência" : "Por que? ▼"}
+                          </button>
+
+                          {isExpanded && (
+                            <div className="mt-1.5 p-2 rounded bg-muted/60 border border-border/60 text-[11px] text-foreground/80 space-y-1">
+                              {ins.evidence.map((ev, evIdx) => (
+                                <div key={evIdx} className="space-y-0.5">
+                                  <p className="italic">&ldquo;{ev.snippet}&rdquo;</p>
+                                  {ev.created_at && (
+                                    <p className="text-[9px] text-muted-foreground">
+                                      {format(new Date(ev.created_at), "dd/MM 'às' HH:mm", { locale: ptBR })}
+                                    </p>
+                                  )}
+                                </div>
+                              ))}
                             </div>
                           )}
                         </div>
-                        <Badge variant="outline" className="text-[10px] capitalize ml-2 shrink-0">
-                          {item.status}
-                        </Badge>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              {/* Objections */}
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-                    <AlertCircle className="h-3 w-3 text-amber-500" />
-                    Objeções Detectadas ({objections.length})
-                  </div>
-                </div>
-
-                {objections.length === 0 ? (
-                  <div className="rounded-lg border border-dashed border-border p-3 text-center text-xs text-muted-foreground">
-                    Nenhuma objeção em aberto
-                  </div>
-                ) : (
-                  <div className="space-y-2">
-                    {objections.map((obj) => {
-                      const occ = objectionOccurrences.find(
-                        (o) => o.raw_objection.toLowerCase().trim() === obj.normalized_objection
-                      );
-                      const taxName = occ?.effective_taxonomy?.name || "Objeção Comercial";
-
-                      return (
-                        <div
-                          key={obj.id}
-                          className="rounded-lg border border-border bg-background p-2.5 text-xs space-y-2"
-                        >
-                          <div className="flex items-start justify-between gap-1.5">
-                            <div className="space-y-1 min-w-0 flex-1">
-                              <Badge
-                                variant="outline"
-                                className="text-[10px] bg-amber-500/10 text-amber-600 border-amber-500/20 font-medium"
-                              >
-                                {taxName}
-                              </Badge>
-                              <p className="font-medium text-foreground text-xs leading-snug">{obj.objection}</p>
-                            </div>
-                            <Badge
-                              variant={obj.status === "open" ? "destructive" : "secondary"}
-                              className="text-[10px] uppercase shrink-0"
-                            >
-                              {obj.status === "open" ? "Aberta" : obj.status}
-                            </Badge>
-                          </div>
-
-                          <div className="flex items-center justify-between pt-1 border-t border-border/50 text-[10px] text-muted-foreground">
-                            <span>
-                              {format(new Date(obj.first_seen_at || obj.created_at), "dd/MM/yyyy", { locale: ptBR })}
-                            </span>
-                            {occ && (
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                className="h-5 px-1.5 text-[10px] text-amber-600 hover:text-amber-700 hover:bg-amber-500/10"
-                                onClick={() => {
-                                  setSelectedOccurrence(occ);
-                                  setOverrideDialogOpen(true);
-                                }}
-                              >
-                                Corrigir Categoria
-                              </Button>
-                            )}
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-
-              {/* Suggested Next Action */}
-              {leadProfile?.next_action && (
-                <div className="rounded-xl border border-primary/20 bg-primary/5 p-3.5 space-y-2">
-                  <div className="flex items-center gap-1.5 text-xs font-semibold text-primary">
-                    <Sparkles className="h-3.5 w-3.5" />
-                    Próxima Ação Sugerida
-                  </div>
-                  <p className="text-xs text-foreground leading-relaxed">
-                    {leadProfile.next_action}
-                  </p>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="w-full h-7 text-xs gap-1.5 mt-1 border-primary/30 text-primary hover:bg-primary/10"
-                    onClick={handleConvertAiSuggestion}
-                  >
-                    <Plus className="h-3 w-3" />
-                    Criar Tarefa de Follow-up
-                  </Button>
-                </div>
-              )}
-
-              {/* Interactive Evidence List ("Por quê?") */}
-              <div className="space-y-2 pt-2 border-t border-border">
-                <div className="flex items-center justify-between">
-                  <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-                    Sinais Fatuais da Conversa ({insights.length})
-                  </span>
-                </div>
-
-                {insights.length === 0 ? (
-                  <div className="rounded-lg border border-dashed border-border p-3 text-center text-xs text-muted-foreground">
-                    Nenhum sinal extraído nesta conversa ainda.
-                  </div>
-                ) : (
-                  <div className="space-y-2">
-                    {insights.map((ins) => (
-                      <div
-                        key={ins.id}
-                        className="rounded-lg border border-border bg-background p-2.5 text-xs space-y-1.5 hover:border-primary/40 transition-colors"
-                      >
-                        <div className="flex items-start justify-between gap-1">
-                          <div>
-                            <span className="font-semibold text-foreground capitalize">
-                              {ins.insight_type.replace("_", " ")}:
-                            </span>{" "}
-                            <span className="text-muted-foreground">
-                              {ins.value_text || (ins as unknown as { catalog_items?: { name?: string } }).catalog_items?.name || "Detectado"}
-                            </span>
-                          </div>
-                          <div className="flex items-center gap-1 shrink-0">
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className="h-5 px-1.5 text-[10px] text-primary gap-1 shrink-0"
-                              onClick={() => handleOpenEvidence(ins)}
-                            >
-                              <HelpCircle className="h-3 w-3" />
-                              Por quê?
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className="h-5 w-5 p-0 text-[10px] text-muted-foreground hover:text-rose-600 shrink-0"
-                              title="Retratar este sinal"
-                              onClick={() => handleRetractInsight(ins.id)}
-                            >
-                              ✕
-                            </Button>
-                          </div>
-                        </div>
-
-                        {ins.evidence && ins.evidence.length > 0 && (
-                          <div className="text-[11px] text-muted-foreground italic truncate bg-muted/40 p-1.5 rounded">
-                            &ldquo;{ins.evidence[0].snippet || "Evidência citada"}&rdquo;
-                          </div>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                )}
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             </div>
-          </ScrollArea>
-        </TabsContent>
+          )}
 
-        {/* ============================================================ */}
-        {/* TAB 2: CRM DETAILS, DEALS & NOTES */}
-        {/* ============================================================ */}
-        <TabsContent value="crm" className="flex-1 min-h-0 m-0">
-          <ScrollArea className="h-full">
-            <div className="p-3.5 space-y-4">
-              {/* Tags */}
-              <div className="space-y-2">
-                <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-                  <TagIcon className="h-3 w-3" />
-                  Tags do Contato ({tags.length})
-                </div>
-                {tags.length === 0 ? (
-                  <div className="rounded-lg border border-dashed border-border p-3 text-center text-xs text-muted-foreground">
-                    Nenhuma tag vinculada
+          {/* 9. CRM CONTEXT: DEALS, NOTES & TAGS */}
+          <div className="rounded-xl border border-border/80 bg-card p-3.5 space-y-3 shadow-xs">
+            <span className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5 font-sans">
+              <Briefcase className="size-3 text-primary" />
+              Contexto CRM
+            </span>
+
+            {/* Deals */}
+            {deals.length > 0 && (
+              <div className="space-y-1.5">
+                <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">
+                  Oportunidades
+                </span>
+                {deals.map((d) => (
+                  <div
+                    key={d.id}
+                    className="p-2 rounded-lg bg-muted/30 border border-border/40 flex items-center justify-between text-xs"
+                  >
+                    <span className="font-semibold text-foreground truncate">{d.title}</span>
+                    <span className="font-mono text-primary font-bold shrink-0 ml-2">
+                      R$ {Number(d.value || 0).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                    </span>
                   </div>
-                ) : (
-                  <div className="flex flex-wrap gap-1.5">
-                    {tags.map((tag) => (
-                      <Badge
-                        key={tag.id}
-                        variant="secondary"
-                        className="text-xs"
-                        style={{
-                          backgroundColor: tag.color ? `${tag.color}20` : undefined,
-                          color: tag.color || undefined,
-                          borderColor: tag.color ? `${tag.color}40` : undefined,
-                        }}
-                      >
-                        {tag.name}
-                      </Badge>
-                    ))}
-                  </div>
-                )}
+                ))}
               </div>
+            )}
 
-              {/* Deals */}
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-                    <DollarSign className="h-3 w-3 text-emerald-500" />
-                    Oportunidades ({deals.length})
-                  </div>
+            {/* Tags */}
+            {tags.length > 0 && (
+              <div className="space-y-1.5">
+                <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">
+                  Tags
+                </span>
+                <div className="flex flex-wrap gap-1">
+                  {tags.map((t) => (
+                    <Badge
+                      key={t.id}
+                      variant="secondary"
+                      className="text-[10px] px-2 py-0.5 rounded-md"
+                      style={t.color ? { borderColor: t.color, color: t.color } : undefined}
+                    >
+                      {t.name}
+                    </Badge>
+                  ))}
                 </div>
-
-                {deals.length === 0 ? (
-                  <div className="rounded-lg border border-dashed border-border p-3 text-center text-xs text-muted-foreground">
-                    Nenhum negócio associado
-                  </div>
-                ) : (
-                  <div className="space-y-2">
-                    {deals.map((deal) => (
-                      <div
-                        key={deal.id}
-                        className="rounded-lg border border-border bg-background p-2.5 text-xs space-y-1"
-                      >
-                        <div className="flex items-center justify-between font-medium">
-                          <span className="text-foreground">{deal.title}</span>
-                          <span className="font-mono text-emerald-600 dark:text-emerald-400">
-                            {deal.value ? `R$ ${Number(deal.value).toLocaleString("pt-BR")}` : "R$ 0"}
-                          </span>
-                        </div>
-                        <div className="flex items-center justify-between text-[10px] text-muted-foreground">
-                          <span>{(deal as Deal & { pipeline_stages?: { name: string } | null }).pipeline_stages?.name || "Etapa padrão"}</span>
-                          <span className="capitalize">{deal.status}</span>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
               </div>
+            )}
 
-              {/* Internal Notes */}
-              <div className="space-y-2">
-                <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-                  <StickyNote className="h-3 w-3 text-amber-500" />
+            {/* Internal Notes */}
+            <div className="space-y-2 pt-1 border-t border-border/40">
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide flex items-center gap-1">
+                  <StickyNote className="size-3" />
                   Notas Internas ({notes.length})
-                </div>
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setShowNoteInput(!showNoteInput)}
+                  className="text-[10px] text-primary hover:underline flex items-center gap-0.5"
+                >
+                  <Plus className="size-3" />
+                  Nova nota
+                </button>
+              </div>
 
-                <div className="space-y-2">
-                  <div className="flex gap-1.5">
-                    <input
-                      type="text"
-                      placeholder="Adicionar nota..."
-                      value={newNote}
-                      onChange={(e) => setNewNote(e.target.value)}
-                      onKeyDown={(e) => e.key === "Enter" && handleAddNote()}
-                      className="flex-1 rounded-md border border-border bg-background px-2.5 py-1 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-                    />
+              {showNoteInput && (
+                <form onSubmit={handleAddNote} className="space-y-2 bg-muted/40 p-2.5 rounded-lg border border-border">
+                  <textarea
+                    value={newNote}
+                    onChange={(e) => setNewNote(e.target.value)}
+                    placeholder="Escreva uma observação interna..."
+                    className="w-full text-xs p-2 rounded border border-border bg-card text-foreground resize-none h-16 outline-none focus:border-primary"
+                  />
+                  <div className="flex justify-end gap-1.5">
                     <Button
+                      type="button"
+                      variant="ghost"
                       size="sm"
-                      className="h-7 px-2.5 text-xs"
-                      onClick={handleAddNote}
+                      onClick={() => setShowNoteInput(false)}
+                      className="h-6 text-xs px-2"
+                    >
+                      Cancelar
+                    </Button>
+                    <Button
+                      type="submit"
+                      size="sm"
                       disabled={addingNote || !newNote.trim()}
+                      className="h-6 text-xs px-2.5 bg-primary text-white"
                     >
                       Salvar
                     </Button>
                   </div>
+                </form>
+              )}
 
-                  {notes.length === 0 ? (
-                    <div className="rounded-lg border border-dashed border-border p-3 text-center text-xs text-muted-foreground">
-                      Nenhuma nota registrada
+              {notes.length > 0 ? (
+                <div className="space-y-1.5 max-h-40 overflow-y-auto pr-1">
+                  {notes.map((n) => (
+                    <div
+                      key={n.id}
+                      className="p-2 rounded bg-muted/20 border border-border/30 text-xs space-y-0.5"
+                    >
+                      <p className="text-foreground/90">{n.note_text}</p>
+                      <p className="text-[9px] text-muted-foreground">
+                        {n.author_name || "Atendente"} • {format(new Date(n.created_at), "dd/MM HH:mm", { locale: ptBR })}
+                      </p>
                     </div>
-                  ) : (
-                    <div className="space-y-2">
-                      {notes.map((note) => (
-                        <div
-                          key={note.id}
-                          className="rounded-lg border border-border bg-background p-2.5 text-xs space-y-1"
-                        >
-                          <p className="text-foreground whitespace-pre-wrap">{note.note_text}</p>
-                          <div className="flex items-center justify-between text-[10px] text-muted-foreground">
-                            <span>{(note as ContactNote & { profiles?: { name: string } | null }).profiles?.name || "Atendente"}</span>
-                            <span>{format(new Date(note.created_at), "dd/MM HH:mm", { locale: ptBR })}</span>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
+                  ))}
                 </div>
-              </div>
+              ) : (
+                <p className="text-[11px] text-muted-foreground italic">Nenhuma nota adicionada.</p>
+              )}
             </div>
-          </ScrollArea>
-        </TabsContent>
-      </Tabs>
-
-      {/* Evidence Dialog */}
-      <EvidenceDialog
-        open={evidenceDialogOpen}
-        onOpenChange={setEvidenceDialogOpen}
-        insight={selectedInsightForEvidence}
-        onJumpToMessage={onJumpToMessage}
-      />
+          </div>
+        </div>
+      </ScrollArea>
 
       {/* Follow-up Creation Dialog */}
       <CreateFollowupDialog
         open={createDialogOpen}
         onOpenChange={setCreateDialogOpen}
         initialValues={dialogInitialValues}
-        onSubmit={handleCreateFollowup}
+        onSubmit={async (input) => {
+          if (!accountId) return;
+          const db = createClient();
+          await createTask(db, accountId, input);
+          toast.success("Follow-up criado com sucesso!");
+          void fetchCrmData();
+        }}
       />
 
-      {/* Objection Category Override Dialog */}
-      <ObjectionOverrideDialog
-        open={overrideDialogOpen}
-        onOpenChange={setOverrideDialogOpen}
-        occurrenceId={selectedOccurrence?.id}
-        currentTaxonomyId={selectedOccurrence?.effective_taxonomy_id}
-        rawObjectionText={selectedOccurrence?.raw_objection}
-        onOverridden={fetchIntelligenceData}
-      />
+      {/* Objection Override Dialog */}
+      {selectedOccurrence && (
+        <ObjectionOverrideDialog
+          open={overrideDialogOpen}
+          onOpenChange={setOverrideDialogOpen}
+          occurrenceId={selectedOccurrence.id}
+          currentTaxonomyId={selectedOccurrence.effective_taxonomy_id}
+          rawObjectionText={selectedOccurrence.raw_objection}
+          onOverridden={() => void fetchIntelligenceData()}
+        />
+      )}
     </div>
   );
 }

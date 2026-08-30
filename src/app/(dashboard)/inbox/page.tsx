@@ -648,12 +648,9 @@ export default function InboxPage() {
           />
         </div>
 
-        {/* Right panel: Contact sidebar — desktop only, and only when the
-            agent hasn't collapsed it via the thread-header toggle (#258).
-            On mobile it's always hidden (the `lg:block` below), so the
-            toggle — which is itself desktop-only — never affects it. */}
+        {/* Right panel: Continuous Intelligence & Context Sidebar */}
         {contactPanelOpen && (
-          <div className="hidden lg:block">
+          <div className="hidden lg:block w-[340px] xl:w-[360px] shrink-0 h-full">
             <IntelligenceSidebar
               contact={activeContact}
               conversationId={activeConversation?.id}
