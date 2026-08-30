@@ -4,6 +4,7 @@ import type {
   Fact,
   ProviderFactPacket,
   PrivateEntityMap,
+  PrivateSellerMap,
   ResolvedPeriod,
 } from './types';
 import type {
@@ -17,23 +18,45 @@ import type {
   TeamPerformanceResponse,
   TeamMemberPerformance,
   SignalsAndPipelineResponse,
+  CoachingSummaryResponse,
+  CoachingOpportunitiesResponse,
+  CoachingPatternsResponse,
 } from '../types';
 
 export interface BuildFactPacketResult {
   providerFactPacket: ProviderFactPacket;
   privateEntityMap: PrivateEntityMap;
+  privateSellerMap: PrivateSellerMap;
 }
 
 export function buildFactPacket(params: {
   question: string;
   period: ResolvedPeriod;
   timezone?: string;
-  toolOutputs: Record<AllowlistedToolName, unknown>;
+  toolOutputs: Partial<Record<AllowlistedToolName, unknown>>;
 }): BuildFactPacketResult {
   const { question, period, timezone = 'America/Sao_Paulo', toolOutputs } = params;
   const facts: Fact[] = [];
   const privateEntityMap: PrivateEntityMap = {};
+  const privateSellerMap: PrivateSellerMap = {};
   let factIndex = 1;
+  let leadIndex = 1;
+  let sellerIndex = 1;
+
+  const getOrAssignSellerToken = (userId: string | null, fullName: string, role: string = 'seller'): string => {
+    if (!userId) return 'SELLER_UNASSIGNED';
+    for (const [token, ent] of Object.entries(privateSellerMap)) {
+      if (ent.user_id === userId) return token;
+    }
+    const token = `SELLER_${sellerIndex++}`;
+    privateSellerMap[token] = {
+      seller_token: token,
+      user_id: userId,
+      full_name: fullName,
+      role,
+    };
+    return token;
+  };
 
   const nextFactId = (): string => `F${factIndex++}`;
 
@@ -329,6 +352,143 @@ export function buildFactPacket(params: {
     }
   }
 
+  // 7. Process manager.coaching_summary
+  if (toolOutputs['manager.coaching_summary']) {
+    const coachSum = toolOutputs['manager.coaching_summary'] as CoachingSummaryResponse;
+    facts.push({
+      fact_id: nextFactId(),
+      metric: 'coaching_open_opportunities',
+      label: 'Oportunidades de Coaching em Aberto',
+      value: coachSum.total_open_opportunities,
+      unit: 'opportunities',
+      period,
+      source: 'manager.coaching_summary',
+      metadata: {
+        urgent_count: coachSum.urgent_count,
+        high_count: coachSum.high_count,
+        reviewed_count: coachSum.reviewed_count,
+      },
+    });
+
+    if (coachSum.category_breakdown) {
+      facts.push({
+        fact_id: nextFactId(),
+        metric: 'coaching_buying_signals_missed',
+        label: 'Sinais de Compra Sem Retorno',
+        value: coachSum.category_breakdown.buying_signals_missed,
+        unit: 'opportunities',
+        period,
+        source: 'manager.coaching_summary',
+      });
+      facts.push({
+        fact_id: nextFactId(),
+        metric: 'coaching_overdue_followups',
+        label: 'Follow-ups com Prazo Vencido',
+        value: coachSum.category_breakdown.overdue_followups,
+        unit: 'opportunities',
+        period,
+        source: 'manager.coaching_summary',
+      });
+      facts.push({
+        fact_id: nextFactId(),
+        metric: 'coaching_unanswered_customer',
+        label: 'Clientes Aguardando Resposta',
+        value: coachSum.category_breakdown.unanswered_customer,
+        unit: 'opportunities',
+        period,
+        source: 'manager.coaching_summary',
+      });
+    }
+  }
+
+  // 8. Process manager.coaching_opportunities
+  if (toolOutputs['manager.coaching_opportunities']) {
+    const oppRes = toolOutputs['manager.coaching_opportunities'] as CoachingOpportunitiesResponse;
+    for (const opp of (oppRes.items || []).slice(0, 10)) {
+      const leadToken = `LEAD_${leadIndex++}`;
+      const sellerToken = getOrAssignSellerToken(opp.responsible_user_id, opp.responsible_user_name);
+
+      privateEntityMap[leadToken] = {
+        lead_token: leadToken,
+        contact_id: opp.contact_id,
+        contact_name: opp.contact_name,
+        phone: opp.contact_phone ?? undefined,
+        score: opp.lead_score,
+        reasons: [opp.primary_reason, ...(opp.secondary_signals || [])],
+      };
+
+      facts.push({
+        fact_id: nextFactId(),
+        metric: 'coaching_opportunity',
+        label: `Oportunidade de Revisão: ${opp.category} (${leadToken})`,
+        value: opp.lead_score ?? 0,
+        unit: 'lead_score',
+        period,
+        source: 'manager.coaching_opportunities',
+        metadata: {
+          lead_token: leadToken,
+          seller_token: sellerToken,
+          category: opp.category,
+          severity: opp.severity,
+          primary_reason: opp.primary_reason,
+          secondary_signals: opp.secondary_signals,
+          status: opp.status,
+        },
+        drilldown_ref: {
+          type: 'coaching',
+          title: `Revisão ${leadToken}`,
+          filter: {
+            opportunity_key: opp.opportunity_key,
+            lead_token: leadToken,
+          },
+        },
+      });
+    }
+  }
+
+  // 9. Process manager.coaching_patterns
+  if (toolOutputs['manager.coaching_patterns']) {
+    const patRes = toolOutputs['manager.coaching_patterns'] as CoachingPatternsResponse;
+    for (const objPat of (patRes.objection_patterns || []).slice(0, 5)) {
+      const sellerToken = getOrAssignSellerToken(objPat.seller_id, objPat.seller_name);
+      facts.push({
+        fact_id: nextFactId(),
+        metric: 'coaching_seller_objection_pattern',
+        label: `Padrão de Objeção: ${objPat.objection_name} (${sellerToken})`,
+        value: objPat.occurrences,
+        unit: 'occurrences',
+        period,
+        source: 'manager.coaching_patterns',
+        metadata: {
+          seller_token: sellerToken,
+          objection_code: objPat.objection_code,
+          objection_name: objPat.objection_name,
+          occurrences: objPat.occurrences,
+        },
+      });
+    }
+
+    for (const folPat of (patRes.followup_patterns || []).slice(0, 5)) {
+      const sellerToken = getOrAssignSellerToken(folPat.seller_id, folPat.seller_name);
+      facts.push({
+        fact_id: nextFactId(),
+        metric: 'coaching_seller_followup_friction',
+        label: `Atraso em Follow-up (${sellerToken})`,
+        value: folPat.overdue_pct,
+        unit: 'percent',
+        numerator: folPat.overdue_tasks,
+        denominator: folPat.total_tasks,
+        period,
+        source: 'manager.coaching_patterns',
+        metadata: {
+          seller_token: sellerToken,
+          overdue_tasks: folPat.overdue_tasks,
+          total_tasks: folPat.total_tasks,
+        },
+      });
+    }
+  }
+
   const normalizedQuestion = normalizeQuestionForCache(question);
 
   return {
@@ -347,6 +507,7 @@ export function buildFactPacket(params: {
       facts,
     },
     privateEntityMap,
+    privateSellerMap,
   };
 }
 

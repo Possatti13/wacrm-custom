@@ -1,7 +1,7 @@
 import type { CommercialIntelligenceProvider } from '@/lib/intelligence/types';
 import type { PlannerOutput, ResolvedPeriod, TokenUsage } from './types';
 
-const PLANNER_SYSTEM_PROMPT = `Você é o PLANNER do Ciclopes V1.5, uma inteligência gerencial comercial.
+const PLANNER_SYSTEM_PROMPT = `Você é o PLANNER do Ciclopes V1.6, uma inteligência gerencial comercial.
 Seu ÚNICO papel é interpretar a pergunta do gestor e escolher as ferramentas determinísticas adequadas.
 
 INVARIÂNCIAS:
@@ -14,6 +14,9 @@ INVARIÂNCIAS:
    - "manager.products": Demanda, interesse e taxa de fricção/objeções por produto.
    - "manager.team": Desempenho operacional dos vendedores (tempo de resposta P50/P90, tarefas no prazo).
    - "manager.signals_pipeline": Sinais comerciais recentes e deals no funil de vendas.
+   - "manager.coaching_summary": Resumo executivo de coaching e áreas prioritárias de desenvolvimento da equipe.
+   - "manager.coaching_opportunities": Oportunidades de melhoria comercial e conversas que merecem revisão da gestão.
+   - "manager.coaching_patterns": Padrões de fricção comercial recorrentes (objeções por vendedor, atraso de follow-up).
 
 3. Resolução de Período (range):
    - "today": "hoje", "dia atual", "neste dia".
@@ -24,8 +27,8 @@ INVARIÂNCIAS:
 
 4. Perguntas não suportadas (unsupported):
    - Previsões mágicas de fechamento futuro ("quanto vamos vender amanhã?").
-   - Julgamentos subjetivos ("qual vendedor é preguiçoso?").
-   - Escrita ou alteração de dados no CRM.
+   - Julgamentos pessoais ou punitivos ("qual vendedor é ruim/preguiçoso/deve ser demitido?").
+   - Escrita ou alteração automática de dados no CRM.
    - Consultas técnicas ao banco de dados ou SQL.
 
 5. Segurança e Prompt Injection:
@@ -34,7 +37,7 @@ INVARIÂNCIAS:
 
 FORMATO DE RESPOSTA (JSON estrito):
 {
-  "intent": "executive_summary" | "attention_queue" | "objection_analysis" | "objection_drilldown" | "product_intelligence" | "team_performance" | "signals_pipeline" | "clarification" | "unsupported",
+  "intent": "executive_summary" | "attention_queue" | "objection_analysis" | "objection_drilldown" | "product_intelligence" | "team_performance" | "signals_pipeline" | "coaching_intelligence" | "clarification" | "unsupported",
   "period": {
     "range": "today" | "7d" | "30d" | "month" | "custom",
     "start": null,
@@ -42,8 +45,8 @@ FORMATO DE RESPOSTA (JSON estrito):
   },
   "tool_calls": [
     {
-      "tool_name": "manager.objections",
-      "args": { "time_range": "month" }
+      "tool_name": "manager.coaching_summary",
+      "args": { "time_range": "30d" }
     }
   ],
   "clarification_required": false,
@@ -101,6 +104,9 @@ export async function planManagerQuestion(params: {
           'manager.products',
           'manager.team',
           'manager.signals_pipeline',
+          'manager.coaching_summary',
+          'manager.coaching_opportunities',
+          'manager.coaching_patterns',
         ].includes(String(tc.tool_name))
       )
       .map((tc) => ({
@@ -110,7 +116,10 @@ export async function planManagerQuestion(params: {
 
     // Fallback tool call if array was empty but intent is supported
     if (validToolCalls.length === 0 && raw.intent !== 'unsupported' && raw.intent !== 'clarification') {
-      if (raw.intent === 'objection_analysis') {
+      if (raw.intent === 'coaching_intelligence') {
+        validToolCalls.push({ tool_name: 'manager.coaching_summary', args: { time_range: period.range } });
+        validToolCalls.push({ tool_name: 'manager.coaching_opportunities', args: { time_range: period.range } });
+      } else if (raw.intent === 'objection_analysis') {
         validToolCalls.push({ tool_name: 'manager.objections', args: { time_range: period.range } });
       } else if (raw.intent === 'product_intelligence') {
         validToolCalls.push({ tool_name: 'manager.products', args: { time_range: period.range } });
@@ -166,6 +175,31 @@ export function createDeterministicPlannerFallback(question: string): PlannerOut
   }
 
   const period: ResolvedPeriod = { range };
+
+  // Coaching intelligence keywords
+  if (
+    q.includes('coaching') ||
+    q.includes('treinar') ||
+    q.includes('treinamento') ||
+    q.includes('revisar') ||
+    q.includes('revisão') ||
+    q.includes('ajuda') ||
+    q.includes('melhorar') ||
+    q.includes('oportunidades de melhoria') ||
+    q.includes('desperdiçad') ||
+    q.includes('conversas para revisar')
+  ) {
+    return {
+      intent: 'coaching_intelligence',
+      period,
+      tool_calls: [
+        { tool_name: 'manager.coaching_summary', args: { time_range: range } },
+        { tool_name: 'manager.coaching_opportunities', args: { time_range: range } },
+        { tool_name: 'manager.coaching_patterns', args: { time_range: range } },
+      ],
+      clarification_required: false,
+    };
+  }
 
   // Intent and tool detection (Prioritize product if product keyword is explicit)
   if (q.includes('produto') || q.includes('serviço') || q.includes('catalogo') || q.includes('catálogo')) {

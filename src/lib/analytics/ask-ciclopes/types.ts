@@ -9,6 +9,7 @@ export type ManagerIntent =
   | 'team_performance'
   | 'signals_pipeline'
   | 'followup_health'
+  | 'coaching_intelligence'
   | 'clarification'
   | 'unsupported';
 
@@ -19,7 +20,10 @@ export type AllowlistedToolName =
   | 'manager.objection_drilldown'
   | 'manager.products'
   | 'manager.team'
-  | 'manager.signals_pipeline';
+  | 'manager.signals_pipeline'
+  | 'manager.coaching_summary'
+  | 'manager.coaching_opportunities'
+  | 'manager.coaching_patterns';
 
 export interface ResolvedPeriod {
   range: PeriodRange;
@@ -43,7 +47,7 @@ export interface PlannerOutput {
 }
 
 export interface FactDrilldownRef {
-  type: 'objections' | 'attention' | 'products' | 'team' | 'deals';
+  type: 'objections' | 'attention' | 'products' | 'team' | 'deals' | 'coaching';
   title?: string;
   taxonomy_id?: string;
   taxonomy_code?: string;
@@ -67,7 +71,7 @@ export interface Fact {
 }
 
 /**
- * Server-side private entity resolution item.
+ * Server-side private entity resolution item for Leads.
  * NEVER serialized to LLM synthesis or planner payloads.
  */
 export interface OpaqueLeadEntity {
@@ -80,9 +84,21 @@ export interface OpaqueLeadEntity {
 }
 
 /**
- * Server-side private entity map. Kept separate from fact packets.
+ * Server-side private entity resolution item for Sellers/Employees.
+ * NEVER serialized to external LLM synthesis payloads.
+ */
+export interface OpaqueSellerEntity {
+  seller_token: string; // "SELLER_1", "SELLER_2"
+  user_id: string;
+  full_name: string;
+  role: string;
+}
+
+/**
+ * Server-side private entity maps. Kept separate from fact packets.
  */
 export type PrivateEntityMap = Record<string, OpaqueLeadEntity>;
+export type PrivateSellerMap = Record<string, OpaqueSellerEntity>;
 
 /**
  * Canonical factual packet sent to external LLM providers (Synthesis/Planner).

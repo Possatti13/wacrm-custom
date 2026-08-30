@@ -23,11 +23,20 @@ export function validateAndSanitizeSynthesis(
   const droppedRecommendations: Array<{ text: string; reason: string }> = [];
   const warnings: string[] = [];
 
-  // 1. Validate Claims (Fact-ID Grounding + Numeric Grounding)
+  // 1. Validate Claims (Fact-ID Grounding + Numeric Grounding + Policy Safety)
   const sanitizedClaims: SynthesisOutput['claims'] = [];
 
   for (const claim of synthesis.claims || []) {
     if (!claim.text || typeof claim.text !== 'string' || !claim.text.trim()) {
+      continue;
+    }
+
+    // Safety Policy Guard
+    if (isPunitiveOrInsultingOutput(claim.text)) {
+      droppedClaims.push({
+        text: claim.text,
+        reason: 'Violation: Punitive recommendation or personal employee judgment is prohibited',
+      });
       continue;
     }
 
@@ -76,6 +85,15 @@ export function validateAndSanitizeSynthesis(
       continue;
     }
 
+    // Safety Policy Guard
+    if (isPunitiveOrInsultingOutput(rec.text)) {
+      droppedRecommendations.push({
+        text: rec.text,
+        reason: 'Violation: Punitive recommendation or personal employee judgment is prohibited',
+      });
+      continue;
+    }
+
     const validIds: string[] = [];
     for (const id of rec.based_on_fact_ids || []) {
       if (factMap.has(id)) {
@@ -100,6 +118,15 @@ export function validateAndSanitizeSynthesis(
     });
   }
 
+  // 3. Sanitize Answer if it contains punitive sentences
+  let sanitizedAnswer = synthesis.answer || '';
+  if (isPunitiveOrInsultingOutput(sanitizedAnswer)) {
+    const sentences = sanitizedAnswer.split(/(?<=[.!?])\s+/);
+    const safeSentences = sentences.filter((s) => !isPunitiveOrInsultingOutput(s));
+    sanitizedAnswer = safeSentences.join(' ');
+    warnings.push('Sanitized answer prose to remove punitive/judgment phrasing');
+  }
+
   if (invalidFactIds.length > 0) {
     warnings.push(`Filtered ${invalidFactIds.length} invalid/hallucinated fact IDs: ${Array.from(new Set(invalidFactIds)).join(', ')}`);
   }
@@ -113,7 +140,7 @@ export function validateAndSanitizeSynthesis(
   return {
     valid: true,
     sanitizedSynthesis: {
-      answer: synthesis.answer,
+      answer: sanitizedAnswer,
       claims: sanitizedClaims,
       recommendations: sanitizedRecommendations,
       drilldowns: synthesis.drilldowns || [],
@@ -243,3 +270,31 @@ export function validateClaimNumbers(
     unsupportedNumbers: unsupported,
   };
 }
+
+/**
+ * Detects punitive recommendations or personal judgments about employees.
+ */
+export function isPunitiveOrInsultingOutput(text: string): boolean {
+  const lower = text.toLowerCase();
+  const punitivePatterns = [
+    /\bdemit(?:ir|ido|ida|am|a|em|a-lo|a-la)\b/i,
+    /\bdemiss(?:ao|ão)\b/i,
+    /\bpunir\b/i,
+    /\bpuniç(?:ao|ão)\b/i,
+    /\badvert(?:ir|ência|encia)\b/i,
+    /\bsuspend(?:er|ido|ida|am)\b/i,
+    /\bsuspens(?:ao|ão)\b/i,
+    /\breduzir\s+(?:a\s+|o\s+)?(?:sal[aá]rio|comiss[aã]o)\b/i,
+    /\bcortar\s+(?:a\s+|o\s+)?(?:sal[aá]rio|comiss[aã]o)\b/i,
+    /\bpreguiços[oa]s?\b/i,
+    /\bincompetente?s?\b/i,
+    /\bburr[oa]s?\b/i,
+    /\bincapaz(?:es)?\b/i,
+    /\bdesonest[oa]s?\b/i,
+    /\bp[eé]ssimo\s+vendedor\b/i,
+    /\bpior\s+vendedor\b/i,
+  ];
+
+  return punitivePatterns.some((pattern) => pattern.test(lower));
+}
+

@@ -8,8 +8,13 @@ import {
   loadManagerTeamPerformance,
   loadManagerSignalsAndPipeline,
 } from '../manager-cockpit-repository';
+import {
+  getManagerCoachingSummary,
+  getManagerCoachingOpportunities,
+  getManagerCoachingPatterns,
+} from '../coaching';
 import type { AllowlistedToolName, PlannedToolCall, ResolvedPeriod } from './types';
-import type { PeriodRange } from '../types';
+import type { PeriodRange, CoachingCategory, CoachingReviewStatus } from '../types';
 
 export interface ToolDefinition {
   name: AllowlistedToolName;
@@ -113,6 +118,60 @@ export const TOOL_REGISTRY: Record<AllowlistedToolName, ToolDefinition> = {
       const startDate = (args.start_date as string) || period.start || undefined;
       const endDate = (args.end_date as string) || period.end || undefined;
       return loadManagerSignalsAndPipeline(db, accountId, range, startDate, endDate);
+    },
+  },
+
+  'manager.coaching_summary': {
+    name: 'manager.coaching_summary',
+    description: 'Resumo executivo de coaching com total de oportunidades de melhoria e áreas de foco prioritárias.',
+    allowedRoles: ['owner', 'admin'],
+    execute: async (db, accountId, args, period) => {
+      const range = (args.time_range as PeriodRange) || period.range || '30d';
+      const startDate = (args.start_date as string) || period.start || undefined;
+      const endDate = (args.end_date as string) || period.end || undefined;
+      return getManagerCoachingSummary(db, accountId, {
+        range,
+        customStart: startDate,
+        customEnd: endDate,
+      });
+    },
+  },
+
+  'manager.coaching_opportunities': {
+    name: 'manager.coaching_opportunities',
+    description: 'Oportunidades determinísticas de coaching e conversas que merecem revisão da gestão.',
+    allowedRoles: ['owner', 'admin'],
+    execute: async (db, accountId, args, period) => {
+      const range = (args.time_range as PeriodRange) || period.range || '30d';
+      const startDate = (args.start_date as string) || period.start || undefined;
+      const endDate = (args.end_date as string) || period.end || undefined;
+      return getManagerCoachingOpportunities(db, accountId, {
+        range,
+        customStart: startDate,
+        customEnd: endDate,
+        sellerId: args.seller_id as string | undefined,
+        category: args.category as CoachingCategory | undefined,
+        status: (args.status as CoachingReviewStatus | 'all') || 'open',
+        limit: Math.min(Number(args.limit) || 20, 50),
+        offset: Number(args.offset) || 0,
+      });
+    },
+  },
+
+  'manager.coaching_patterns': {
+    name: 'manager.coaching_patterns',
+    description: 'Padrões de fricção comercial recorrentes na equipe (objeções repetidas por vendedor, follow-ups atrasados).',
+    allowedRoles: ['owner', 'admin'],
+    execute: async (db, accountId, args, period) => {
+      const range = (args.time_range as PeriodRange) || period.range || '30d';
+      const startDate = (args.start_date as string) || period.start || undefined;
+      const endDate = (args.end_date as string) || period.end || undefined;
+      return getManagerCoachingPatterns(db, accountId, {
+        range,
+        customStart: startDate,
+        customEnd: endDate,
+        sellerId: args.seller_id as string | undefined,
+      });
     },
   },
 };

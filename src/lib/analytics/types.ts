@@ -248,3 +248,136 @@ export interface SignalsAndPipelineResponse {
   loss_signals: LossSignalItem[];
   pipeline_snapshot: PipelineSnapshotData;
 }
+
+// ==========================================
+// Grounded Coaching & Conversation Intelligence (V1.6)
+// ==========================================
+
+export type CoachingCategory =
+  | 'buying_signal_missed'
+  | 'overdue_followup'
+  | 'hot_lead_unattended'
+  | 'unanswered_customer'
+  | 'loss_signal_unreviewed'
+  | 'unassigned_commercial';
+
+export type CoachingSeverity = 'urgent' | 'high' | 'medium' | 'low';
+
+export type CoachingReviewStatus = 'open' | 'reviewed' | 'dismissed' | 'resolved';
+
+export interface CoachingReviewInfo {
+  status?: CoachingReviewStatus;
+  reviewed_by_user_name?: string | null;
+  reviewed_at?: string | null;
+  notes?: string | null;
+  dismissed_reason?: string | null;
+}
+
+export interface CoachingOpportunityItem {
+  opportunity_key: string;
+  conversation_id: string;
+  contact_id: string;
+  contact_name: string;
+  contact_phone: string | null;
+  responsible_user_id: string | null;
+  responsible_user_name: string;
+  category: CoachingCategory;
+  severity: CoachingSeverity;
+  status: CoachingReviewStatus;
+  primary_reason: string;
+  secondary_signals: string[];
+  lead_score: number | null;
+  detected_at: string;
+  evidence: Array<Record<string, unknown>>;
+  next_action?: {
+    id: string;
+    title: string;
+    due_at: string;
+    status: string;
+  } | null;
+  review_info: CoachingReviewInfo;
+}
+
+export interface CoachingOpportunitiesResponse {
+  period: PeriodBounds;
+  total_count: number;
+  items: CoachingOpportunityItem[];
+}
+
+export interface CoachingCategoryBreakdown {
+  buying_signals_missed: number;
+  overdue_followups: number;
+  unanswered_customer: number;
+}
+
+export interface CoachingFocusArea {
+  type: string;
+  label: string;
+  severity: string;
+}
+
+export interface CoachingSummaryResponse {
+  period: PeriodBounds;
+  total_open_opportunities: number;
+  urgent_count: number;
+  high_count: number;
+  reviewed_count: number;
+  category_breakdown: CoachingCategoryBreakdown;
+  top_focus_areas: CoachingFocusArea[];
+}
+
+export interface CoachingObjectionPattern {
+  seller_id: string;
+  seller_name: string;
+  objection_code: string;
+  objection_name: string;
+  occurrences: number;
+  pattern_type: string;
+}
+
+export interface CoachingFollowupPattern {
+  seller_id: string;
+  seller_name: string;
+  total_tasks: number;
+  overdue_tasks: number;
+  overdue_pct: number;
+}
+
+export interface CoachingResponsePattern {
+  seller_id: string;
+  seller_name: string;
+  verified_episodes: number;
+  avg_response_seconds: number;
+  median_response_seconds: number;
+}
+
+export interface CoachingPatternsResponse {
+  period: PeriodBounds;
+  objection_patterns: CoachingObjectionPattern[];
+  followup_patterns: CoachingFollowupPattern[];
+  response_patterns: CoachingResponsePattern[];
+}
+
+export interface ConversationTimelineEvent {
+  event_time: string;
+  event_type: string;
+  description: string;
+  metadata: Record<string, unknown>;
+}
+
+export interface ConversationReviewPayload {
+  conversation_id: string;
+  contact_id: string;
+  contact_name: string;
+  contact_phone: string | null;
+  assigned_agent_id: string | null;
+  assigned_agent_name: string;
+  status: string;
+  first_customer_message_at: string | null;
+  first_response_at: string | null;
+  first_response_duration_seconds: number | null;
+  last_message_at: string | null;
+  timeline: ConversationTimelineEvent[];
+  review_info: CoachingReviewInfo;
+}
+

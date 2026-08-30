@@ -178,7 +178,7 @@ export async function askCiclopes(
     plan.period
   );
 
-  // 7. Fact Packet Construction & Fingerprinting (Separates ProviderFactPacket & PrivateEntityMap)
+  // 7. Fact Packet Construction & Fingerprinting (Separates ProviderFactPacket & Private Maps)
   const { providerFactPacket, privateEntityMap } = buildFactPacket({
     question,
     period: plan.period,

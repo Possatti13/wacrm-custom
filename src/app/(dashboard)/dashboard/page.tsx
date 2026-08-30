@@ -31,14 +31,16 @@ import { TeamOperatingTable } from '@/components/cockpit/team-operating-table';
 import { SignalsAndPipeline } from '@/components/cockpit/signals-and-pipeline';
 import { OperationalHealthFooter } from '@/components/cockpit/operational-health-footer';
 import { AskCiclopesPanel } from '@/components/cockpit/ask-ciclopes-panel';
+import { CoachingView } from '@/components/cockpit/coaching-view';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import Link from 'next/link';
-import { ListTodo, MessageSquare, ShieldAlert } from 'lucide-react';
+import { ListTodo, MessageSquare, ShieldAlert, LayoutDashboard, GraduationCap } from 'lucide-react';
 
 export default function DashboardPage() {
   const { accountId, profile, defaultCurrency, loading: authLoading } = useAuth();
 
+  const [activeTab, setActiveTab] = useState<'overview' | 'coaching'>('overview');
   const [range, setRange] = useState<PeriodRange>('30d');
   const [priorityFilter, setPriorityFilter] = useState<'all' | 'urgent' | 'high' | 'medium'>('all');
   const [isAskCiclopesOpen, setIsAskCiclopesOpen] = useState(false);
@@ -181,75 +183,112 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* 2. Executive Pulse (Top 5 KPIs with deltas) */}
-      {summary && (
-        <ExecutivePulse
-          pulse={summary.executive_pulse}
-          loading={loading}
-        />
-      )}
+      {/* Tab Navigation */}
+      <div className="flex items-center gap-2 border-b border-border pb-3">
+        <button
+          onClick={() => setActiveTab('overview')}
+          className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors cursor-pointer ${
+            activeTab === 'overview'
+              ? 'bg-secondary text-foreground shadow-sm font-semibold'
+              : 'text-muted-foreground hover:text-foreground hover:bg-secondary/40'
+          }`}
+        >
+          <LayoutDashboard className="h-4 w-4" />
+          <span>Cockpit Operacional</span>
+        </button>
 
-      {/* 3. What Changed? (Highlights from deltas) */}
-      {summary?.what_changed && (
-        <WhatChanged highlights={summary.what_changed} />
-      )}
-
-      {/* 4. Attention Queue (Triage & Actions) */}
-      {attention && (
-        <AttentionQueue
-          items={attention.items}
-          totalCount={attention.total_count}
-          urgentCount={attention.urgent_count}
-          highCount={attention.high_count}
-          mediumCount={attention.medium_count}
-          priorityFilter={priorityFilter}
-          onPriorityFilterChange={handlePriorityFilterChange}
-          loading={attentionLoading || loading}
-        />
-      )}
-
-      {/* 5. Objections & Product Friction Grid */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {objections && accountId && (
-          <ObjectionIntelligence
-            analytics={objections}
-            accountId={accountId}
-            range={range}
-            loading={loading}
-          />
-        )}
-
-        {products && (
-          <ProductFrictionMatrix
-            data={products}
-            loading={loading}
-          />
-        )}
+        <button
+          onClick={() => setActiveTab('coaching')}
+          className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors cursor-pointer ${
+            activeTab === 'coaching'
+              ? 'bg-indigo-600/20 text-indigo-300 border border-indigo-500/30 shadow-sm font-semibold'
+              : 'text-muted-foreground hover:text-foreground hover:bg-secondary/40'
+          }`}
+        >
+          <GraduationCap className="h-4 w-4 text-indigo-400" />
+          <span>Coaching & Conversas</span>
+        </button>
       </div>
 
-      {/* 6. Team Operational Performance */}
-      {team && (
-        <TeamOperatingTable
-          data={team}
-          loading={loading}
+      {activeTab === 'coaching' && accountId ? (
+        <CoachingView
+          accountId={accountId}
+          range={range}
+          onOpenAskCiclopes={() => setIsAskCiclopesOpen(true)}
         />
-      )}
+      ) : (
+        <>
+          {/* 2. Executive Pulse (Top 5 KPIs with deltas) */}
+          {summary && (
+            <ExecutivePulse
+              pulse={summary.executive_pulse}
+              loading={loading}
+            />
+          )}
 
-      {/* 7. Signals & Pipeline Snapshot */}
-      {signals && (
-        <SignalsAndPipeline
-          data={signals}
-          currency={defaultCurrency}
-          loading={loading}
-        />
-      )}
+          {/* 3. What Changed? (Highlights from deltas) */}
+          {summary?.what_changed && (
+            <WhatChanged highlights={summary.what_changed} />
+          )}
 
-      {/* 8. Operational Health Footer */}
-      {summary?.operational_health && (
-        <OperationalHealthFooter
-          health={summary.operational_health}
-          loading={loading}
-        />
+          {/* 4. Attention Queue (Triage & Actions) */}
+          {attention && (
+            <AttentionQueue
+              items={attention.items}
+              totalCount={attention.total_count}
+              urgentCount={attention.urgent_count}
+              highCount={attention.high_count}
+              mediumCount={attention.medium_count}
+              priorityFilter={priorityFilter}
+              onPriorityFilterChange={handlePriorityFilterChange}
+              loading={attentionLoading || loading}
+            />
+          )}
+
+          {/* 5. Objections & Product Friction Grid */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {objections && accountId && (
+              <ObjectionIntelligence
+                analytics={objections}
+                accountId={accountId}
+                range={range}
+                loading={loading}
+              />
+            )}
+
+            {products && (
+              <ProductFrictionMatrix
+                data={products}
+                loading={loading}
+              />
+            )}
+          </div>
+
+          {/* 6. Team Operational Performance */}
+          {team && (
+            <TeamOperatingTable
+              data={team}
+              loading={loading}
+            />
+          )}
+
+          {/* 7. Signals & Pipeline Snapshot */}
+          {signals && (
+            <SignalsAndPipeline
+              data={signals}
+              currency={defaultCurrency}
+              loading={loading}
+            />
+          )}
+
+          {/* 8. Operational Health Footer */}
+          {summary?.operational_health && (
+            <OperationalHealthFooter
+              health={summary.operational_health}
+              loading={loading}
+            />
+          )}
+        </>
       )}
 
       {/* 9. Ask Ciclopes Grounded AI Drawer */}
