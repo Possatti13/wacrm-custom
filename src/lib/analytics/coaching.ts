@@ -88,6 +88,16 @@ export async function getManagerCoachingConversation(
   return data as ConversationReviewPayload;
 }
 
+export interface UpdateCoachingOpportunityStatusResult {
+  success: boolean;
+  opportunity_key: string;
+  status: string;
+  reviewed_at: string | null;
+  reviewed_by_user_id: string | null;
+  dismissed_reason: string | null;
+  notes: string | null;
+}
+
 export async function updateManagerCoachingOpportunityStatus(
   supabase: SupabaseClient,
   accountId: string,
@@ -95,7 +105,7 @@ export async function updateManagerCoachingOpportunityStatus(
   status: CoachingReviewStatus,
   notes?: string,
   dismissedReason?: string
-): Promise<{ success: boolean; opportunity_key: string; status: string; reviewed_at: string }> {
+): Promise<UpdateCoachingOpportunityStatusResult> {
   const { data, error } = await supabase.rpc('update_manager_coaching_opportunity_status', {
     p_account_id: accountId,
     p_opportunity_key: opportunityKey,
@@ -105,5 +115,5 @@ export async function updateManagerCoachingOpportunityStatus(
   });
 
   if (error) throw error;
-  return data;
+  return data as UpdateCoachingOpportunityStatusResult;
 }

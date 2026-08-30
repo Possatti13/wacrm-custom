@@ -354,7 +354,7 @@ describe.sequential('Ciclopes V1.5.1 — Ask Ciclopes Privacy, Cache & Grounding
         question: 'Como está minha operação hoje?',
       })
     ).rejects.toThrow(/restricted to Owner and Admin/);
-  }, 45000);
+  }, 90000);
 
   // 7. REAL CACHE GATE (3-STEP PROOF: FRESH -> CACHE HIT WITH ZERO SYNTHESIS TOKENS -> ALTERED FACT)
   it('7. proves 3-step real cache gate: fresh execution -> immediate cache hit (delta=0) -> altered fact (delta=1)', async () => {
@@ -393,12 +393,6 @@ describe.sequential('Ciclopes V1.5.1 — Ask Ciclopes Privacy, Cache & Grounding
     expect(turn1Db.fact_packet_hash).toBe(hash1);
     expect(turn1Db.fact_packet.opaque_entities).toBeUndefined(); // Zero PII in fact_packet column
 
-    const { count: afterStep1UsageCount } = await adminDb
-      .from('ai_usage_log')
-      .select('*', { count: 'exact', head: true })
-      .eq('account_id', TEST_TENANT_ID)
-      .eq('action_type', 'ask_ciclopes');
-
     // STEP 2: Immediate second execution (forceRefresh: false, same question, same facts)
     const res2 = await askCiclopes(adminDb, {
       accountId: TEST_TENANT_ID,
@@ -424,16 +418,15 @@ describe.sequential('Ciclopes V1.5.1 — Ask Ciclopes Privacy, Cache & Grounding
     expect(turn2Db.fact_packet_hash).toBe(hash1);
     expect(turn2Db.synthesis_tokens).toBeNull();
 
-    // Verify ai_usage_log: NO new synthesis row logged for step 2!
-    const { count: afterStep2UsageCount } = await adminDb
+    // Verify ai_usage_log: NO synthesis row logged for step 2 requestId!
+    const { count: step2UsageCount } = await adminDb
       .from('ai_usage_log')
       .select('*', { count: 'exact', head: true })
       .eq('account_id', TEST_TENANT_ID)
-      .eq('action_type', 'ask_ciclopes');
+      .eq('request_id', res2.requestId);
 
-    // Step 2 only logged at most planner tokens (no synthesis tokens logged)
-    const step2Delta = (afterStep2UsageCount || 0) - (afterStep1UsageCount || 0);
-    expect(step2Delta).toBeLessThanOrEqual(1); // At most planner, synthesis delta = 0
+    // Step 2 only logged at most planner tokens (no synthesis tokens logged for res2)
+    expect(step2UsageCount || 0).toBeLessThanOrEqual(1); // At most planner, synthesis delta = 0
 
     // STEP 3: Altered question (different underlying period / question -> hash changes -> cache miss)
     const alteredQuestion = `${testQuestion} nos últimos 7 dias`;

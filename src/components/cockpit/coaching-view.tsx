@@ -411,9 +411,19 @@ export function CoachingView({ accountId, range, onOpenAskCiclopes }: CoachingVi
 
                 <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-muted-foreground pt-1 border-t border-border/40">
                   <div className="flex items-center gap-3">
-                    <span>
-                      Responsável: <strong className="text-foreground">{opp.responsible_user_name}</strong>
-                    </span>
+                    {opp.event_responsible_user_name &&
+                    opp.current_assigned_user_name &&
+                    opp.event_responsible_user_name !== opp.current_assigned_user_name ? (
+                      <span>
+                        No evento: <strong className="text-foreground">{opp.event_responsible_user_name}</strong>
+                        {' | '}
+                        Atual: <strong className="text-foreground">{opp.current_assigned_user_name}</strong>
+                      </span>
+                    ) : (
+                      <span>
+                        Responsável: <strong className="text-foreground">{opp.responsible_user_name}</strong>
+                      </span>
+                    )}
                     {opp.next_action && (
                       <span>
                         Próxima Ação: <span className="text-foreground">{opp.next_action.title}</span>

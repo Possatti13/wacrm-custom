@@ -279,6 +279,10 @@ export interface CoachingOpportunityItem {
   contact_id: string;
   contact_name: string;
   contact_phone: string | null;
+  event_responsible_user_id?: string | null;
+  event_responsible_user_name?: string;
+  current_assigned_user_id?: string | null;
+  current_assigned_user_name?: string;
   responsible_user_id: string | null;
   responsible_user_name: string;
   category: CoachingCategory;
@@ -321,6 +325,7 @@ export interface CoachingSummaryResponse {
   total_open_opportunities: number;
   urgent_count: number;
   high_count: number;
+  medium_count?: number;
   reviewed_count: number;
   category_breakdown: CoachingCategoryBreakdown;
   top_focus_areas: CoachingFocusArea[];
