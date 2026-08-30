@@ -178,75 +178,16 @@ export async function askCiclopes(
     plan.period
   );
 
-  // 7. Fact Packet Construction & Fingerprinting
-  const factPacket = buildFactPacket({
+  // 7. Fact Packet Construction & Fingerprinting (Separates ProviderFactPacket & PrivateEntityMap)
+  const { providerFactPacket, privateEntityMap } = buildFactPacket({
     question,
     period: plan.period,
     toolOutputs,
   });
 
-  const factPacketHash = computeFactPacketFingerprint(factPacket);
+  const factPacketHash = computeFactPacketFingerprint(providerFactPacket);
 
-  // 8. Cache Lookup
-  if (!forceRefresh) {
-    const { data: cachedTurn } = await adminClient
-      .from('manager_ai_turns')
-      .select('*')
-      .eq('account_id', accountId)
-      .eq('fact_packet_hash', factPacketHash)
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
-
-    if (cachedTurn) {
-      return {
-        requestId,
-        threadId: initialThreadId || cachedTurn.thread_id,
-        turnId: cachedTurn.id,
-        question,
-        answer: cachedTurn.answer,
-        claims: cachedTurn.claims || [],
-        recommendations: cachedTurn.recommendations || [],
-        drilldowns: cachedTurn.drilldowns || [],
-        resolvedPeriod: cachedTurn.resolved_period || plan.period,
-        facts: factPacket.facts,
-        opaqueEntities: factPacket.opaque_entities,
-        cached: true,
-        provider: cachedTurn.provider,
-        model: cachedTurn.model,
-        plannerTokens: planRes.usage,
-        synthesisTokens: cachedTurn.synthesis_tokens,
-        latencyMs: Date.now() - startTime,
-        createdAt: cachedTurn.created_at,
-      };
-    }
-  }
-
-  // 9. Answer Synthesis Stage
-  const synthRes = await synthesizeManagerAnswer({
-    provider,
-    question,
-    factPacket,
-    model,
-  });
-
-  // Log Synthesis Telemetry
-  if (synthRes.usage) {
-    await logAiUsageLog(adminClient, {
-      accountId,
-      userId,
-      requestId,
-      provider: providerName,
-      model,
-      usage: synthRes.usage,
-      actionType: 'ask_ciclopes',
-    });
-  }
-
-  // 10. Claim Grounding & Numeric Safety Validation
-  const validated = validateAndSanitizeSynthesis(synthRes.synthesis, factPacket);
-
-  // 11. Thread & Turn Persistence
+  // Resolve Thread ID
   let threadId = initialThreadId;
   if (!threadId) {
     const { data: threadRow } = await adminClient
@@ -261,6 +202,92 @@ export async function askCiclopes(
     threadId = threadRow?.id || crypto.randomUUID();
   }
 
+  // 8. Cache Lookup (Per-Account Cache Identity)
+  if (!forceRefresh) {
+    const { data: cachedTurn } = await adminClient
+      .from('manager_ai_turns')
+      .select('*')
+      .eq('account_id', accountId)
+      .eq('fact_packet_hash', factPacketHash)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (cachedTurn) {
+      // Persist the cache-hit turn with cached=true and zero synthesis tokens
+      const cachedTurnId = crypto.randomUUID();
+      await adminClient.from('manager_ai_turns').insert({
+        id: cachedTurnId,
+        thread_id: threadId,
+        account_id: accountId,
+        user_id: userId,
+        question,
+        resolved_intent: plan.intent,
+        resolved_period: plan.period,
+        tool_calls: plan.tool_calls,
+        fact_packet: providerFactPacket,
+        fact_packet_hash: factPacketHash,
+        answer: cachedTurn.answer,
+        claims: cachedTurn.claims || [],
+        recommendations: cachedTurn.recommendations || [],
+        drilldowns: cachedTurn.drilldowns || [],
+        opaque_entities: privateEntityMap,
+        provider: cachedTurn.provider,
+        model: cachedTurn.model,
+        cached: true,
+        planner_tokens: planRes.usage || null,
+        synthesis_tokens: null, // ZERO new synthesis tokens
+        latency_ms: Date.now() - startTime,
+      });
+
+      return {
+        requestId,
+        threadId: threadId!,
+        turnId: cachedTurnId,
+        question,
+        answer: cachedTurn.answer,
+        claims: cachedTurn.claims || [],
+        recommendations: cachedTurn.recommendations || [],
+        drilldowns: cachedTurn.drilldowns || [],
+        resolvedPeriod: cachedTurn.resolved_period || plan.period,
+        facts: providerFactPacket.facts,
+        opaqueEntities: privateEntityMap,
+        cached: true,
+        provider: cachedTurn.provider,
+        model: cachedTurn.model,
+        plannerTokens: planRes.usage,
+        synthesisTokens: null,
+        latencyMs: Date.now() - startTime,
+        createdAt: new Date().toISOString(),
+      };
+    }
+  }
+
+  // 9. Answer Synthesis Stage (Strictly ProviderFactPacket without PII)
+  const synthRes = await synthesizeManagerAnswer({
+    provider,
+    question,
+    factPacket: providerFactPacket,
+    model,
+  });
+
+  // Log Synthesis Telemetry (Correlated with same requestId)
+  if (synthRes.usage) {
+    await logAiUsageLog(adminClient, {
+      accountId,
+      userId,
+      requestId,
+      provider: providerName,
+      model,
+      usage: synthRes.usage,
+      actionType: 'ask_ciclopes',
+    });
+  }
+
+  // 10. Claim Grounding & Numeric Safety Validation
+  const validated = validateAndSanitizeSynthesis(synthRes.synthesis, providerFactPacket);
+
+  // 11. Turn Persistence (Clean ProviderFactPacket in fact_packet, PrivateEntityMap in opaque_entities)
   const turnId = crypto.randomUUID();
   await adminClient.from('manager_ai_turns').insert({
     id: turnId,
@@ -271,13 +298,13 @@ export async function askCiclopes(
     resolved_intent: plan.intent,
     resolved_period: plan.period,
     tool_calls: plan.tool_calls,
-    fact_packet: factPacket,
+    fact_packet: providerFactPacket,
     fact_packet_hash: factPacketHash,
     answer: validated.sanitizedSynthesis.answer,
     claims: validated.sanitizedSynthesis.claims,
     recommendations: validated.sanitizedSynthesis.recommendations,
     drilldowns: validated.sanitizedSynthesis.drilldowns,
-    opaque_entities: factPacket.opaque_entities,
+    opaque_entities: privateEntityMap,
     provider: providerName,
     model,
     cached: false,
@@ -296,8 +323,8 @@ export async function askCiclopes(
     recommendations: validated.sanitizedSynthesis.recommendations,
     drilldowns: validated.sanitizedSynthesis.drilldowns,
     resolvedPeriod: plan.period,
-    facts: factPacket.facts,
-    opaqueEntities: factPacket.opaque_entities,
+    facts: providerFactPacket.facts,
+    opaqueEntities: privateEntityMap,
     cached: false,
     provider: providerName,
     model,

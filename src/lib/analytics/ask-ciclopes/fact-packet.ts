@@ -2,8 +2,8 @@ import crypto from 'crypto';
 import type {
   AllowlistedToolName,
   Fact,
-  FactPacket,
-  OpaqueLeadEntity,
+  ProviderFactPacket,
+  PrivateEntityMap,
   ResolvedPeriod,
 } from './types';
 import type {
@@ -19,15 +19,20 @@ import type {
   SignalsAndPipelineResponse,
 } from '../types';
 
+export interface BuildFactPacketResult {
+  providerFactPacket: ProviderFactPacket;
+  privateEntityMap: PrivateEntityMap;
+}
+
 export function buildFactPacket(params: {
   question: string;
   period: ResolvedPeriod;
   timezone?: string;
   toolOutputs: Record<AllowlistedToolName, unknown>;
-}): FactPacket {
+}): BuildFactPacketResult {
   const { question, period, timezone = 'America/Sao_Paulo', toolOutputs } = params;
   const facts: Fact[] = [];
-  const opaqueEntities: Record<string, OpaqueLeadEntity> = {};
+  const privateEntityMap: PrivateEntityMap = {};
   let factIndex = 1;
 
   const nextFactId = (): string => `F${factIndex++}`;
@@ -230,7 +235,9 @@ export function buildFactPacket(params: {
 
     for (const item of ((attRes.items || []) as AttentionQueueItem[]).slice(0, 15)) {
       const leadToken = `LEAD_${leadIndex++}`;
-      opaqueEntities[leadToken] = {
+      
+      // Store in server-side private entity map ONLY
+      privateEntityMap[leadToken] = {
         lead_token: leadToken,
         contact_id: item.contact_id,
         contact_name: item.contact_name,
@@ -239,6 +246,7 @@ export function buildFactPacket(params: {
         reasons: item.reason_code ? [item.reason_label] : [],
       };
 
+      // Provider fact contains ZERO personal data (only opaque token and commercial score)
       facts.push({
         fact_id: nextFactId(),
         metric: 'attention_lead',
@@ -260,7 +268,7 @@ export function buildFactPacket(params: {
         drilldown_ref: {
           type: 'attention',
           title: `Oportunidade ${leadToken}`,
-          filter: { contact_id: item.contact_id },
+          filter: { lead_token: leadToken },
         },
       });
     }
@@ -321,20 +329,39 @@ export function buildFactPacket(params: {
     }
   }
 
+  const normalizedQuestion = normalizeQuestionForCache(question);
+
   return {
-    question_context: {
-      original_question: question,
-      normalized_question: question.trim().toLowerCase(),
-      period,
-      timezone,
-      generated_at: new Date().toISOString(),
+    providerFactPacket: {
+      question_context: {
+        original_question: question,
+        normalized_question: normalizedQuestion,
+        period: {
+          range: period.range,
+          start: period.start || null,
+          end: period.end || null,
+          label: period.label || undefined,
+        },
+        timezone,
+      },
+      facts,
     },
-    facts,
-    opaque_entities: opaqueEntities,
+    privateEntityMap,
   };
 }
 
-export function computeFactPacketFingerprint(packet: FactPacket): string {
+export function normalizeQuestionForCache(q: string): string {
+  return q
+    .trim()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '') // remove accents for cache invariance
+    .replace(/[^\w\s]/gi, ' ') // replace punctuation with spaces
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+export function computeFactPacketFingerprint(packet: ProviderFactPacket): string {
   const canonicalFacts = packet.facts.map((f) => ({
     i: f.fact_id,
     m: f.metric,
@@ -347,9 +374,14 @@ export function computeFactPacketFingerprint(packet: FactPacket): string {
     meta: f.metadata || null,
   }));
 
+  // Canonical payload strictly omitting volatile timestamps
   const canonicalPayload = JSON.stringify({
     q: packet.question_context.normalized_question,
-    p: packet.question_context.period,
+    p: {
+      range: packet.question_context.period.range,
+      start: packet.question_context.period.start || null,
+      end: packet.question_context.period.end || null,
+    },
     f: canonicalFacts,
   });
 

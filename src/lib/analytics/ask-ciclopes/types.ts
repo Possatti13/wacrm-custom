@@ -66,6 +66,10 @@ export interface Fact {
   drilldown_ref?: FactDrilldownRef;
 }
 
+/**
+ * Server-side private entity resolution item.
+ * NEVER serialized to LLM synthesis or planner payloads.
+ */
 export interface OpaqueLeadEntity {
   lead_token: string; // "LEAD_1", "LEAD_2"
   contact_id: string;
@@ -75,21 +79,40 @@ export interface OpaqueLeadEntity {
   reasons?: string[];
 }
 
-export interface FactPacket {
+/**
+ * Server-side private entity map. Kept separate from fact packets.
+ */
+export type PrivateEntityMap = Record<string, OpaqueLeadEntity>;
+
+/**
+ * Canonical factual packet sent to external LLM providers (Synthesis/Planner).
+ * Contains ZERO PII (no contact_name, no phone, no email, no private entity maps).
+ */
+export interface ProviderFactPacket {
   question_context: {
     original_question: string;
     normalized_question: string;
     period: ResolvedPeriod;
     timezone: string;
-    generated_at: string;
   };
   facts: Fact[];
-  opaque_entities: Record<string, OpaqueLeadEntity>;
+}
+
+/**
+ * FactPacket alias for backwards-compatibility and internal usage.
+ */
+export type FactPacket = ProviderFactPacket;
+
+export interface ClaimNumericRef {
+  fact_id: string;
+  field?: string;
+  rendered_value: number;
 }
 
 export interface Claim {
   text: string;
   fact_ids: string[];
+  numeric_refs?: ClaimNumericRef[];
 }
 
 export interface Recommendation {
@@ -135,7 +158,7 @@ export interface AskCiclopesResult {
   drilldowns: DrilldownAction[];
   resolvedPeriod: ResolvedPeriod;
   facts: Fact[];
-  opaqueEntities: Record<string, OpaqueLeadEntity>;
+  opaqueEntities: PrivateEntityMap;
   cached: boolean;
   provider: string;
   model: string;

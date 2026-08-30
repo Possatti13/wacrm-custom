@@ -13,8 +13,6 @@ import {
   CheckCircle2,
   Zap,
   ArrowRight,
-  TrendingUp,
-  AlertTriangle,
   User,
 } from 'lucide-react';
 import type { AskCiclopesResult, DrilldownAction } from '@/lib/analytics/ask-ciclopes/types';

@@ -139,7 +139,7 @@ export async function planManagerQuestion(params: {
       usage: res.usage,
       latencyMs: Date.now() - startTime,
     };
-  } catch (err) {
+  } catch {
     // If provider fails, run deterministic rule-based planner fallback
     const fallbackPlan = createDeterministicPlannerFallback(question);
     return {

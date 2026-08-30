@@ -7,6 +7,11 @@ export default defineConfig({
   test: {
     environment: "node",
     include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
+    exclude: [
+      "src/lib/intelligence/v133-real-gemini-e2e.test.ts",
+      "node_modules/**",
+      ".next/**",
+    ],
     // Dummy secrets — encryption.ts / webhook-signature.ts read these
     // at module load. Tests never hit a real Meta/Supabase service, so
     // any 32-byte hex / non-empty string will do; keep them lexically

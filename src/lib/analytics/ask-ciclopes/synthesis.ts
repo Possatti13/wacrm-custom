@@ -153,7 +153,7 @@ ${JSON.stringify(formattedFacts, null, 2)}
       usage: res.usage,
       latencyMs: Date.now() - startTime,
     };
-  } catch (err) {
+  } catch {
     // If synthesis fails, build grounded answer directly from facts
     const fallback = createDeterministicSynthesisFallback(question, factPacket);
     return {
