@@ -13,7 +13,8 @@ import {
   getLeadScoringConfig,
   saveLeadScoringConfiguration,
 } from '@/lib/scoring/repository';
-import { encrypt } from '@/lib/whatsapp/encryption';
+import { encrypt, decrypt } from '@/lib/whatsapp/encryption';
+import { discoverGeminiModels, GEMINI_FALLBACK_MODELS } from '@/lib/ai/providers/gemini-models';
 
 export async function GET() {
   try {
@@ -28,9 +29,19 @@ export async function GET() {
     // Check if ai_configs has an API key stored (never return the plaintext key)
     const { data: aiConfig } = await supabase
       .from('ai_configs')
-      .select('api_key')
+      .select('api_key, provider')
       .eq('account_id', accountId)
       .maybeSingle();
+
+    let geminiModels = GEMINI_FALLBACK_MODELS;
+    if (aiConfig?.api_key && aiConfig.provider === 'gemini') {
+      try {
+        const decryptedKey = decrypt(aiConfig.api_key);
+        geminiModels = await discoverGeminiModels(decryptedKey);
+      } catch {
+        geminiModels = GEMINI_FALLBACK_MODELS;
+      }
+    }
 
     return NextResponse.json({
       settings: intelSettings || {
@@ -50,6 +61,7 @@ export async function GET() {
       has_api_key: !!aiConfig?.api_key,
       scoring: scoringConfig,
       cost_stats: costStats,
+      gemini_models: geminiModels,
     });
   } catch (err) {
     return toErrorResponse(err);

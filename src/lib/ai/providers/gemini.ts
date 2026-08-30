@@ -5,6 +5,7 @@ import {
   toNetworkError,
   type ProviderArgs,
 } from './shared'
+import { DEFAULT_GEMINI_MODEL } from './gemini-models'
 
 interface GeminiPart {
   text?: string
@@ -55,6 +56,22 @@ async function geminiHttpError(res: Response): Promise<AiError> {
   }
 
   const { status } = res
+
+  const isModelNotFound =
+    status === 404 ||
+    apiStatus === 'NOT_FOUND' ||
+    /models\/|not found|is not found/i.test(detail)
+
+  if (isModelNotFound) {
+    return new AiError(
+      'Modelo indisponível. Selecione outro modelo Gemini.',
+      {
+        code: 'model_not_found',
+        status: 404,
+      }
+    )
+  }
+
   const isKeyError =
     status === 401 ||
     status === 403 ||
@@ -90,7 +107,7 @@ async function geminiHttpError(res: Response): Promise<AiError> {
 export async function generateGemini(args: ProviderArgs): Promise<ProviderResult> {
   const { apiKey, model, systemPrompt, messages, timeoutMs } = args
 
-  const targetModel = model || 'gemini-1.5-flash'
+  const targetModel = model || DEFAULT_GEMINI_MODEL
   const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(targetModel)}:generateContent`
 
   // Format contents for Gemini (roles: 'user' | 'model')

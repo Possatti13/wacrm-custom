@@ -1,4 +1,5 @@
 import type { AiProvider } from './types'
+import { DEFAULT_GEMINI_MODEL } from './providers/gemini-models'
 
 // ============================================================
 // Tunables + prompt scaffold for the AI reply assistant.
@@ -14,7 +15,7 @@ export const AI_PROVIDER_DEFAULT_MODEL: Record<AiProvider, string> = {
   openai: 'gpt-5.4-mini',
   anthropic: 'claude-haiku-4-5-20251001',
   xai: 'grok-4',
-  gemini: 'gemini-1.5-flash',
+  gemini: DEFAULT_GEMINI_MODEL,
 }
 
 /**

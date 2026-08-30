@@ -20,9 +20,14 @@ const MODEL_PRICING: Record<string, { inputPerM: number; outputPerM: number }> =
   'claude-3-5-sonnet-20241022': { inputPerM: 3.00, outputPerM: 15.00 },
   'claude-3-haiku-20240307': { inputPerM: 0.25, outputPerM: 1.25 },
   'grok-beta': { inputPerM: 5.00, outputPerM: 15.00 },
-  'gemini-1.5-flash': { inputPerM: 0.075, outputPerM: 0.30 },
-  'gemini-2.0-flash': { inputPerM: 0.10, outputPerM: 0.40 },
-  'gemini-1.5-pro': { inputPerM: 1.25, outputPerM: 5.00 },
+  'gemini-3.5-flash-lite': { inputPerM: 0.075, outputPerM: 0.30 },
+  'gemini-3.7-flash': { inputPerM: 0.15, outputPerM: 0.60 },
+  'gemini-3.6-flash': { inputPerM: 0.12, outputPerM: 0.50 },
+  'gemini-3.5-flash': { inputPerM: 0.10, outputPerM: 0.40 },
+  'gemini-3.1-flash-lite': { inputPerM: 0.06, outputPerM: 0.25 },
+  'gemini-2.5-flash': { inputPerM: 0.08, outputPerM: 0.32 },
+  'gemini-2.5-flash-lite': { inputPerM: 0.05, outputPerM: 0.20 },
+  'gemini-2.5-pro': { inputPerM: 1.25, outputPerM: 5.00 },
   'mock-model-v1': { inputPerM: 0, outputPerM: 0 },
 };
 

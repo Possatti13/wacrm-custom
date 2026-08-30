@@ -5,6 +5,7 @@ import type {
 } from '../types'
 import { toNetworkError, normalizeUsage } from '@/lib/ai/providers/shared'
 import { AiError } from '@/lib/ai/types'
+import { DEFAULT_GEMINI_MODEL } from '@/lib/ai/providers/gemini-models'
 
 interface GeminiPart {
   text?: string
@@ -52,6 +53,22 @@ async function geminiExtractionHttpError(res: Response): Promise<AiError> {
   }
 
   const { status } = res
+
+  const isModelNotFound =
+    status === 404 ||
+    apiStatus === 'NOT_FOUND' ||
+    /models\/|not found|is not found/i.test(detail)
+
+  if (isModelNotFound) {
+    return new AiError(
+      'Modelo indisponível. Selecione outro modelo Gemini.',
+      {
+        code: 'model_not_found',
+        status: 404,
+      }
+    )
+  }
+
   const isKeyError =
     status === 401 ||
     status === 403 ||
@@ -89,7 +106,7 @@ export class GeminiStructuredExtractor implements CommercialIntelligenceProvider
 
   async extract(request: ExtractionProviderRequest): Promise<ExtractionProviderResult> {
     const startTime = Date.now()
-    const model = request.model || 'gemini-1.5-flash'
+    const model = request.model || DEFAULT_GEMINI_MODEL
     const timeoutMs = request.timeoutMs || 30000
 
     const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`

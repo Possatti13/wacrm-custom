@@ -2,6 +2,12 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { GeminiStructuredExtractor } from './gemini'
 import { resolveProviderForTenant } from '@/lib/jobs/workers/intelligence-worker'
 import { generateGemini } from '@/lib/ai/providers/gemini'
+import {
+  discoverGeminiModels,
+  isCompatibleGeminiModel,
+  GEMINI_FALLBACK_MODELS,
+  DEFAULT_GEMINI_MODEL,
+} from '@/lib/ai/providers/gemini-models'
 import { AiError } from '@/lib/ai/types'
 
 describe('Google Gemini Intelligence Provider Adapter', () => {
@@ -75,12 +81,12 @@ describe('Google Gemini Intelligence Provider Adapter', () => {
     const result = await extractor.extract({
       systemPrompt: 'System commercial prompt',
       userPrompt: 'User conversation text',
-      model: 'gemini-1.5-flash',
+      model: 'gemini-3.5-flash-lite',
       temperature: 0.1,
     })
 
     expect(result.provider).toBe('gemini')
-    expect(result.model).toBe('gemini-1.5-flash')
+    expect(result.model).toBe('gemini-3.5-flash-lite')
     expect(result.latencyMs).toBeGreaterThanOrEqual(0)
     expect(result.usage).toEqual({
       promptTokens: 150,
@@ -279,6 +285,37 @@ describe('Google Gemini Intelligence Provider Adapter', () => {
     }
   })
 
+  // Model Not Found Normalization
+  it('handles MODEL_NOT_FOUND (404) with specific user-friendly error message', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: false,
+      status: 404,
+      json: async () => ({
+        error: {
+          code: 404,
+          message: 'models/gemini-obsolete-99 is not found for API version v1beta',
+          status: 'NOT_FOUND',
+        },
+      }),
+    } as Response)
+
+    const extractor = new GeminiStructuredExtractor(FAKE_API_KEY)
+    await expect(
+      extractor.extract({
+        systemPrompt: 'sys',
+        userPrompt: 'user',
+        model: 'gemini-obsolete-99',
+      })
+    ).rejects.toSatisfy((err: unknown) => {
+      return (
+        err instanceof AiError &&
+        err.code === 'model_not_found' &&
+        err.status === 404 &&
+        err.message === 'Modelo indisponível. Selecione outro modelo Gemini.'
+      )
+    })
+  })
+
   // Text Completion / Chat / Ping Generation
   describe('generateGemini (Text & Health Check)', () => {
     it('generates reply with usage telemetry and model response', async () => {
@@ -304,7 +341,7 @@ describe('Google Gemini Intelligence Provider Adapter', () => {
 
       const res = await generateGemini({
         apiKey: FAKE_API_KEY,
-        model: 'gemini-1.5-flash',
+        model: 'gemini-3.5-flash-lite',
         systemPrompt: 'Ping check',
         messages: [{ role: 'user', content: 'ping' }],
         timeoutMs: 5000,
@@ -315,6 +352,36 @@ describe('Google Gemini Intelligence Provider Adapter', () => {
         promptTokens: 5,
         completionTokens: 1,
         totalTokens: 6,
+      })
+    })
+
+    it('returns model_not_found error on invalid model in health check', async () => {
+      vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+        ok: false,
+        status: 404,
+        json: async () => ({
+          error: {
+            code: 404,
+            message: 'models/invalid-model was not found',
+            status: 'NOT_FOUND',
+          },
+        }),
+      } as Response)
+
+      await expect(
+        generateGemini({
+          apiKey: FAKE_API_KEY,
+          model: 'invalid-model',
+          systemPrompt: 'ping',
+          messages: [{ role: 'user', content: 'ping' }],
+          timeoutMs: 5000,
+        })
+      ).rejects.toSatisfy((err: unknown) => {
+        return (
+          err instanceof AiError &&
+          err.code === 'model_not_found' &&
+          err.status === 404
+        )
       })
     })
   })
@@ -374,6 +441,76 @@ describe('Google Gemini Intelligence Provider Adapter', () => {
       expect(raw.observations[0].taxonomy_code).toBe('unknown_custom_code')
       expect(raw.observations[0].evidence[0].message_ref).toBe('M1')
       expect(raw.observations[0].evidence[0].quoted_text).toBe('valor está muito alto')
+    })
+  })
+
+  // Model Catalog & Discovery Tests
+  describe('Gemini Model Catalog & Discovery', () => {
+    it('includes modern canonical models and default 3.5-flash-lite', () => {
+      expect(DEFAULT_GEMINI_MODEL).toBe('gemini-3.5-flash-lite')
+      const ids = GEMINI_FALLBACK_MODELS.map((m) => m.id)
+      expect(ids).toContain('gemini-3.5-flash-lite')
+      expect(ids).toContain('gemini-3.7-flash')
+      expect(ids).toContain('gemini-3.6-flash')
+      expect(ids).toContain('gemini-3.5-flash')
+      expect(ids).toContain('gemini-3.1-flash-lite')
+      expect(ids).toContain('gemini-2.5-flash')
+    })
+
+    it('filters obsolete (1.0, 1.5, 2.0) and non-commercial models', () => {
+      expect(isCompatibleGeminiModel('gemini-1.5-flash')).toBe(false)
+      expect(isCompatibleGeminiModel('gemini-1.5-pro')).toBe(false)
+      expect(isCompatibleGeminiModel('gemini-2.0-flash')).toBe(false)
+      expect(isCompatibleGeminiModel('gemini-embedding-001')).toBe(false)
+      expect(isCompatibleGeminiModel('imagen-3.0-generate-002')).toBe(false)
+      expect(isCompatibleGeminiModel('gemini-live-2.5')).toBe(false)
+      expect(isCompatibleGeminiModel('gemini-tts-001')).toBe(false)
+      expect(isCompatibleGeminiModel('gemini-3.7-flash', ['generateContent'])).toBe(true)
+      expect(isCompatibleGeminiModel('gemini-3.5-flash-lite', ['generateContent'])).toBe(true)
+    })
+
+    it('dynamically discovers models and filters via Gemini API', async () => {
+      vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          models: [
+            {
+              name: 'models/gemini-3.7-flash',
+              displayName: 'Gemini 3.7 Flash',
+              supportedGenerationMethods: ['generateContent', 'countTokens'],
+            },
+            {
+              name: 'models/gemini-1.5-flash',
+              displayName: 'Gemini 1.5 Flash (Obsolete)',
+              supportedGenerationMethods: ['generateContent'],
+            },
+            {
+              name: 'models/text-embedding-004',
+              supportedGenerationMethods: ['embedContent'],
+            },
+            {
+              name: 'models/gemini-3.5-flash-lite',
+              displayName: 'Gemini 3.5 Flash-Lite',
+              supportedGenerationMethods: ['generateContent'],
+            },
+          ],
+        }),
+      } as Response)
+
+      const models = await discoverGeminiModels(FAKE_API_KEY)
+      const ids = models.map((m) => m.id)
+
+      expect(ids).toContain('gemini-3.5-flash-lite')
+      expect(ids).toContain('gemini-3.7-flash')
+      expect(ids).not.toContain('gemini-1.5-flash')
+      expect(ids).not.toContain('text-embedding-004')
+    })
+
+    it('falls back to GEMINI_FALLBACK_MODELS when dynamic discovery fails', async () => {
+      vi.spyOn(globalThis, 'fetch').mockRejectedValueOnce(new Error('Network error'))
+
+      const models = await discoverGeminiModels(FAKE_API_KEY)
+      expect(models).toEqual(GEMINI_FALLBACK_MODELS)
     })
   })
 })

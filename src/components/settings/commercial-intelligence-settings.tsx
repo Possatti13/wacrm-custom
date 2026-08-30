@@ -36,6 +36,11 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { SettingsPanelHead } from "./settings-panel-head";
 import type { InvocationMode, TenantCostStats } from "@/lib/intelligence/types";
+import {
+  GEMINI_FALLBACK_MODELS,
+  DEFAULT_GEMINI_MODEL,
+  type GeminiModelInfo,
+} from "@/lib/ai/providers/gemini-models";
 
 const MASKED_KEY = "••••••••••••••••";
 
@@ -51,6 +56,7 @@ export function CommercialIntelligenceSettings() {
   const [invocationMode, setInvocationMode] = useState<InvocationMode>("on_demand");
   const [provider, setProvider] = useState<string>("openai");
   const [model, setModel] = useState<string>("gpt-4o-mini");
+  const [geminiModels, setGeminiModels] = useState<GeminiModelInfo[]>(GEMINI_FALLBACK_MODELS);
   const [apiKey, setApiKey] = useState("");
   const [keyEdited, setKeyEdited] = useState(false);
   const [showKey, setShowKey] = useState(false);
@@ -355,7 +361,7 @@ export function CommercialIntelligenceSettings() {
                 onValueChange={(val) => {
                   if (val) {
                     setProvider(val);
-                    if (val === "gemini") setModel("gemini-1.5-flash");
+                    if (val === "gemini") setModel(DEFAULT_GEMINI_MODEL);
                     else if (val === "openai") setModel("gpt-4o-mini");
                     else if (val === "anthropic") setModel("claude-3-5-sonnet-20241022");
                     else if (val === "xai") setModel("grok-beta");
@@ -389,11 +395,12 @@ export function CommercialIntelligenceSettings() {
                 </SelectTrigger>
                 <SelectContent>
                   {provider === "gemini" && (
-                    <>
-                      <SelectItem value="gemini-1.5-flash">gemini-1.5-flash (Rápido & Free Tier)</SelectItem>
-                      <SelectItem value="gemini-2.0-flash">gemini-2.0-flash (Nova Geração)</SelectItem>
-                      <SelectItem value="gemini-1.5-pro">gemini-1.5-pro (Raciocínio Profundo)</SelectItem>
-                    </>
+                    geminiModels.map((m) => (
+                      <SelectItem key={m.id} value={m.id}>
+                        {m.displayName}
+                        {m.badge ? ` — ${m.badge}` : ""}
+                      </SelectItem>
+                    ))
                   )}
                   {provider === "openai" && (
                     <>
