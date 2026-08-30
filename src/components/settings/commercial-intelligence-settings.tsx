@@ -195,22 +195,62 @@ export function CommercialIntelligenceSettings() {
         },
         scoringConfig: {
           enabled: true,
-          base_score: baseScore,
+          base_score: Number(baseScore) || 10,
           min_score: 0,
           max_score: 100,
         },
         scoringRules: [
-          { rule_name: "base_score", weight: baseScore, rule_type: "base" },
-          { rule_name: "intent_purchase", weight: intentBonus, rule_type: "intent" },
-          { rule_name: "urgency_high", weight: urgencyHighBonus, rule_type: "urgency" },
-          { rule_name: "catalog_interest", weight: catalogBonus, rule_type: "catalog" },
-          { rule_name: "budget_match", weight: budgetBonus, rule_type: "budget" },
-          { rule_name: "objection_penalty", weight: objectionPenalty, rule_type: "objection" },
+          {
+            rule_key: "intent_purchase",
+            label: "Intenção de Compra",
+            signal_type: "profile_field",
+            field_key: "current_intent",
+            operator: "equals",
+            expected_value: "purchase",
+            points: Number(intentBonus) || 30,
+            status: "active",
+          },
+          {
+            rule_key: "urgency_high",
+            label: "Alta Urgência",
+            signal_type: "profile_field",
+            field_key: "urgency",
+            operator: "equals",
+            expected_value: "high",
+            points: Number(urgencyHighBonus) || 20,
+            status: "active",
+          },
+          {
+            rule_key: "catalog_interest",
+            label: "Interesse no Catálogo",
+            signal_type: "catalog_interest",
+            operator: "exists",
+            points: Number(catalogBonus) || 20,
+            status: "active",
+          },
+          {
+            rule_key: "budget_match",
+            label: "Compatibilidade de Orçamento",
+            signal_type: "attribute",
+            field_key: "budget_status",
+            operator: "equals",
+            expected_value: "compatible",
+            points: Number(budgetBonus) || 15,
+            status: "active",
+          },
+          {
+            rule_key: "objection_penalty",
+            label: "Objeção Ativa",
+            signal_type: "objection_presence",
+            operator: "exists",
+            points: Number(objectionPenalty) || -15,
+            status: "active",
+          },
         ],
       };
 
-      if (keyEdited && apiKey !== MASKED_KEY) {
-        payload.apiKey = apiKey;
+      if (keyEdited && apiKey && apiKey !== MASKED_KEY && !apiKey.includes("••••")) {
+        payload.apiKey = apiKey.trim();
       }
 
       const res = await fetch("/api/ai/intelligence-settings", {

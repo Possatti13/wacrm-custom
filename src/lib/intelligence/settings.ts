@@ -16,6 +16,9 @@ export interface TenantIntelligenceSettings {
   max_ai_actions_per_day?: number;
   max_ai_actions_per_month?: number;
   monthly_budget_limit_usd?: number | null;
+  encrypted_api_key?: string | null;
+  has_api_key?: boolean;
+  is_active?: boolean;
   created_at?: string;
   updated_at?: string;
 }
