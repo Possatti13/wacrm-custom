@@ -32,7 +32,7 @@ export interface IntelligenceCredentialResult {
 export async function loadIntelligenceCredential(
   db: SupabaseClient,
   accountId: string,
-  expectedProvider: 'openai' | 'anthropic' | 'xai' | 'mock'
+  expectedProvider: 'openai' | 'anthropic' | 'xai' | 'mock' | 'gemini'
 ): Promise<IntelligenceCredentialResult> {
   if (expectedProvider === 'mock') {
     return { apiKey: 'mock-key', provider: 'mock' }

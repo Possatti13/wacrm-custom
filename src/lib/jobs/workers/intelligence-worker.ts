@@ -3,6 +3,8 @@ import type { CommercialIntelligenceProvider } from '@/lib/intelligence/types'
 import { executeConversationExtraction } from '@/lib/intelligence/extractor'
 import { OpenAiStructuredExtractor } from '@/lib/intelligence/providers/openai'
 import { AnthropicStructuredExtractor } from '@/lib/intelligence/providers/anthropic'
+import { XAiStructuredExtractor } from '@/lib/intelligence/providers/xai'
+import { GeminiStructuredExtractor } from '@/lib/intelligence/providers/gemini'
 import { MockStructuredExtractor } from '@/lib/intelligence/providers/mock'
 import { loadIntelligenceCredential } from '@/lib/intelligence/credentials'
 import { MAX_JOB_ATTEMPTS } from '../config'
@@ -39,9 +41,19 @@ export function resolveProviderForTenant(
     return new MockStructuredExtractor()
   }
 
+  if (providerName === 'gemini') {
+    if (!apiKey) throw new Error('Missing Google Gemini API key for intelligence extraction')
+    return new GeminiStructuredExtractor(apiKey)
+  }
+
   if (providerName === 'anthropic') {
     if (!apiKey) throw new Error('Missing Anthropic API key for intelligence extraction')
     return new AnthropicStructuredExtractor(apiKey)
+  }
+
+  if (providerName === 'xai') {
+    if (!apiKey) throw new Error('Missing xAI API key for intelligence extraction')
+    return new XAiStructuredExtractor(apiKey)
   }
 
   // Default to OpenAI

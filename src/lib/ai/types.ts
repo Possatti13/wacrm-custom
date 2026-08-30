@@ -6,7 +6,7 @@
 // whether the account is on OpenAI or Anthropic.
 // ============================================================
 
-export type AiProvider = 'openai' | 'anthropic' | 'xai'
+export type AiProvider = 'openai' | 'anthropic' | 'xai' | 'gemini'
 
 /**
  * Account AI setup, decrypted and ready to use. Produced by

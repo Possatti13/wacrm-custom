@@ -41,7 +41,7 @@ export async function runCopilotAction(
 
   // 4. Load AI Settings & Credential
   const intelSettings = await getTenantIntelligenceSettings(db, accountId).catch(() => null);
-  const targetProvider = (intelSettings?.provider || 'openai') as 'openai' | 'anthropic' | 'xai' | 'mock';
+  const targetProvider = (intelSettings?.provider || 'openai') as 'openai' | 'anthropic' | 'xai' | 'mock' | 'gemini';
   const targetModel = intelSettings?.model || 'gpt-4o-mini';
 
   const credential = await loadIntelligenceCredential(db, accountId, targetProvider).catch(() => null);

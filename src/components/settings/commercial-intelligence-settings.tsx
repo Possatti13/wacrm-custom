@@ -341,8 +341,8 @@ export function CommercialIntelligenceSettings() {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="on_demand">⚡ Sob Demanda (Recomendado)</SelectItem>
-                  <SelectItem value="automatic">⚙️ Automático (Toda Mensagem)</SelectItem>
+                  <SelectItem value="smart_auto">✨ Smart Automático (Debounce & Burst)</SelectItem>
+                  <SelectItem value="on_demand">⚡ Sob Demanda (Manual / Botão)</SelectItem>
                   <SelectItem value="off">🚫 Desativado</SelectItem>
                 </SelectContent>
               </Select>
@@ -352,13 +352,23 @@ export function CommercialIntelligenceSettings() {
               <Label className="text-xs">Provedor de IA</Label>
               <Select
                 value={provider}
-                onValueChange={(val) => val && setProvider(val)}
+                onValueChange={(val) => {
+                  if (val) {
+                    setProvider(val);
+                    if (val === "gemini") setModel("gemini-1.5-flash");
+                    else if (val === "openai") setModel("gpt-4o-mini");
+                    else if (val === "anthropic") setModel("claude-3-5-sonnet-20241022");
+                    else if (val === "xai") setModel("grok-beta");
+                    else if (val === "mock") setModel("mock-model-v1");
+                  }
+                }}
                 disabled={!canEdit || !enabled}
               >
                 <SelectTrigger className="h-9 text-xs">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
+                  <SelectItem value="gemini">Google Gemini</SelectItem>
                   <SelectItem value="openai">OpenAI</SelectItem>
                   <SelectItem value="anthropic">Anthropic (Claude)</SelectItem>
                   <SelectItem value="xai">Grok / xAI</SelectItem>
@@ -378,10 +388,31 @@ export function CommercialIntelligenceSettings() {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="gpt-4o-mini">gpt-4o-mini (Custo-Benefício)</SelectItem>
-                  <SelectItem value="gpt-4o">gpt-4o (Alta Capacidade)</SelectItem>
-                  <SelectItem value="claude-3-5-sonnet-20241022">claude-3-5-sonnet</SelectItem>
-                  <SelectItem value="mock-model-v1">mock-model-v1</SelectItem>
+                  {provider === "gemini" && (
+                    <>
+                      <SelectItem value="gemini-1.5-flash">gemini-1.5-flash (Rápido & Free Tier)</SelectItem>
+                      <SelectItem value="gemini-2.0-flash">gemini-2.0-flash (Nova Geração)</SelectItem>
+                      <SelectItem value="gemini-1.5-pro">gemini-1.5-pro (Raciocínio Profundo)</SelectItem>
+                    </>
+                  )}
+                  {provider === "openai" && (
+                    <>
+                      <SelectItem value="gpt-4o-mini">gpt-4o-mini (Custo-Benefício)</SelectItem>
+                      <SelectItem value="gpt-4o">gpt-4o (Alta Capacidade)</SelectItem>
+                    </>
+                  )}
+                  {provider === "anthropic" && (
+                    <>
+                      <SelectItem value="claude-3-5-haiku-20241022">claude-3-5-haiku</SelectItem>
+                      <SelectItem value="claude-3-5-sonnet-20241022">claude-3-5-sonnet</SelectItem>
+                    </>
+                  )}
+                  {provider === "xai" && (
+                    <SelectItem value="grok-beta">grok-beta</SelectItem>
+                  )}
+                  {provider === "mock" && (
+                    <SelectItem value="mock-model-v1">mock-model-v1</SelectItem>
+                  )}
                 </SelectContent>
               </Select>
             </div>
@@ -389,19 +420,24 @@ export function CommercialIntelligenceSettings() {
 
           {/* Mode Explanatory Notice */}
           <div className="rounded-lg border bg-muted/40 p-3 text-xs text-muted-foreground space-y-1">
+            {invocationMode === "smart_auto" && (
+              <p>
+                ✨ <strong>Modo Smart Automático:</strong> Agrupa mensagens recebidas com janela de debounce (~15 min) ou disparo imediato em rajadas (≥ 6 msgs). Executa no máximo <strong>1 job consolidado</strong> sem chamadas desnecessárias por mensagem.
+              </p>
+            )}
             {invocationMode === "on_demand" && (
               <p>
                 💡 <strong>Modo Sob Demanda:</strong> 10.000 mensagens recebidas no WhatsApp geram <strong>0 chamadas de IA</strong>. A IA só é acionada quando um vendedor ou gestor clicar em &quot;Analisar&quot;, &quot;Resumir&quot; ou consultar o Copilot.
               </p>
             )}
-            {invocationMode === "automatic" && (
-              <p>
-                ⚠️ <strong>Modo Automático:</strong> Toda mensagem recebida é enviada para fila de extração em segundo plano. Recomendado apenas para fluxos de alto volume onde o custo contínuo é desejado.
-              </p>
-            )}
             {invocationMode === "off" && (
               <p>
                 🚫 <strong>Modo Desativado:</strong> Todos os recursos de IA interna estão desligados.
+              </p>
+            )}
+            {provider === "gemini" && (
+              <p className="text-[11px] text-amber-600 dark:text-amber-400 pt-1 border-t border-border/50 mt-1">
+                ⚠️ Para testes com planos gratuitos do provider, utilize somente dados sintéticos ou anonimizados conforme os termos aplicáveis do provedor.
               </p>
             )}
           </div>

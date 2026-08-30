@@ -7,6 +7,7 @@ import { MockStructuredExtractor } from './providers/mock';
 import { OpenAiStructuredExtractor } from './providers/openai';
 import { AnthropicStructuredExtractor } from './providers/anthropic';
 import { XAiStructuredExtractor } from './providers/xai';
+import { GeminiStructuredExtractor } from './providers/gemini';
 import { validateUuid } from '../leads/validation';
 import { executeConversationExtraction } from './extractor';
 import { projectContactCommercialState } from '../projector/repository';
@@ -19,6 +20,9 @@ const MODEL_PRICING: Record<string, { inputPerM: number; outputPerM: number }> =
   'claude-3-5-sonnet-20241022': { inputPerM: 3.00, outputPerM: 15.00 },
   'claude-3-haiku-20240307': { inputPerM: 0.25, outputPerM: 1.25 },
   'grok-beta': { inputPerM: 5.00, outputPerM: 15.00 },
+  'gemini-1.5-flash': { inputPerM: 0.075, outputPerM: 0.30 },
+  'gemini-2.0-flash': { inputPerM: 0.10, outputPerM: 0.40 },
+  'gemini-1.5-pro': { inputPerM: 1.25, outputPerM: 5.00 },
   'mock-model-v1': { inputPerM: 0, outputPerM: 0 },
 };
 
@@ -222,6 +226,8 @@ export async function executeOnDemandAiAction(
       providerInstance = new AnthropicStructuredExtractor(cred.apiKey);
     } else if (activeProvider === 'xai') {
       providerInstance = new XAiStructuredExtractor(cred.apiKey);
+    } else if (activeProvider === 'gemini') {
+      providerInstance = new GeminiStructuredExtractor(cred.apiKey);
     } else {
       throw new Error(`Provedor desconhecido: ${activeProvider}`);
     }

@@ -39,12 +39,14 @@ const MASKED_KEY = '••••••••••••••••';
 const HANDOFF_QUEUE = '__queue__';
 
 const PROVIDER_LABEL: Record<AiProvider, string> = {
+  gemini: 'Google Gemini',
   openai: 'OpenAI',
   anthropic: 'Anthropic (Claude)',
   xai: 'Grok / xAI',
 };
 
 const KEY_PLACEHOLDER: Record<AiProvider, string> = {
+  gemini: 'AIzaSy...',
   openai: 'sk-...',
   anthropic: 'sk-ant-...',
   xai: 'xai-...',
@@ -279,6 +281,7 @@ export function AiConfig() {
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
+                    <SelectItem value="gemini">{PROVIDER_LABEL.gemini}</SelectItem>
                     <SelectItem value="openai">{PROVIDER_LABEL.openai}</SelectItem>
                     <SelectItem value="xai">{PROVIDER_LABEL.xai}</SelectItem>
                     <SelectItem value="anthropic">

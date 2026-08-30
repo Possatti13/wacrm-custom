@@ -7,7 +7,7 @@ export interface TenantIntelligenceSettings {
   account_id: string;
   enabled: boolean;
   invocation_mode: InvocationMode;
-  provider: 'openai' | 'anthropic' | 'xai' | 'mock';
+  provider: 'openai' | 'anthropic' | 'xai' | 'mock' | 'gemini';
   model: string;
   extractor_version: string;
   prompt_version: string;

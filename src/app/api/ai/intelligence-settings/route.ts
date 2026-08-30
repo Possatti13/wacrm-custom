@@ -58,7 +58,7 @@ export async function GET() {
 
 export async function POST(req: Request) {
   try {
-    const { supabase, accountId } = await requireRole('agent');
+    const { supabase, accountId } = await requireRole('admin');
     const body = await req.json();
 
     const {

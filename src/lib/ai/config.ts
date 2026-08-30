@@ -3,7 +3,7 @@ import { decrypt } from '@/lib/whatsapp/encryption'
 import type { AiConfig } from './types'
 
 interface AiConfigRow {
-  provider: 'openai' | 'anthropic' | 'xai'
+  provider: 'openai' | 'anthropic' | 'xai' | 'gemini'
   model: string
   api_key: string
   system_prompt: string | null
