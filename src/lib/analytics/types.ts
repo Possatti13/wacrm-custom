@@ -327,6 +327,12 @@ export interface CoachingSummaryResponse {
   high_count: number;
   medium_count?: number;
   reviewed_count: number;
+  status_breakdown?: {
+    open: number;
+    reviewed: number;
+    dismissed: number;
+    resolved: number;
+  };
   category_breakdown: CoachingCategoryBreakdown;
   top_focus_areas: CoachingFocusArea[];
 }
