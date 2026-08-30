@@ -639,9 +639,9 @@ export default function ContactsPage() {
                     </div>
                   </TableCell>
                   <TableCell className="text-muted-foreground text-xs hidden lg:table-cell">
-                    {new Date(contact.created_at).toLocaleDateString('en-US', {
-                      month: 'short',
+                    {new Date(contact.created_at).toLocaleDateString('pt-BR', {
                       day: 'numeric',
+                      month: 'short',
                       year: 'numeric',
                     })}
                   </TableCell>

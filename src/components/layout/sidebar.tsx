@@ -231,8 +231,8 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
                 className="text-sidebar-foreground group-hover:opacity-95 transition-opacity"
               />
             </div>
-            <span className="text-[9px] font-sans font-medium tracking-[0.16em] uppercase text-sidebar-foreground/60 pl-8 -mt-1">
-              CRM para WhatsApp
+            <span className="text-[8.5px] font-sans font-medium tracking-[0.12em] uppercase text-sidebar-foreground/60 pl-8 -mt-1">
+              MUITAS CONVERSAS. UMA VISÃO.
             </span>
           </Link>
           <button

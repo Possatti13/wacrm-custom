@@ -37,6 +37,9 @@ export function AttentionQueue({
   onPriorityFilterChange,
   loading,
 }: AttentionQueueProps) {
+  const [showAll, setShowAll] = React.useState(false);
+  const displayedItems = showAll ? items : items.slice(0, 5);
+
   const formatIdleTime = (seconds: number) => {
     if (seconds < 60) return "Agora";
     const mins = Math.floor(seconds / 60);
@@ -173,7 +176,7 @@ export function AttentionQueue({
           </div>
         ) : (
           <div className="divide-y divide-border/40">
-            {items.map((item, idx) => (
+            {displayedItems.map((item, idx) => (
               <div
                 key={idx}
                 className="p-4 sm:p-5 flex flex-col md:flex-row md:items-center justify-between gap-4 hover:bg-muted/30 transition-colors"
@@ -226,6 +229,21 @@ export function AttentionQueue({
                 </div>
               </div>
             ))}
+
+            {items.length > 5 && (
+              <div className="p-3 bg-muted/20 text-center border-t border-border/40">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setShowAll(!showAll)}
+                  className="text-xs font-semibold text-[#1E3A5F] dark:text-blue-400 hover:text-primary gap-1"
+                >
+                  {showAll
+                    ? "Mostrar menos (apenas top 5)"
+                    : `Ver todas as ${items.length} oportunidades pendentes →`}
+                </Button>
+              </div>
+            )}
           </div>
         )}
       </CardContent>

@@ -269,7 +269,7 @@ export async function snoozeFollowup(
   taskId: string,
   input: SnoozeTaskInput
 ): Promise<Task> {
-  const { data: rpcData, error: rpcError } = await db.rpc('snooze_followup_atomic', {
+  const { error: rpcError } = await db.rpc('snooze_followup_atomic', {
     p_account_id: accountId,
     p_task_id: taskId,
     p_snooze_until: input.snooze_until,
@@ -291,7 +291,7 @@ export async function completeFollowup(
   taskId: string,
   completedByUserId?: string | null
 ): Promise<Task> {
-  const { data: rpcData, error: rpcError } = await db.rpc('complete_followup_atomic', {
+  const { error: rpcError } = await db.rpc('complete_followup_atomic', {
     p_account_id: accountId,
     p_task_id: taskId,
     p_completed_by: completedByUserId || null,

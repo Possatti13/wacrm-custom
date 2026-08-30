@@ -219,14 +219,14 @@ export function CopilotSheet({
                   </span>
                 </button>
 
-                {/* 3. Buscar no Catálogo */}
+                {/* 3. Sugerir Próximo Passo */}
                 <button
                   type="button"
-                  onClick={() => handleRunCopilot("match_catalog")}
+                  onClick={() => handleRunCopilot("suggest_reply", "Qual deve ser o próximo passo comercial objetivo deste vendedor para avançar o lead?")}
                   disabled={loading}
                   className={cn(
                     "flex flex-col text-left p-3 rounded-lg border transition-all relative group",
-                    activeAction === "match_catalog" && result
+                    activeAction === "suggest_reply" && result
                       ? "border-primary bg-primary/5 ring-1 ring-primary"
                       : "border-border bg-card hover:bg-muted/40 hover:border-primary/40"
                   )}
@@ -236,10 +236,10 @@ export function CopilotSheet({
                     <ChevronRight className="size-3 text-muted-foreground group-hover:text-foreground transition-transform group-hover:translate-x-0.5" />
                   </div>
                   <span className="text-xs font-semibold text-foreground">
-                    Buscar no catálogo
+                    Próximo passo
                   </span>
                   <span className="text-[10px] text-muted-foreground mt-0.5 leading-tight">
-                    Encontra produtos e serviços relevantes.
+                    Define a próxima ação comercial recomendada.
                   </span>
                 </button>
 

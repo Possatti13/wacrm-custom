@@ -31,14 +31,8 @@ import {
   Plus,
   Search,
   Sparkles,
-  UserX,
-  History,
-  Flame,
   ExternalLink,
-  Phone,
   User,
-  ArrowUpRight,
-  TrendingUp,
   ShieldAlert,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";

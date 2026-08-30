@@ -132,7 +132,7 @@ export async function fetchAssignmentHistory(
     )
   );
 
-  let profileMap = new Map<string, { id: string; full_name: string; email: string | null; avatar_url: string | null }>();
+  const profileMap = new Map<string, { id: string; full_name: string; email: string | null; avatar_url: string | null }>();
 
   if (userIds.length > 0) {
     const { data: profiles } = await db

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, useEffect, useCallback } from "react";
+import { useMemo, useState, useEffect } from "react";
 import {
   DndContext,
   DragOverlay,
@@ -24,7 +24,7 @@ import {
 import { createClient } from "@/lib/supabase/client";
 import { DealCard } from "./deal-card";
 import { Button } from "@/components/ui/button";
-import { Plus } from "lucide-react";
+import { Plus, ChevronLeft, ChevronRight } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 import { formatCurrency } from "@/lib/currency";
 import { useTranslations } from "next-intl";
@@ -48,6 +48,14 @@ export function PipelineBoard({
   const { accountId, defaultCurrency } = useAuth();
   const [activeDealId, setActiveDealId] = useState<string | null>(null);
   const [suggestions, setSuggestions] = useState<DealStageSuggestion[]>([]);
+
+  const sortedStages = useMemo(
+    () => [...stages].sort((a, b) => a.position - b.position),
+    [stages],
+  );
+
+  // Mobile selected stage index
+  const [mobileStageIndex, setMobileStageIndex] = useState(0);
 
   useEffect(() => {
     let isMounted = true;
@@ -105,11 +113,6 @@ export function PipelineBoard({
     }
   };
 
-  const sortedStages = useMemo(
-    () => [...stages].sort((a, b) => a.position - b.position),
-    [stages],
-  );
-
   const dealsByStage = useMemo(() => {
     const map = new Map<string, Deal[]>();
     for (const stage of sortedStages) map.set(stage.id, []);
@@ -121,10 +124,7 @@ export function PipelineBoard({
   }, [sortedStages, deals]);
 
   const sensors = useSensors(
-    // 5px activation distance avoids clicks being interpreted as drags.
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
-    // Keyboard drag support: focus a card, Space to pick up, arrows to move,
-    // Space to drop, Escape to cancel.
     useSensor(KeyboardSensor),
   );
 
@@ -154,103 +154,157 @@ export function PipelineBoard({
     setActiveDealId(null);
   }
 
+  const activeMobileStage = sortedStages[mobileStageIndex] || sortedStages[0];
+  const activeMobileDeals = activeMobileStage ? dealsByStage.get(activeMobileStage.id) ?? [] : [];
+  const activeMobileTotal = activeMobileDeals.reduce((s, d) => s + Number(d.value || 0), 0);
+
   return (
-    <DndContext
-      sensors={sensors}
-      collisionDetection={closestCorners}
-      onDragStart={handleDragStart}
-      onDragEnd={handleDragEnd}
-      onDragCancel={handleDragCancel}
-    >
-      {/* snap-x + snap-mandatory on mobile so swipes land the next
-          stage cleanly at the viewport edge instead of mid-column.
-          Disabled on lg+ where snapping would interfere with the
-          natural layout. The board can still overflow horizontally on
-          lg+ once a pipeline has many stages (columns keep a 260px
-          min-width), so a thin scrollbar stays visible on desktop. */}
-      <div className="pipeline-scroll flex snap-x snap-mandatory gap-3 overflow-x-auto pb-4 lg:snap-none">
-        {sortedStages.map((stage) => {
-          const stageDeals = dealsByStage.get(stage.id) ?? [];
-          const totalValue = stageDeals.reduce(
-            (s, d) => s + Number(d.value || 0),
-            0,
-          );
-          return (
-            <StageColumn
-              key={stage.id}
-              stage={stage}
-              deals={stageDeals}
-              totalValue={totalValue}
-              currency={defaultCurrency}
-              suggestionsByDealId={suggestionsByDealId}
-              onApplySuggestion={handleApplySuggestion}
-              onDismissSuggestion={handleDismissSuggestion}
-              onAddDeal={onAddDeal}
-              onEditDeal={onEditDeal}
-            />
-          );
-        })}
+    <>
+      {/* MOBILE VIEW (< md): Vertical Opportunity Stack with Stage Navigation */}
+      <div className="block md:hidden space-y-4">
+        {/* Stage Pills & Navigation Bar */}
+        <div className="rounded-xl border border-border bg-card p-3 space-y-3 shadow-2xs">
+          <div className="flex items-center justify-between gap-2">
+            <button
+              type="button"
+              disabled={mobileStageIndex === 0}
+              onClick={() => setMobileStageIndex((i) => Math.max(0, i - 1))}
+              className="p-1.5 rounded-lg border border-border/80 text-muted-foreground hover:text-foreground disabled:opacity-30 disabled:pointer-events-none"
+              aria-label="Etapa anterior"
+            >
+              <ChevronLeft className="size-4" />
+            </button>
+
+            <div className="text-center min-w-0 flex-1">
+              <div className="flex items-center justify-center gap-1.5">
+                <span
+                  className="size-2.5 rounded-full"
+                  style={{ backgroundColor: activeMobileStage?.color || "#1E3A5F" }}
+                />
+                <h3 className="font-bold text-sm text-foreground truncate">
+                  {activeMobileStage?.name || "Etapa"}
+                </h3>
+              </div>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                <strong className="font-semibold text-foreground">{activeMobileDeals.length}</strong> oportunidades •{" "}
+                <span className="font-mono">{formatCurrency(activeMobileTotal, defaultCurrency)}</span>
+              </p>
+            </div>
+
+            <button
+              type="button"
+              disabled={mobileStageIndex === sortedStages.length - 1}
+              onClick={() => setMobileStageIndex((i) => Math.min(sortedStages.length - 1, i + 1))}
+              className="p-1.5 rounded-lg border border-border/80 text-muted-foreground hover:text-foreground disabled:opacity-30 disabled:pointer-events-none"
+              aria-label="Próxima etapa"
+            >
+              <ChevronRight className="size-4" />
+            </button>
+          </div>
+
+          {/* Quick Stage Pills Bar */}
+          <div className="flex gap-1 overflow-x-auto pb-1 scrollbar-none">
+            {sortedStages.map((st, idx) => (
+              <button
+                key={st.id}
+                type="button"
+                onClick={() => setMobileStageIndex(idx)}
+                className={`px-2.5 py-1 text-[11px] font-semibold rounded-lg shrink-0 transition-all ${
+                  idx === mobileStageIndex
+                    ? "bg-[#1E3A5F] text-white shadow-xs"
+                    : "bg-muted/60 text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                {st.name} ({dealsByStage.get(st.id)?.length || 0})
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Opportunity Cards List for active stage */}
+        <div className="space-y-3">
+          {activeMobileDeals.length === 0 ? (
+            <div className="rounded-xl border border-dashed border-border p-8 text-center bg-card/60">
+              <p className="text-xs text-muted-foreground">Nenhuma oportunidade nesta etapa</p>
+            </div>
+          ) : (
+            activeMobileDeals.map((deal) => (
+              <DealCard
+                key={deal.id}
+                deal={deal}
+                stage={activeMobileStage}
+                suggestion={suggestionsByDealId.get(deal.id) ?? null}
+                onApplySuggestion={handleApplySuggestion}
+                onDismissSuggestion={handleDismissSuggestion}
+                onEdit={onEditDeal}
+              />
+            ))
+          )}
+
+          {activeMobileStage && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => onAddDeal(activeMobileStage.id)}
+              className="w-full h-9 text-xs font-semibold gap-1.5 border-dashed border-border text-foreground hover:bg-muted"
+            >
+              <Plus className="size-3.5" />
+              <span>Adicionar oportunidade nesta etapa</span>
+            </Button>
+          )}
+        </div>
       </div>
 
-      <DragOverlay
-        dropAnimation={{
-          duration: 200,
-          easing: "cubic-bezier(0.2, 0, 0, 1)",
-        }}
-      >
-        {activeDeal ? (
-          <div className="opacity-90">
-            <DealCard
-              deal={activeDeal}
-              stage={
-                sortedStages.find((s) => s.id === activeDeal.stage_id) ?? null
-              }
-              onEdit={() => {}}
-              isOverlay
-            />
+      {/* DESKTOP VIEW (>= md): Full Responsive Drag and Drop Kanban Board */}
+      <div className="hidden md:block">
+        <DndContext
+          sensors={sensors}
+          collisionDetection={closestCorners}
+          onDragStart={handleDragStart}
+          onDragEnd={handleDragEnd}
+          onDragCancel={handleDragCancel}
+        >
+          <div className="pipeline-scroll flex gap-3 overflow-x-auto pb-4">
+            {sortedStages.map((stage) => {
+              const stageDeals = dealsByStage.get(stage.id) ?? [];
+              const totalValue = stageDeals.reduce(
+                (s, d) => s + Number(d.value || 0),
+                0,
+              );
+              return (
+                <StageColumn
+                  key={stage.id}
+                  stage={stage}
+                  deals={stageDeals}
+                  totalValue={totalValue}
+                  currency={defaultCurrency}
+                  suggestionsByDealId={suggestionsByDealId}
+                  onApplySuggestion={handleApplySuggestion}
+                  onDismissSuggestion={handleDismissSuggestion}
+                  onAddDeal={onAddDeal}
+                  onEditDeal={onEditDeal}
+                />
+              );
+            })}
           </div>
-        ) : null}
-      </DragOverlay>
 
-      <style jsx>{`
-        .pipeline-scroll {
-          scroll-behavior: smooth;
-        }
-        /* On touch devices the peek/snap layout already signals there's
-           more to swipe, so the scrollbar is hidden for a clean look.
-           On desktop (mouse) the board can overflow with many stages
-           and there is no peek hint, so keep a thin, themed scrollbar
-           visible to make the overflow discoverable and usable. */
-        @media (hover: none), (pointer: coarse) {
-          .pipeline-scroll::-webkit-scrollbar {
-            height: 0;
-            display: none;
-          }
-          .pipeline-scroll {
-            scrollbar-width: none;
-          }
-        }
-        @media (hover: hover) and (pointer: fine) {
-          .pipeline-scroll {
-            scrollbar-width: thin;
-            scrollbar-color: var(--border) transparent;
-          }
-          .pipeline-scroll::-webkit-scrollbar {
-            height: 8px;
-          }
-          .pipeline-scroll::-webkit-scrollbar-track {
-            background: transparent;
-          }
-          .pipeline-scroll::-webkit-scrollbar-thumb {
-            background-color: var(--border);
-            border-radius: 9999px;
-          }
-          .pipeline-scroll::-webkit-scrollbar-thumb:hover {
-            background-color: var(--muted-foreground);
-          }
-        }
-      `}</style>
-    </DndContext>
+          <DragOverlay>
+            {activeDeal ? (
+              <div className="opacity-90">
+                <DealCard
+                  deal={activeDeal}
+                  stage={
+                    sortedStages.find((s) => s.id === activeDeal.stage_id) ?? null
+                  }
+                  onEdit={() => {}}
+                  isOverlay
+                />
+              </div>
+            ) : null}
+          </DragOverlay>
+        </DndContext>
+      </div>
+    </>
   );
 }
 
@@ -279,14 +333,7 @@ function StageColumn({
   const { setNodeRef, isOver } = useDroppable({ id: stage.id });
 
   return (
-    // On mobile each column is `w-[85vw]` (with a reasonable min/max)
-    // so the next column's edge peeks in — a "there's more here" hint.
-    // snap-start lands each column cleanly when swiping. On lg+ we
-    // restore the flex-1 share-the-row behavior. The droppable ref is
-    // on the inner messages region below — intentionally NOT here, so
-    // a drag over the column header doesn't highlight the whole column.
-    <div className="flex w-[85vw] min-w-[260px] max-w-[320px] shrink-0 snap-start flex-col rounded-xl border border-border bg-card/60 p-4 lg:w-auto lg:max-w-none lg:flex-1 lg:basis-[260px] lg:shrink lg:snap-none">
-      {/* 3px colored top border — sits above the column's padding */}
+    <div className="flex min-w-[260px] max-w-[320px] shrink-0 flex-col rounded-xl border border-border bg-card/60 p-4 lg:w-auto lg:max-w-none lg:flex-1 lg:basis-[260px] lg:shrink">
       <div
         className="-mx-4 -mt-4 h-[3px] rounded-t-xl"
         style={{ backgroundColor: stage.color }}

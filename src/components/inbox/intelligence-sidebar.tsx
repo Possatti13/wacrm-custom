@@ -580,7 +580,17 @@ export function IntelligenceSidebar({
                 {leadProfile.current_intent && (
                   <div className="flex items-center gap-1 px-2.5 py-1 rounded-md bg-secondary text-foreground text-xs font-medium border border-border/60">
                     <span className="text-muted-foreground text-[10px]">Intenção:</span>
-                    <span className="font-semibold capitalize">{leadProfile.current_intent}</span>
+                    <span className="font-semibold">
+                      {leadProfile.current_intent.toLowerCase() === "purchase"
+                        ? "Compra"
+                        : leadProfile.current_intent.toLowerCase() === "service"
+                        ? "Serviço"
+                        : leadProfile.current_intent.toLowerCase() === "support"
+                        ? "Suporte"
+                        : leadProfile.current_intent.toLowerCase() === "pricing"
+                        ? "Preço / Orçamento"
+                        : leadProfile.current_intent}
+                    </span>
                   </div>
                 )}
                 {leadProfile.urgency && (
@@ -593,7 +603,15 @@ export function IntelligenceSidebar({
                     )}
                   >
                     <span className="text-muted-foreground text-[10px]">Urgência:</span>
-                    <span className="capitalize">{leadProfile.urgency === "high" ? "Alta" : leadProfile.urgency}</span>
+                    <span>
+                      {leadProfile.urgency === "high"
+                        ? "Alta"
+                        : leadProfile.urgency === "medium"
+                        ? "Média"
+                        : leadProfile.urgency === "low"
+                        ? "Baixa"
+                        : leadProfile.urgency}
+                    </span>
                   </div>
                 )}
               </div>
@@ -618,7 +636,9 @@ export function IntelligenceSidebar({
                         {it.item?.name || "Item do Catálogo"}
                       </p>
                       {it.item?.type && (
-                        <p className="text-[10px] text-muted-foreground capitalize">{it.item.type}</p>
+                        <p className="text-[10px] text-muted-foreground">
+                          {it.item.type === "service" ? "Serviço" : "Produto"}
+                        </p>
                       )}
                     </div>
                   </div>
