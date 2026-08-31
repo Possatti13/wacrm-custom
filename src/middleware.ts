@@ -1,6 +1,23 @@
 import { createServerClient } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
 
+const CANONICAL_CRON_WORKER_ROUTES = new Set([
+  '/api/automations/cron',
+  '/api/flows/cron',
+  '/api/jobs/intelligence/process',
+  '/api/jobs/whatsapp-inbound/process',
+])
+
+export function isPublicApiPath(pathname: string): boolean {
+  return (
+    pathname.startsWith('/api/v1/') ||
+    pathname.startsWith('/api/whatsapp/webhook') ||
+    pathname.startsWith('/api/whatsapp/waha/webhook') ||
+    pathname.startsWith('/api/invitations/') ||
+    CANONICAL_CRON_WORKER_ROUTES.has(pathname)
+  )
+}
+
 export async function middleware(request: NextRequest) {
   let supabaseResponse = NextResponse.next({ request })
 
@@ -88,15 +105,7 @@ export async function middleware(request: NextRequest) {
 
   // Protected internal API routes (excluding public endpoints, webhooks, cron, and public v1 API).
   if (!user && request.nextUrl.pathname.startsWith('/api/')) {
-    const isPublicApi =
-      request.nextUrl.pathname.startsWith('/api/v1/') ||
-      request.nextUrl.pathname.startsWith('/api/whatsapp/webhook') ||
-      request.nextUrl.pathname.startsWith('/api/whatsapp/waha/webhook') ||
-      request.nextUrl.pathname.startsWith('/api/invitations/') ||
-      request.nextUrl.pathname.startsWith('/api/automations/cron') ||
-      request.nextUrl.pathname.startsWith('/api/flows/cron')
-
-    if (!isPublicApi) {
+    if (!isPublicApiPath(request.nextUrl.pathname)) {
       return withRefreshedCookies(
         NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
       )
