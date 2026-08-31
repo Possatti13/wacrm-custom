@@ -104,7 +104,7 @@ describe('WAHA Real Message End-to-End Pipeline & DB Persistence', () => {
         let updateData: any = null
 
         const builder: any = {
-          select: (_cols?: string) => builder,
+          select: () => builder,
           eq: (col: string, val: any) => {
             filters.push({ col, op: '=', val })
             return builder

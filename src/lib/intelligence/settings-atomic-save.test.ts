@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import type { SupabaseClient } from '@supabase/supabase-js'
 import {
-  getTenantIntelligenceSettings,
   saveTenantIntelligenceSettings,
 } from './settings'
 import { encrypt, decrypt } from '@/lib/whatsapp/encryption'
@@ -10,9 +10,9 @@ import { GET, POST } from '@/app/api/ai/intelligence-settings/route'
 vi.mock('@/lib/auth/account', () => ({
   getCurrentAccount: vi.fn(),
   requireRole: vi.fn(),
-  toErrorResponse: vi.fn((err: any) => {
-    return new Response(JSON.stringify({ error: err.message || 'Error' }), {
-      status: err.status || 500,
+  toErrorResponse: vi.fn((err: { message?: string; status?: number }) => {
+    return new Response(JSON.stringify({ error: err?.message || 'Error' }), {
+      status: err?.status || 500,
       headers: { 'Content-Type': 'application/json' },
     })
   }),
@@ -31,9 +31,9 @@ describe('Atomic AI & Commercial Intelligence Configuration Save', () => {
   it('A, B, C: saves Gemini config atomically with encrypted key and is_active=true', async () => {
     let capturedEncryptedKey: string | null = null
 
-    const rpcMock = vi.fn().mockImplementation((fn: string, args: any) => {
+    const rpcMock = vi.fn().mockImplementation((fn: string, args: { p_settings?: { encrypted_api_key?: string } }) => {
       if (fn === 'save_tenant_intelligence_settings') {
-        capturedEncryptedKey = args.p_settings.encrypted_api_key
+        capturedEncryptedKey = args.p_settings?.encrypted_api_key ?? null
         return Promise.resolve({
           data: {
             account_id: accountId,
@@ -50,7 +50,7 @@ describe('Atomic AI & Commercial Intelligence Configuration Save', () => {
       return Promise.resolve({ data: null, error: null })
     })
 
-    const mockDb = { rpc: rpcMock } as any
+    const mockDb = { rpc: rpcMock } as unknown as SupabaseClient
 
     const encryptedKey = encrypt(FAKE_KEY)
     const result = await saveTenantIntelligenceSettings(mockDb, accountId, {
@@ -94,7 +94,7 @@ describe('Atomic AI & Commercial Intelligence Configuration Save', () => {
       error: null,
     })
 
-    const mockDb = { rpc: rpcMock } as any
+    const mockDb = { rpc: rpcMock } as unknown as SupabaseClient
 
     const result = await saveTenantIntelligenceSettings(mockDb, accountId, {
       enabled: true,
@@ -134,7 +134,7 @@ describe('Atomic AI & Commercial Intelligence Configuration Save', () => {
       error: null,
     })
 
-    const mockDb = { rpc: rpcMock } as any
+    const mockDb = { rpc: rpcMock } as unknown as SupabaseClient
 
     const result = await saveTenantIntelligenceSettings(mockDb, accountId, {
       enabled: true,
@@ -166,9 +166,9 @@ describe('Atomic AI & Commercial Intelligence Configuration Save', () => {
 
     const mockSupabase = { rpc: rpcMock }
     vi.mocked(requireRole).mockResolvedValueOnce({
-      supabase: mockSupabase as any,
+      supabase: mockSupabase as unknown as SupabaseClient,
       accountId,
-      account: { id: accountId } as any,
+      account: { id: accountId, name: 'Test' },
       userId: 'user-1',
       role: 'admin',
     })
@@ -232,9 +232,9 @@ describe('Atomic AI & Commercial Intelligence Configuration Save', () => {
 
     const mockSupabase = { rpc: rpcMock }
     vi.mocked(requireRole).mockResolvedValueOnce({
-      supabase: mockSupabase as any,
+      supabase: mockSupabase as unknown as SupabaseClient,
       accountId,
-      account: { id: accountId } as any,
+      account: { id: accountId, name: 'Test' },
       userId: 'user-1',
       role: 'admin',
     })
@@ -326,9 +326,9 @@ describe('Atomic AI & Commercial Intelligence Configuration Save', () => {
     }
 
     vi.mocked(getCurrentAccount).mockResolvedValueOnce({
-      supabase: mockSupabase as any,
+      supabase: mockSupabase as unknown as SupabaseClient,
       accountId,
-      account: { id: accountId } as any,
+      account: { id: accountId, name: 'Test' },
       userId: 'user-1',
       role: 'admin',
     })
@@ -351,9 +351,9 @@ describe('Atomic AI & Commercial Intelligence Configuration Save', () => {
     }
 
     vi.mocked(requireRole).mockResolvedValueOnce({
-      supabase: mockSupabase as any,
+      supabase: mockSupabase as unknown as SupabaseClient,
       accountId,
-      account: { id: accountId } as any,
+      account: { id: accountId, name: 'Test' },
       userId: 'user-1',
       role: 'admin',
     })
@@ -368,7 +368,6 @@ describe('Atomic AI & Commercial Intelligence Configuration Save', () => {
     })
 
     const res = await POST(req)
-    const json = await res.json()
     // When error occurs, sanitized response should not contain raw secret
     expect(res.status).toBeGreaterThanOrEqual(400)
   })

@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
+import type { SupabaseClient } from '@supabase/supabase-js';
 import {
   assignConversationAtomic,
   fetchAssignmentHistory,
@@ -20,7 +21,7 @@ describe('assignConversationAtomic', () => {
       error: null,
     });
 
-    const mockDb = { rpc: mockRpc } as any;
+    const mockDb = { rpc: mockRpc } as unknown as SupabaseClient;
 
     return assignConversationAtomic(mockDb, {
       accountId: 'acc-1',
@@ -60,7 +61,7 @@ describe('assignConversationAtomic', () => {
       error: null,
     });
 
-    const mockDb = { rpc: mockRpc } as any;
+    const mockDb = { rpc: mockRpc } as unknown as SupabaseClient;
 
     await expect(
       assignConversationAtomic(mockDb, {
@@ -78,7 +79,7 @@ describe('assignConversationAtomic', () => {
       error: { message: 'Forbidden: caller is not a member of this account' },
     });
 
-    const mockDb = { rpc: mockRpcForbidden } as any;
+    const mockDb = { rpc: mockRpcForbidden } as unknown as SupabaseClient;
 
     await expect(
       assignConversationAtomic(mockDb, {
@@ -127,9 +128,9 @@ describe('fetchAssignmentHistory', () => {
             in: vi.fn().mockResolvedValue({ data: profilesRows, error: null }),
           };
         }
-        return {} as any;
+        return {} as unknown;
       }),
-    } as any;
+    } as unknown as SupabaseClient;
 
     const result = await fetchAssignmentHistory(mockDb, 'acc-1', 'conv-1');
 

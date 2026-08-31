@@ -1,6 +1,4 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, it, expect, beforeEach } from 'vitest';
-import fs from 'fs';
 import path from 'path';
 import { createRequire } from 'module';
 
@@ -18,7 +16,10 @@ const scratchRequire = createRequire(
 const { PGlite } = scratchRequire('@electric-sql/pglite');
 
 describe('CICLOPES V1.1.1 — Team Security Hardening & Audit Matrix', () => {
-  let db: any;
+  let db: {
+    query: (sql: string) => Promise<{ rows: Array<Record<string, unknown>> }>;
+    exec: (sql: string) => Promise<unknown>;
+  };
   const tenantAId = 'aaaaaaaa-1111-4111-a111-aaaaaaaaaaaa';
   const tenantBId = 'bbbbbbbb-2222-4222-b222-bbbbbbbbbbbb';
 
@@ -426,20 +427,20 @@ describe('CICLOPES V1.1.1 — Team Security Hardening & Audit Matrix', () => {
     const res = await db.query(`
       SELECT assign_conversation_atomic('${tenantAId}', '${conv1Id}', '${sellerA1Id}', 'Claiming lead');
     `);
-    const data = (res.rows[0] as any).assign_conversation_atomic;
+    const data = res.rows[0].assign_conversation_atomic as { success: boolean; event_type: string; assigned_agent_id: string };
     expect(data.success).toBe(true);
     expect(data.event_type).toBe('claimed');
     expect(data.assigned_agent_id).toBe(sellerA1Id);
 
     // Verify conversation was updated in DB
     const conv = await db.query(`SELECT assigned_agent_id FROM conversations WHERE id = '${conv1Id}';`);
-    expect((conv.rows[0] as any).assigned_agent_id).toBe(sellerA1Id);
+    expect(conv.rows[0].assigned_agent_id).toBe(sellerA1Id);
 
     // Verify history row exists
     const hist = await db.query(`SELECT * FROM conversation_assignment_history WHERE conversation_id = '${conv1Id}';`);
     expect(hist.rows).toHaveLength(1);
-    expect((hist.rows[0] as any).event_type).toBe('claimed');
-    expect((hist.rows[0] as any).assigned_by_user_id).toBe(sellerA1Id);
+    expect(hist.rows[0].event_type).toBe('claimed');
+    expect(hist.rows[0].assigned_by_user_id).toBe(sellerA1Id);
   });
 
   it('4. agent assign unassigned to another seller -> denied', async () => {
@@ -468,7 +469,7 @@ describe('CICLOPES V1.1.1 — Team Security Hardening & Audit Matrix', () => {
     const res = await db.query(`
       SELECT assign_conversation_atomic('${tenantAId}', '${conv2Id}', '${sellerA2Id}', 'Manager reassign');
     `);
-    const data = (res.rows[0] as any).assign_conversation_atomic;
+    const data = res.rows[0].assign_conversation_atomic as { success: boolean; event_type: string; assigned_agent_id: string; previous_agent_id: string };
     expect(data.success).toBe(true);
     expect(data.event_type).toBe('reassigned');
     expect(data.assigned_agent_id).toBe(sellerA2Id);
@@ -480,7 +481,7 @@ describe('CICLOPES V1.1.1 — Team Security Hardening & Audit Matrix', () => {
     const res = await db.query(`
       SELECT assign_conversation_atomic('${tenantAId}', '${conv2Id}', '${sellerA2Id}', 'Admin reassign');
     `);
-    const data = (res.rows[0] as any).assign_conversation_atomic;
+    const data = res.rows[0].assign_conversation_atomic as { success: boolean; event_type: string };
     expect(data.success).toBe(true);
     expect(data.event_type).toBe('reassigned');
   });
@@ -505,7 +506,7 @@ describe('CICLOPES V1.1.1 — Team Security Hardening & Audit Matrix', () => {
     const res = await db.query(`
       SELECT assign_conversation_atomic('${tenantAId}', '${conv2Id}', '${sellerA2Id}', 'claim', '00000000-0000-0000-0000-000000000000');
     `);
-    const data = (res.rows[0] as any).assign_conversation_atomic;
+    const data = res.rows[0].assign_conversation_atomic as { success: boolean; error: string };
     expect(data.success).toBe(false);
     expect(data.error).toBe('CONCURRENCY_CONFLICT');
   });
@@ -515,37 +516,37 @@ describe('CICLOPES V1.1.1 — Team Security Hardening & Audit Matrix', () => {
     await db.query(`UPDATE accounts SET seller_conversation_visibility = 'all' WHERE id = '${tenantAId}';`);
     await asUser(sellerA2Id);
     const checkAllMine = await db.query(`SELECT check_conversation_visibility('${tenantAId}', '${sellerA2Id}') as ok;`);
-    expect((checkAllMine.rows[0] as any).ok).toBe(true);
+    expect(checkAllMine.rows[0].ok).toBe(true);
     const checkAllOther = await db.query(`SELECT check_conversation_visibility('${tenantAId}', '${sellerA1Id}') as ok;`);
-    expect((checkAllOther.rows[0] as any).ok).toBe(true);
+    expect(checkAllOther.rows[0].ok).toBe(true);
 
     // B) Policy 'assigned_and_unassigned'
     await db.query(`UPDATE accounts SET seller_conversation_visibility = 'assigned_and_unassigned' WHERE id = '${tenantAId}';`);
     await asUser(sellerA2Id);
     const checkAUUnassigned = await db.query(`SELECT check_conversation_visibility('${tenantAId}', NULL) as ok;`);
-    expect((checkAUUnassigned.rows[0] as any).ok).toBe(true);
+    expect(checkAUUnassigned.rows[0].ok).toBe(true);
     const checkAUMine = await db.query(`SELECT check_conversation_visibility('${tenantAId}', '${sellerA2Id}') as ok;`);
-    expect((checkAUMine.rows[0] as any).ok).toBe(true);
+    expect(checkAUMine.rows[0].ok).toBe(true);
     const checkAUOther = await db.query(`SELECT check_conversation_visibility('${tenantAId}', '${sellerA1Id}') as ok;`);
-    expect((checkAUOther.rows[0] as any).ok).toBe(false);
+    expect(checkAUOther.rows[0].ok).toBe(false);
 
     // C) Policy 'assigned_only'
     await db.query(`UPDATE accounts SET seller_conversation_visibility = 'assigned_only' WHERE id = '${tenantAId}';`);
     await asUser(sellerA2Id);
     const checkAOUnassigned = await db.query(`SELECT check_conversation_visibility('${tenantAId}', NULL) as ok;`);
-    expect((checkAOUnassigned.rows[0] as any).ok).toBe(false);
+    expect(checkAOUnassigned.rows[0].ok).toBe(false);
     const checkAOMine = await db.query(`SELECT check_conversation_visibility('${tenantAId}', '${sellerA2Id}') as ok;`);
-    expect((checkAOMine.rows[0] as any).ok).toBe(true);
+    expect(checkAOMine.rows[0].ok).toBe(true);
     const checkAOOther = await db.query(`SELECT check_conversation_visibility('${tenantAId}', '${sellerA1Id}') as ok;`);
-    expect((checkAOOther.rows[0] as any).ok).toBe(false);
+    expect(checkAOOther.rows[0].ok).toBe(false);
 
     // D) Owner / Admin always sees all even under 'assigned_only'
     await asUser(ownerAId);
     const checkOwner = await db.query(`SELECT check_conversation_visibility('${tenantAId}', '${sellerA1Id}') as ok;`);
-    expect((checkOwner.rows[0] as any).ok).toBe(true);
+    expect(checkOwner.rows[0].ok).toBe(true);
 
     await asUser(adminAId);
     const checkAdmin = await db.query(`SELECT check_conversation_visibility('${tenantAId}', '${sellerA1Id}') as ok;`);
-    expect((checkAdmin.rows[0] as any).ok).toBe(true);
+    expect(checkAdmin.rows[0].ok).toBe(true);
   });
 });

@@ -1,9 +1,10 @@
 import { describe, it, expect, vi } from 'vitest'
+import type { SupabaseClient } from '@supabase/supabase-js'
+import type { CommercialIntelligenceProvider } from './types'
 import { executeConversationExtraction } from './extractor'
 import { sweepAndEnqueueDueIntelligence } from './sweep'
 import {
   ensureTenantObjectionTaxonomy,
-  listTenantObjectionTaxonomy,
   overrideObjectionTaxonomy,
   getObjectionSummary,
 } from './taxonomy'
@@ -18,7 +19,7 @@ describe('CICLOPES V1.3 — Smart Automatic Intelligence & Objection Gate', () =
         data: { success: true, enqueued_count: 3, timestamp: '2026-08-29T12:00:00Z' },
         error: null,
       })
-      const mockDb = { rpc: mockRpc } as any
+      const mockDb = { rpc: mockRpc } as unknown as SupabaseClient
 
       const res = await sweepAndEnqueueDueIntelligence(mockDb, { batchLimit: 15, leaseSeconds: 600 })
 
@@ -62,16 +63,16 @@ describe('CICLOPES V1.3 — Smart Automatic Intelligence & Objection Gate', () =
           return { select: vi.fn() }
         }),
         rpc: vi.fn(),
-      } as any
+      } as unknown as SupabaseClient
 
       const mockProvider = {
-        providerName: 'mock',
+        providerName: 'mock' as const,
         extract: vi.fn(),
       }
 
       const result = await executeConversationExtraction({
         db: mockDb,
-        provider: mockProvider as any,
+        provider: mockProvider as unknown as CommercialIntelligenceProvider,
         accountId,
         conversationId,
       })
@@ -85,7 +86,7 @@ describe('CICLOPES V1.3 — Smart Automatic Intelligence & Objection Gate', () =
   describe('3. Taxonomy & Occurrence Ledger Architecture', () => {
     it('guarantees tenant default taxonomy seeding', async () => {
       const mockRpc = vi.fn().mockResolvedValue({ error: null })
-      const mockDb = { rpc: mockRpc } as any
+      const mockDb = { rpc: mockRpc } as unknown as SupabaseClient
 
       await ensureTenantObjectionTaxonomy(mockDb, accountId)
       expect(mockRpc).toHaveBeenCalledWith('ensure_tenant_default_objection_taxonomy', {
@@ -105,7 +106,7 @@ describe('CICLOPES V1.3 — Smart Automatic Intelligence & Objection Gate', () =
         },
         error: null,
       })
-      const mockDb = { rpc: mockRpc } as any
+      const mockDb = { rpc: mockRpc } as unknown as SupabaseClient
 
       const res = await overrideObjectionTaxonomy(
         mockDb,
@@ -136,7 +137,7 @@ describe('CICLOPES V1.3 — Smart Automatic Intelligence & Objection Gate', () =
         ],
       }
       const mockRpc = vi.fn().mockResolvedValue({ data: mockData, error: null })
-      const mockDb = { rpc: mockRpc } as any
+      const mockDb = { rpc: mockRpc } as unknown as SupabaseClient
 
       const res = await getObjectionSummary(mockDb, accountId)
       expect(res.total).toBe(100)

@@ -43,7 +43,8 @@ export async function POST(
       reason,
     });
     return NextResponse.json({ task: updated });
-  } catch (err: any) {
-    return NextResponse.json({ error: err.message || 'Failed to snooze task' }, { status: 500 });
+  } catch (err: unknown) {
+    const errorMsg = err instanceof Error ? err.message : 'Failed to snooze task';
+    return NextResponse.json({ error: errorMsg }, { status: 500 });
   }
 }

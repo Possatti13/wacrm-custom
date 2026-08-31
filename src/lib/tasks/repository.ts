@@ -6,6 +6,7 @@ import type {
   SnoozeTaskInput,
   TaskFilter,
   CockpitView,
+  ActionType,
   NoNextActionLeadItem,
   ForgottenLeadItem,
 } from '@/types/tasks';
@@ -381,7 +382,7 @@ export async function createFollowupFromAiSuggestion(
     contact_id: input.contact_id,
     conversation_id: input.conversation_id || null,
     title: input.action_text.trim(),
-    action_type: (input.action_type as any) || 'recontact',
+    action_type: (input.action_type as ActionType) || 'recontact',
     due_at: input.due_at || null,
     assigned_user_id: input.assigned_user_id || null,
     created_by_user_id: input.created_by_user_id || null,
@@ -420,7 +421,7 @@ export async function getCockpitFollowups(
   if (error || !data) {
     // Fallback to client-side listTasks if RPC fails
     const fallbackTasks = await listTasks(db, accountId, {
-      timeframe: options.view as any,
+      timeframe: options.view as TaskFilter['timeframe'],
       assigned_user_id: options.assigned_user_id,
     });
     return {

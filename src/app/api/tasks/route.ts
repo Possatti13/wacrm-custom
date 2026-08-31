@@ -54,8 +54,9 @@ export async function GET(request: Request) {
     });
 
     return NextResponse.json({ tasks });
-  } catch (err: any) {
-    return NextResponse.json({ error: err.message || 'Internal error' }, { status: 500 });
+  } catch (err: unknown) {
+    const errorMsg = err instanceof Error ? err.message : 'Internal error';
+    return NextResponse.json({ error: errorMsg }, { status: 500 });
   }
 }
 
@@ -109,7 +110,8 @@ export async function POST(request: Request) {
   try {
     const task = await createTask(supabase, accountId, input);
     return NextResponse.json({ task }, { status: 201 });
-  } catch (err: any) {
-    return NextResponse.json({ error: err.message || 'Failed to create task' }, { status: 500 });
+  } catch (err: unknown) {
+    const errorMsg = err instanceof Error ? err.message : 'Failed to create task';
+    return NextResponse.json({ error: errorMsg }, { status: 500 });
   }
 }

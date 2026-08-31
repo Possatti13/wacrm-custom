@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
+import type { SupabaseClient } from '@supabase/supabase-js'
 import {
   DEFAULT_OBJECTION_TAXONOMY_CODES,
   ensureTenantObjectionTaxonomy,
@@ -25,7 +26,7 @@ describe('Objection Taxonomy Domain Service (V1.3)', () => {
 
   it('calls ensure_tenant_default_objection_taxonomy RPC properly', async () => {
     const mockRpc = vi.fn().mockResolvedValue({ error: null })
-    const mockDb = { rpc: mockRpc } as any
+    const mockDb = { rpc: mockRpc } as unknown as SupabaseClient
 
     await ensureTenantObjectionTaxonomy(mockDb, 'acc-123')
     expect(mockRpc).toHaveBeenCalledWith('ensure_tenant_default_objection_taxonomy', {
@@ -38,22 +39,7 @@ describe('Objection Taxonomy Domain Service (V1.3)', () => {
       { id: 'tax-1', code: 'price_budget', name: 'Preço / Orçamento', position: 10, is_active: true },
       { id: 'tax-2', code: 'timing', name: 'Momento / Timing', position: 20, is_active: true },
     ]
-    const mockSelect = vi.fn().mockReturnThis()
-    const mockEq1 = vi.fn().mockReturnThis()
-    const mockEq2 = vi.fn().mockReturnThis()
-    const mockOrder = vi.fn().mockResolvedValue({ data: mockData, error: null })
 
-    const mockDb = {
-      from: vi.fn(() => ({
-        select: mockSelect,
-        eq: (col: string, val: any) => {
-          if (col === 'account_id') return { eq: mockEq2 }
-          return { order: mockOrder }
-        },
-      })),
-    } as any
-
-    // Test with simpler mock structure
     const simpleDb = {
       from: vi.fn().mockReturnValue({
         select: vi.fn().mockReturnValue({
@@ -64,7 +50,7 @@ describe('Objection Taxonomy Domain Service (V1.3)', () => {
           }),
         }),
       }),
-    } as any
+    } as unknown as SupabaseClient
 
     const res = await listTenantObjectionTaxonomy(simpleDb, 'acc-123')
     expect(res).toHaveLength(2)
@@ -76,7 +62,7 @@ describe('Objection Taxonomy Domain Service (V1.3)', () => {
       data: { success: true, effective_taxonomy_id: 'tax-override' },
       error: null,
     })
-    const mockDb = { rpc: mockRpc } as any
+    const mockDb = { rpc: mockRpc } as unknown as SupabaseClient
 
     const res = await overrideObjectionTaxonomy(
       mockDb,
@@ -107,7 +93,7 @@ describe('Objection Taxonomy Domain Service (V1.3)', () => {
     }
 
     const mockRpc = vi.fn().mockResolvedValue({ data: mockSummary, error: null })
-    const mockDb = { rpc: mockRpc } as any
+    const mockDb = { rpc: mockRpc } as unknown as SupabaseClient
 
     const res = await getObjectionSummary(mockDb, 'acc-123', {
       from: '2026-08-01T00:00:00Z',
@@ -124,6 +110,6 @@ describe('Objection Taxonomy Domain Service (V1.3)', () => {
       p_seller_user_id: 'seller-777',
     })
     expect(res.total).toBe(10)
-    expect(res.items).toHaveLength(2)
+    expect(res.items[0].taxonomy_code).toBe('price_budget')
   })
 })

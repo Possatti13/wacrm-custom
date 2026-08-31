@@ -9,6 +9,7 @@ import {
   DEFAULT_GEMINI_MODEL,
 } from '@/lib/ai/providers/gemini-models'
 import { AiError } from '@/lib/ai/types'
+import type { RawStructuredExtractionOutput } from '../types'
 
 describe('Google Gemini Intelligence Provider Adapter', () => {
   const FAKE_API_KEY = 'AIzaSyFakeTestKeyForGeminiIntegration12345'
@@ -94,7 +95,7 @@ describe('Google Gemini Intelligence Provider Adapter', () => {
       totalTokens: 215,
     })
 
-    const raw = result.rawOutput as any
+    const raw = result.rawOutput as RawStructuredExtractionOutput
     expect(raw.summary).toContain('Scooter Elétrica')
     expect(raw.observations).toHaveLength(2)
     expect(raw.observations[1].taxonomy_code).toBe('price_budget')
@@ -280,8 +281,8 @@ describe('Google Gemini Intelligence Provider Adapter', () => {
         userPrompt: 'user',
       })
       expect.unreachable('Should have thrown error')
-    } catch (err: any) {
-      expect(err.message).not.toContain(FAKE_API_KEY)
+    } catch (err: unknown) {
+      expect((err as Error).message).not.toContain(FAKE_API_KEY)
     }
   })
 
@@ -437,10 +438,10 @@ describe('Google Gemini Intelligence Provider Adapter', () => {
         userPrompt: 'User',
       })
 
-      const raw = res.rawOutput as any
-      expect(raw.observations[0].taxonomy_code).toBe('unknown_custom_code')
-      expect(raw.observations[0].evidence[0].message_ref).toBe('M1')
-      expect(raw.observations[0].evidence[0].quoted_text).toBe('valor está muito alto')
+      const raw = res.rawOutput as RawStructuredExtractionOutput
+      expect(raw.observations![0]!.taxonomy_code).toBe('unknown_custom_code')
+      expect(raw.observations![0]!.evidence![0]!.message_ref).toBe('M1')
+      expect(raw.observations![0]!.evidence![0]!.quoted_text).toBe('valor está muito alto')
     })
   })
 

@@ -4,14 +4,11 @@ import path from 'path';
 import { createRequire } from 'module';
 import {
   createTask,
-  updateTask,
   snoozeFollowup,
   completeFollowup,
   getTaskById,
-  listTasks,
   createFollowupFromAiSuggestion,
 } from './repository';
-import type { CreateTaskInput, ActionType, WaitingOn } from '@/types/tasks';
 
 const scratchRequire = createRequire(
   path.join(

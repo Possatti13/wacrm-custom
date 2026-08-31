@@ -32,7 +32,8 @@ export async function POST(
   try {
     const updated = await completeFollowup(supabase, profile.account_id, taskId, user.id);
     return NextResponse.json({ task: updated });
-  } catch (err: any) {
-    return NextResponse.json({ error: err.message || 'Failed to complete task' }, { status: 500 });
+  } catch (err: unknown) {
+    const errorMsg = err instanceof Error ? err.message : 'Failed to complete task';
+    return NextResponse.json({ error: errorMsg }, { status: 500 });
   }
 }

@@ -23,14 +23,10 @@ import { FollowupCard } from "./followup-card";
 import { CreateFollowupDialog } from "./create-followup-dialog";
 import { PageHeader } from "@/components/layout/page-header";
 import {
-  Calendar,
-  AlertTriangle,
   Clock,
   CheckCircle2,
-  Users,
   Plus,
   Search,
-  Sparkles,
   ExternalLink,
   User,
   ShieldAlert,

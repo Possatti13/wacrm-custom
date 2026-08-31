@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
+import type { SupabaseClient } from '@supabase/supabase-js'
 import {
   processIntelligenceBatch,
   resolveProviderForTenant,
@@ -52,7 +53,6 @@ describe('Intelligence Worker', () => {
       return Promise.resolve({ data: null, error: null })
     })
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const mockDb = {
       rpc: rpcMock,
       from: () => ({
@@ -63,7 +63,7 @@ describe('Intelligence Worker', () => {
           }),
         }),
       }),
-    } as any
+    } as unknown as SupabaseClient
 
     const stats = await processIntelligenceBatch({
       db: mockDb,

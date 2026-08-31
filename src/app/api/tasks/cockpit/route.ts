@@ -68,7 +68,8 @@ export async function GET(request: Request) {
     });
 
     return NextResponse.json(result);
-  } catch (err: any) {
-    return NextResponse.json({ error: err.message || 'Internal error' }, { status: 500 });
+  } catch (err: unknown) {
+    const errorMsg = err instanceof Error ? err.message : 'Internal error';
+    return NextResponse.json({ error: errorMsg }, { status: 500 });
   }
 }

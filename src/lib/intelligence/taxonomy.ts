@@ -1,7 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type {
   TenantObjectionTaxonomy,
-  ConversationObjectionOccurrence,
   ObjectionSummaryResult,
 } from './types'
 

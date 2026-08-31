@@ -204,7 +204,7 @@ export function ConversationList({
     statusFilter,
     sellerVisibility,
     accountRole,
-    user?.id,
+    user,
     search,
     selectedTagIds,
     selectedCompany,

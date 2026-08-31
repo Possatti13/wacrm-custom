@@ -24,9 +24,9 @@ import {
   Briefcase,
   Clock,
   Sparkles,
+  type LucideIcon,
 } from "lucide-react";
-import { addHours, addDays, setHours, setMinutes, nextMonday, format } from "date-fns";
-import { ptBR } from "date-fns/locale";
+import { addHours, addDays, setHours, setMinutes, nextMonday } from "date-fns";
 import { cn } from "@/lib/utils";
 
 interface CreateFollowupDialogProps {
@@ -36,7 +36,7 @@ interface CreateFollowupDialogProps {
   initialValues?: Partial<CreateTaskInput>;
 }
 
-const ACTION_OPTIONS: Array<{ type: ActionType; label: string; icon: any }> = [
+const ACTION_OPTIONS: Array<{ type: ActionType; label: string; icon: LucideIcon }> = [
   { type: "message", label: "Mensagem", icon: MessageSquare },
   { type: "call", label: "Ligação", icon: Phone },
   { type: "proposal", label: "Proposta", icon: FileText },

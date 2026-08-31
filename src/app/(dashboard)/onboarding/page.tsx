@@ -603,7 +603,7 @@ export default function OnboardingPage() {
                   />
                   <select
                     value={inviteRole}
-                    onChange={(e) => setInviteRole(e.target.value as any)}
+                    onChange={(e) => setInviteRole(e.target.value as "agent" | "admin" | "viewer")}
                     className="h-8.5 text-xs bg-background border border-border rounded-md px-2 text-foreground"
                   >
                     <option value="agent">Vendedor (Agent)</option>

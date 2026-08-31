@@ -24,7 +24,7 @@ import { useAuth } from "@/hooks/use-auth";
 import { listTenantObjectionTaxonomy, overrideObjectionTaxonomy } from "@/lib/intelligence/taxonomy";
 import type { TenantObjectionTaxonomy } from "@/lib/intelligence/types";
 import { toast } from "sonner";
-import { Check, Tag, ShieldCheck } from "lucide-react";
+import { Tag, ShieldCheck } from "lucide-react";
 
 interface ObjectionOverrideDialogProps {
   open: boolean;
@@ -43,41 +43,69 @@ export function ObjectionOverrideDialog({
   rawObjectionText,
   onOverridden,
 }: ObjectionOverrideDialogProps) {
+  const supabase = createClient();
   const { accountId } = useAuth();
+
   const [taxonomies, setTaxonomies] = useState<TenantObjectionTaxonomy[]>([]);
-  const [selectedTaxonomyId, setSelectedTaxonomyId] = useState<string>("");
-  const [reason, setReason] = useState<string>("");
-  const [saving, setSaving] = useState(false);
+  const [selectedTaxonomyId, setSelectedTaxonomyId] = useState<string>('');
+  const [reason, setReason] = useState<string>('');
+  const [loading, setLoading] = useState<boolean>(false);
+  const [saving, setSaving] = useState<boolean>(false);
 
   useEffect(() => {
     if (!open || !accountId) return;
-    const supabase = createClient();
-    listTenantObjectionTaxonomy(supabase, accountId)
-      .then((items) => {
-        setTaxonomies(items);
+    const currentAccountId = accountId;
+
+    let mounted = true;
+    async function loadTaxonomy() {
+      setLoading(true);
+      try {
+        const list = await listTenantObjectionTaxonomy(supabase, currentAccountId);
+        if (!mounted) return;
+        setTaxonomies(list);
         if (currentTaxonomyId) {
           setSelectedTaxonomyId(currentTaxonomyId);
-        } else if (items.length > 0) {
-          setSelectedTaxonomyId(items[0].id);
+        } else if (list.length > 0) {
+          setSelectedTaxonomyId(list[0].id);
         }
-      })
-      .catch((err) => {
-        console.error("[ObjectionOverrideDialog] Failed to list taxonomies:", err);
-      });
-  }, [open, accountId, currentTaxonomyId]);
+      } catch (err) {
+        console.error('Failed to load objection taxonomy:', err);
+        toast.error('Erro ao carregar categorias de objeção.');
+      } finally {
+        if (mounted) setLoading(false);
+      }
+    }
+
+    loadTaxonomy();
+
+    return () => {
+      mounted = false;
+    };
+  }, [open, accountId, currentTaxonomyId, supabase]);
 
   const handleSave = async () => {
     if (!accountId || !occurrenceId || !selectedTaxonomyId) return;
+
     setSaving(true);
     try {
-      const supabase = createClient();
-      await overrideObjectionTaxonomy(supabase, accountId, occurrenceId, selectedTaxonomyId, reason);
-      toast.success("Classificação da objeção atualizada!");
-      onOpenChange(false);
-      onOverridden?.();
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      toast.error(`Erro ao atualizar categoria: ${msg}`);
+      const res = await overrideObjectionTaxonomy(
+        supabase,
+        accountId,
+        occurrenceId,
+        selectedTaxonomyId,
+        reason.trim() || undefined
+      );
+
+      if (res.success) {
+        toast.success('Categoria de objeção atualizada com sucesso!');
+        onOverridden?.();
+        onOpenChange(false);
+      } else {
+        toast.error('Não foi possível atualizar a objeção.');
+      }
+    } catch (err) {
+      console.error('Override error:', err);
+      toast.error(err instanceof Error ? err.message : 'Erro ao atualizar classificação da objeção.');
     } finally {
       setSaving(false);
     }
@@ -85,7 +113,7 @@ export function ObjectionOverrideDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className="sm:max-w-[480px]">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Tag className="w-5 h-5 text-amber-500" />
@@ -100,7 +128,7 @@ export function ObjectionOverrideDialog({
           {rawObjectionText && (
             <div className="p-3 bg-muted/40 rounded-md text-xs border">
               <span className="font-semibold text-muted-foreground block mb-1">Citação original:</span>
-              <p className="italic text-foreground">"{rawObjectionText}"</p>
+              <p className="italic text-foreground">&quot;{rawObjectionText}&quot;</p>
             </div>
           )}
 

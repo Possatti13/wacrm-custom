@@ -114,12 +114,12 @@ export async function POST(req: Request) {
     // 3. Save Lead Scoring Configuration (if provided)
     let updatedScoring = null;
     if (scoringConfig && Array.isArray(scoringRules) && scoringRules.length > 0) {
-      const normalizedRules: Partial<LeadScoringRule>[] = scoringRules.map((r: any) => {
-        const rawKey = (r.rule_key || r.rule_name || '').toLowerCase().replace(/[^a-z0-9_]/g, '_');
+      const normalizedRules: Partial<LeadScoringRule>[] = scoringRules.map((r: Record<string, unknown>) => {
+        const rawKey = String(r.rule_key || r.rule_name || '').toLowerCase().replace(/[^a-z0-9_]/g, '_');
         const ruleKey = rawKey.length >= 2 ? rawKey : `rule_${rawKey}`;
         const points = typeof r.points === 'number' ? r.points : (typeof r.weight === 'number' ? r.weight : 0);
-        const label = r.label || r.rule_name || ruleKey;
-        const signalType = r.signal_type || (
+        const label = String(r.label || r.rule_name || ruleKey);
+        const signalType = (r.signal_type as LeadScoringRule['signal_type']) || (
           r.rule_type === 'intent' || r.rule_type === 'urgency' || ruleKey.includes('intent') || ruleKey.includes('urgency')
             ? 'profile_field'
             : r.rule_type === 'catalog' || ruleKey.includes('catalog')
@@ -128,12 +128,12 @@ export async function POST(req: Request) {
                 ? 'objection_presence'
                 : 'attribute'
         );
-        const operator = r.operator || (signalType === 'catalog_interest' || signalType === 'objection_presence' ? 'exists' : 'equals');
+        const operator = (r.operator as LeadScoringRule['operator']) || (signalType === 'catalog_interest' || signalType === 'objection_presence' ? 'exists' : 'equals');
         const fieldKey = r.field_key !== undefined
-          ? r.field_key
+          ? (r.field_key as string | null)
           : (ruleKey.includes('intent') ? 'current_intent' : ruleKey.includes('urgency') ? 'urgency' : null);
         const expectedValue = r.expected_value !== undefined
-          ? r.expected_value
+          ? (r.expected_value as string | number | boolean | null)
           : (ruleKey.includes('intent') ? 'purchase' : ruleKey.includes('urgency') ? 'high' : null);
 
         return {
@@ -144,7 +144,7 @@ export async function POST(req: Request) {
           operator,
           expected_value: expectedValue,
           points,
-          status: r.status || 'active',
+          status: (r.status as LeadScoringRule['status']) || 'active',
         };
       });
 

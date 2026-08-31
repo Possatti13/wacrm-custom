@@ -13,9 +13,7 @@ describe('Ciclopes V1.3.1 — Security Matrix & Hardening Tests', () => {
   let anonClient: SupabaseClient
 
   const TENANT_A = 'ec86e41e-6fec-41b8-a83f-64922c45d5ed' // Pilot tenant
-  const TENANT_B = '11111111-1111-1111-1111-111111111111'
-  const OWNER_A_ID = 'b4a10080-263b-4bf8-a22a-7a6741a27bc1' // Leo Possatti (Owner/Admin)
-  const SELLER_A_ID = '5426fa74-2735-460d-83ff-788ecb59ff5e' // Seller / Agent
+  const OWNER_A_ID = 'b4a10080-263b-4bf8-a22a-7a6741a27bc1' // Owner Leo Possatti
 
   beforeAll(() => {
     adminClient = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
@@ -25,18 +23,6 @@ describe('Ciclopes V1.3.1 — Security Matrix & Hardening Tests', () => {
       auth: { persistSession: false },
     })
   })
-
-  // Helper to create an authenticated client simulation
-  function createAuthClient(userId: string, role: string = 'authenticated') {
-    return createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-      auth: { persistSession: false },
-      global: {
-        headers: {
-          Authorization: `Bearer mock`,
-        },
-      },
-    })
-  }
 
   // 1. SWEEP SECURITY MATRIX (BACKEND-ONLY)
   describe('1. Global Intelligence Sweep Security (Backend-Only)', () => {
@@ -139,7 +125,7 @@ describe('Ciclopes V1.3.1 — Security Matrix & Hardening Tests', () => {
           expect(overrideRes.effective_taxonomy_id).toBe(targetTax.id)
 
           // Reproject contact state
-          const { data: projRes, error: projErr } = await adminClient.rpc('project_contact_commercial_state', {
+          const { error: projErr } = await adminClient.rpc('project_contact_commercial_state', {
             p_account_id: TENANT_A,
             p_contact_id: occ.contact_id,
             p_trigger_source: 'test_audit_override',
@@ -166,7 +152,7 @@ describe('Ciclopes V1.3.1 — Security Matrix & Hardening Tests', () => {
   describe('4. Legacy Per-Message Trigger Removal Verification', () => {
     it('verifies trg_customer_message_enqueue_intelligence does not exist on messages', async () => {
       const { data } = await adminClient
-        .from('information_schema.triggers' as any)
+        .from('information_schema.triggers' as unknown as string)
         .select('*')
         .eq('event_object_table', 'messages')
         .eq('trigger_name', 'trg_customer_message_enqueue_intelligence')
