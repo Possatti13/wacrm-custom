@@ -18,6 +18,57 @@ interface UseRealtimeOptions {
   enabled?: boolean;
 }
 
+export interface SetupRealtimeOptions {
+  channelName: string;
+  onMessageEvent?: (event: RealtimeEvent<Message>) => void;
+  onConversationEvent?: (event: RealtimeEvent<Conversation>) => void;
+  onStatusChange?: (status: string) => void;
+}
+
+export function setupRealtimeSubscription(
+  supabase: ReturnType<typeof createClient>,
+  options: SetupRealtimeOptions
+) {
+  const uniqueChannelName = options.channelName.includes('-') && options.channelName.split('-').length > 2
+    ? options.channelName
+    : `${options.channelName}-${Math.random().toString(36).slice(2)}`;
+
+  const channel = supabase
+    .channel(uniqueChannelName)
+    .on(
+      'postgres_changes',
+      { event: '*', schema: 'public', table: 'messages' },
+      (payload) => {
+        options.onMessageEvent?.({
+          eventType: payload.eventType as RealtimeEvent<Message>['eventType'],
+          new: payload.new as Message,
+          old: payload.old as Partial<Message>,
+        });
+      }
+    )
+    .on(
+      'postgres_changes',
+      { event: '*', schema: 'public', table: 'conversations' },
+      (payload) => {
+        options.onConversationEvent?.({
+          eventType: payload.eventType as RealtimeEvent<Conversation>['eventType'],
+          new: payload.new as Conversation,
+          old: payload.old as Partial<Conversation>,
+        });
+      }
+    )
+    .subscribe((status) => {
+      options.onStatusChange?.(status);
+    });
+
+  return {
+    channel,
+    unsubscribe: () => {
+      supabase.removeChannel(channel);
+    },
+  };
+}
+
 export function useRealtime({
   channelName,
   onMessageEvent,
@@ -28,10 +79,7 @@ export function useRealtime({
   const [isConnected, setIsConnected] = useState(false);
 
   // Store latest callbacks in refs to avoid re-subscribing when the
-  // parent re-renders with fresh closures. Assigned inside an effect
-  // so the mutation doesn't happen during render (React 19's refs
-  // rule) — subscribers only read `.current` inside async Realtime
-  // callbacks, which always run after the render that updates it.
+  // parent re-renders with fresh closures.
   const onMessageRef = useRef(onMessageEvent);
   const onConversationRef = useRef(onConversationEvent);
   useEffect(() => {
@@ -43,39 +91,17 @@ export function useRealtime({
     if (!enabled) return;
 
     const supabase = createClient();
+    const sub = setupRealtimeSubscription(supabase, {
+      channelName,
+      onMessageEvent: (event) => onMessageRef.current?.(event),
+      onConversationEvent: (event) => onConversationRef.current?.(event),
+      onStatusChange: (status) => setIsConnected(status === 'SUBSCRIBED'),
+    });
 
-    const channel = supabase
-      .channel(channelName)
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "messages" },
-        (payload) => {
-          onMessageRef.current?.({
-            eventType: payload.eventType as RealtimeEvent<Message>["eventType"],
-            new: payload.new as Message,
-            old: payload.old as Partial<Message>,
-          });
-        }
-      )
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "conversations" },
-        (payload) => {
-          onConversationRef.current?.({
-            eventType: payload.eventType as RealtimeEvent<Conversation>["eventType"],
-            new: payload.new as Conversation,
-            old: payload.old as Partial<Conversation>,
-          });
-        }
-      )
-      .subscribe((status) => {
-        setIsConnected(status === "SUBSCRIBED");
-      });
-
-    channelRef.current = channel;
+    channelRef.current = sub.channel;
 
     return () => {
-      supabase.removeChannel(channel);
+      sub.unsubscribe();
       channelRef.current = null;
       setIsConnected(false);
     };
