@@ -25,6 +25,8 @@ const CONTACT = {
   phone: '+15551234567',
 }
 
+let callerRole: string = 'agent'
+
 // Chainable Supabase mock. A fresh builder per `.from()` call tracks whether
 // `.insert()` ran so the terminal resolves to the inserted row for creates
 // and the canned select row otherwise.
@@ -35,7 +37,9 @@ function makeSupabaseMock() {
     const selectResult = () => {
       switch (table) {
         case 'profiles':
-          return { data: { account_id: 'acct-1' }, error: null }
+          return { data: { account_id: 'acct-1', account_role: callerRole }, error: null }
+        case 'accounts':
+          return { data: { id: 'acct-1', name: 'Test Account' }, error: null }
         case 'contacts':
           return { data: contactRow, error: null }
         case 'conversations':
@@ -179,6 +183,7 @@ describe('POST /api/whatsapp/send — contact_id template path', () => {
     existingConversation = null
     createdConversation = null
     contactRow = CONTACT
+    callerRole = 'agent'
     supabaseMock = makeSupabaseMock()
     sendTemplateMessage.mockClear()
   })
@@ -212,13 +217,14 @@ describe('POST /api/whatsapp/send — contact_id template path', () => {
     expect(args.to).toBe('15551234567')
     expect(args.templateName).toBe('order_update')
 
-    // The outbound message was persisted under the new conversation.
+    // The outbound message was persisted under the new conversation in sending status first.
     expect(messageInserts).toHaveLength(1)
     expect(messageInserts[0]).toMatchObject({
       conversation_id: 'conv-new',
       content_type: 'template',
       template_name: 'order_update',
       sender_type: 'agent',
+      status: 'sending',
     })
   })
 
@@ -257,5 +263,33 @@ describe('POST /api/whatsapp/send — contact_id template path', () => {
       }),
     )
     expect(res.status).toBe(400)
+  })
+
+  it('SEC-001: returns 403 Forbidden and ZERO provider calls when caller has viewer role', async () => {
+    callerRole = 'viewer'
+    supabaseMock = makeSupabaseMock()
+
+    const res = await postContactTemplate()
+    const json = await res.json()
+
+    expect(res.status).toBe(403)
+    expect(json.error).toMatch(/agent.*or higher/i)
+    expect(sendTemplateMessage).toHaveBeenCalledTimes(0)
+    expect(conversationInserts).toHaveLength(0)
+    expect(messageInserts).toHaveLength(0)
+  })
+
+  it('SEC-001: allows admin and owner roles to send messages', async () => {
+    for (const role of ['admin', 'owner']) {
+      callerRole = role
+      supabaseMock = makeSupabaseMock()
+      sendTemplateMessage.mockClear()
+      conversationInserts.length = 0
+      messageInserts.length = 0
+
+      const res = await postContactTemplate()
+      expect(res.status).toBe(200)
+      expect(sendTemplateMessage).toHaveBeenCalledTimes(1)
+    }
   })
 })
