@@ -387,6 +387,41 @@ export async function sendMessageToConversation(
     return res.externalMessageId;
   };
 
+  // 1. Local-first durable pre-persistence in 'sending' status
+  const displayText =
+    messageType === 'interactive' && interactivePayload
+      ? interactivePayloadPreviewText(interactivePayload)
+      : contentText ?? null;
+
+  const { data: initialRecord, error: initialInsertError } = await db
+    .from('messages')
+    .insert({
+      conversation_id: conversationId,
+      sender_type: 'agent',
+      sender_id: params.senderUserId ?? null,
+      content_type: messageType,
+      content_text: displayText,
+      media_url: mediaUrl || null,
+      template_name: templateName || null,
+      message_id: null,
+      source_provider: whatsappProvider.type,
+      status: 'sending',
+      reply_to_message_id: replyToMessageId || null,
+    })
+    .select('id')
+    .single();
+
+  if (initialInsertError || !initialRecord) {
+    console.error('[send-message] pre-insert failed before dispatch:', initialInsertError);
+    throw new SendMessageError(
+      'db_error',
+      `Failed to initialize message in database: ${initialInsertError?.message || 'unknown error'}`,
+      500
+    );
+  }
+
+  const persistedMessageId = initialRecord.id;
+
   let waMessageId = '';
   let workingPhone = sanitizedPhone;
 
@@ -418,6 +453,7 @@ export async function sendMessageToConversation(
     }
 
     if (!wahaRecipient) {
+      await db.from('messages').update({ status: 'failed' }).eq('id', persistedMessageId);
       throw new SendMessageError(
         'bad_request',
         'No valid recipient phone number or WhatsApp chat identifier found for this conversation',
@@ -429,6 +465,7 @@ export async function sendMessageToConversation(
       waMessageId = await attemptSend(wahaRecipient);
       workingPhone = sanitizedPhone || wahaRecipient;
     } catch (err) {
+      await db.from('messages').update({ status: 'failed' }).eq('id', persistedMessageId);
       const message = err instanceof Error ? err.message : 'Unknown WAHA error';
       console.error('[send-message] WAHA send failed:', message);
       throw new SendMessageError('waha_error', `WAHA API error: ${message}`, 502);
@@ -436,6 +473,7 @@ export async function sendMessageToConversation(
   } else {
     // Meta requires a valid E.164 phone
     if (!sanitizedPhone || !isValidE164(sanitizedPhone)) {
+      await db.from('messages').update({ status: 'failed' }).eq('id', persistedMessageId);
       throw new SendMessageError(
         'bad_request',
         `Valid E.164 contact phone number is required for Meta WhatsApp provider (got: "${rawPhone ?? 'none'}").`,
@@ -465,6 +503,7 @@ export async function sendMessageToConversation(
 
       if (lastError) throw lastError;
     } catch (err) {
+      await db.from('messages').update({ status: 'failed' }).eq('id', persistedMessageId);
       const message =
         err instanceof Error ? err.message : 'Unknown Meta API error';
       console.error('[send-message] Meta send failed:', message);
@@ -489,37 +528,17 @@ export async function sendMessageToConversation(
       });
   }
 
-  // Save the sent message
-  const displayText =
-    messageType === 'interactive' && interactivePayload
-      ? interactivePayloadPreviewText(interactivePayload)
-      : contentText ?? null;
-
-  const { data: messageRecord, error: msgError } = await db
+  // 2. Transition local record from 'sending' to 'sent' with provider external message ID
+  const { error: msgUpdateError } = await db
     .from('messages')
-    .insert({
-      conversation_id: conversationId,
-      sender_type: 'agent',
-      sender_id: params.senderUserId ?? null,
-      content_type: messageType,
-      content_text: displayText,
-      media_url: mediaUrl || null,
-      template_name: templateName || null,
-      message_id: waMessageId,
-      source_provider: whatsappProvider.type,
+    .update({
       status: 'sent',
-      reply_to_message_id: replyToMessageId || null,
+      message_id: waMessageId,
     })
-    .select()
-    .single();
+    .eq('id', persistedMessageId);
 
-  if (msgError) {
-    console.error('[send-message] error inserting sent message:', msgError);
-    throw new SendMessageError(
-      'db_error',
-      `Message sent via WhatsApp but failed to save to DB: ${msgError.message}`,
-      500
-    );
+  if (msgUpdateError) {
+    console.error('[send-message] error updating sent message record:', msgUpdateError);
   }
 
   // Update conversation
@@ -562,7 +581,7 @@ export async function sendMessageToConversation(
   }
 
   return {
-    messageId: messageRecord.id,
+    messageId: persistedMessageId,
     whatsappMessageId: waMessageId,
   };
 }

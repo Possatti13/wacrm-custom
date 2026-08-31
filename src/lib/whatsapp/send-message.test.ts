@@ -239,6 +239,9 @@ describe('sendMessageToConversation — Provider Routing & WhatsApp LID', () => 
                 }),
               }),
             }),
+            update: () => ({
+              eq: async () => ({ data: null, error: null }),
+            }),
           };
         }
         if (table === 'contacts') {
@@ -340,6 +343,21 @@ describe('sendMessageToConversation — Provider Routing & WhatsApp LID', () => 
             }),
           };
         }
+        if (table === 'messages') {
+          return {
+            insert: () => ({
+              select: () => ({
+                single: async () => ({
+                  data: { id: 'msg-lid-1' },
+                  error: null,
+                }),
+              }),
+            }),
+            update: () => ({
+              eq: async () => ({ data: null, error: null }),
+            }),
+          };
+        }
         return {};
       }),
     };
@@ -438,6 +456,9 @@ describe('sendMessageToConversation — Provider Routing & WhatsApp LID', () => 
                 }),
               };
             },
+            update: () => ({
+              eq: async () => ({ data: null, error: null }),
+            }),
           };
         }
         if (table === 'flow_runs') {
