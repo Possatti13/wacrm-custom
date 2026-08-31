@@ -112,9 +112,9 @@ interface MediaDraft {
 interface MessageComposerProps {
   conversationId: string;
   sessionExpired: boolean;
-  onSend: (text: string, replyToId?: string) => void;
-  onSendMedia: (payload: SendMediaPayload) => void;
-  onSendInteractive: (payload: InteractiveMessagePayload, replyToId?: string) => void;
+  onSend: (text: string, replyToId?: string) => Promise<void> | void;
+  onSendMedia: (payload: SendMediaPayload) => Promise<void> | void;
+  onSendInteractive: (payload: InteractiveMessagePayload, replyToId?: string) => Promise<void> | void;
   onOpenTemplates: () => void;
   replyTo?: ReplyDraft | null;
   onClearReply?: () => void;
@@ -234,12 +234,18 @@ export function MessageComposer({
     if (!trimmed || sending || sessionExpired) return;
 
     setSending(true);
+    const textToSend = trimmed;
+    setText("");
+    if (textareaRef.current) {
+      textareaRef.current.style.height = "auto";
+    }
+
     try {
-      onSend(trimmed, replyTo?.id);
-      setText("");
-      if (textareaRef.current) {
-        textareaRef.current.style.height = "auto";
-      }
+      await onSend(textToSend, replyTo?.id);
+    } catch (err) {
+      console.error("Composer send failed:", err);
+      // Restore draft if failed
+      setText(textToSend);
     } finally {
       setSending(false);
     }
@@ -249,10 +255,12 @@ export function MessageComposer({
     (e: KeyboardEvent<HTMLTextAreaElement>) => {
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
-        handleSend();
+        if (!sending && !sessionExpired && text.trim()) {
+          void handleSend();
+        }
       }
     },
-    [handleSend]
+    [handleSend, sending, sessionExpired, text]
   );
 
   const handleChange = useCallback(
@@ -317,16 +325,22 @@ export function MessageComposer({
     [],
   );
 
-  const sendInteractive = useCallback(() => {
+  const sendInteractive = useCallback(async () => {
     const result = validateInteractivePayload(interactivePayload);
     if (!result.ok) {
       toast.error(result.error);
       return;
     }
-    onSendInteractive(interactivePayload, replyTo?.id);
-    setInteractiveOpen(false);
-    onClearReply?.();
-  }, [interactivePayload, onSendInteractive, replyTo?.id, onClearReply]);
+    if (sending) return;
+    setSending(true);
+    try {
+      await onSendInteractive(interactivePayload, replyTo?.id);
+      setInteractiveOpen(false);
+      onClearReply?.();
+    } finally {
+      setSending(false);
+    }
+  }, [interactivePayload, sending, onSendInteractive, replyTo?.id, onClearReply]);
 
   // Persist the current builder payload as a reusable interactive snippet.
   const saveAsQuickReply = useCallback(async () => {
@@ -514,22 +528,27 @@ export function MessageComposer({
 
   // ---- Draft send / discard -----------------------------------------
 
-  const sendDraft = useCallback(() => {
+  const sendDraft = useCallback(async () => {
     if (!draft || busy) return;
-    onSendMedia({
-      kind: draft.kind,
-      mediaUrl: draft.mediaUrl,
-      path: draft.path,
-      // Audio takes no caption (Meta rejects it). Everything else: the
-      // trimmed caption, or undefined when blank.
-      caption:
-        draft.kind === "audio" ? undefined : draft.caption.trim() || undefined,
-      filename: draft.kind === "document" ? draft.filename : undefined,
-      replyToId: replyTo?.id,
-    });
-    // The object is now owned by the sent message — clear without GC.
-    setDraft(null);
-    onClearReply?.();
+    setBusy(true);
+    try {
+      await onSendMedia({
+        kind: draft.kind,
+        mediaUrl: draft.mediaUrl,
+        path: draft.path,
+        // Audio takes no caption (Meta rejects it). Everything else: the
+        // trimmed caption, or undefined when blank.
+        caption:
+          draft.kind === "audio" ? undefined : draft.caption.trim() || undefined,
+        filename: draft.kind === "document" ? draft.filename : undefined,
+        replyToId: replyTo?.id,
+      });
+      // The object is now owned by the sent message — clear without GC.
+      setDraft(null);
+      onClearReply?.();
+    } finally {
+      setBusy(false);
+    }
   }, [draft, busy, onSendMedia, replyTo?.id, onClearReply]);
 
   // Discard GCs the staged object — it was uploaded but never sent.

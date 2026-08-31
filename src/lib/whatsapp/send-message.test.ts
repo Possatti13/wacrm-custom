@@ -508,6 +508,210 @@ describe('sendMessageToConversation — Provider Routing & WhatsApp LID', () => 
     expect(insertedPayload.sender_id).toBe('user-seller-123');
     expect(insertedPayload.sender_type).toBe('agent');
   });
+
+  it('transitions message status to failed and propagates error when provider rejects', async () => {
+    let updatedStatus: string | null = null;
+
+    const mockDb: any = {
+      from: vi.fn((table: string) => {
+        if (table === 'conversations') {
+          return {
+            select: () => ({
+              eq: () => ({
+                eq: () => ({
+                  single: async () => ({
+                    data: {
+                      id: 'conv-1',
+                      account_id: 'acct-1',
+                      contact: {
+                        id: 'contact-1',
+                        phone: '5511999999999',
+                        name: 'Test Contact',
+                      },
+                    },
+                    error: null,
+                  }),
+                }),
+              }),
+            }),
+            update: () => ({
+              eq: async () => ({ data: null, error: null }),
+            }),
+          };
+        }
+        if (table === 'whatsapp_config') {
+          return {
+            select: () => ({
+              eq: () => ({
+                single: async () => ({
+                  data: {
+                    id: 'wcfg-1',
+                    account_id: 'acct-1',
+                    provider_type: 'waha',
+                    access_token: encrypt('secret-token'),
+                    waha_api_url: 'http://waha.local',
+                    waha_session_name: 'test_session',
+                  },
+                  error: null,
+                }),
+              }),
+            }),
+          };
+        }
+        if (table === 'messages') {
+          return {
+            insert: () => ({
+              select: () => ({
+                single: async () => ({
+                  data: { id: 'msg-failing-1', status: 'sending' },
+                  error: null,
+                }),
+              }),
+            }),
+            update: (payload: { status: string }) => {
+              updatedStatus = payload.status;
+              return {
+                eq: async () => ({ data: null, error: null }),
+              };
+            },
+          };
+        }
+        return {};
+      }),
+    };
+
+    const factory = await import('./providers/factory');
+    const mockSendText = vi.fn().mockRejectedValue(new Error('Connection timed out'));
+
+    vi.spyOn(factory, 'getWhatsAppProvider').mockReturnValue({
+      type: 'waha',
+      getCapabilities: () => ({
+        sendText: true,
+        sendImage: true,
+        sendDocument: true,
+        sendAudio: true,
+        sendVideo: true,
+        templates: false,
+        interactiveMessages: false,
+        reactions: false,
+        qrCode: true,
+        sessionLifecycle: true,
+      }),
+      sendText: mockSendText,
+      sendMedia: vi.fn(),
+      getStatus: vi.fn(),
+    } as any);
+
+    await expect(
+      sendMessageToConversation(mockDb as SupabaseClient, 'acct-1', {
+        conversationId: 'conv-1',
+        messageType: 'text',
+        contentText: 'Test error handling',
+      })
+    ).rejects.toMatchObject({
+      code: 'waha_error',
+      status: 502,
+    });
+
+    expect(mockSendText).toHaveBeenCalledTimes(1);
+    expect(updatedStatus).toBe('failed');
+  });
+
+  it('aborts immediately and prevents provider calls if initial DB insert fails', async () => {
+    const mockSendText = vi.fn();
+
+    const mockDb: any = {
+      from: vi.fn((table: string) => {
+        if (table === 'conversations') {
+          return {
+            select: () => ({
+              eq: () => ({
+                eq: () => ({
+                  single: async () => ({
+                    data: {
+                      id: 'conv-1',
+                      account_id: 'acct-1',
+                      contact: {
+                        id: 'contact-1',
+                        phone: '5511999999999',
+                        name: 'Test Contact',
+                      },
+                    },
+                    error: null,
+                  }),
+                }),
+              }),
+            }),
+          };
+        }
+        if (table === 'whatsapp_config') {
+          return {
+            select: () => ({
+              eq: () => ({
+                single: async () => ({
+                  data: {
+                    id: 'wcfg-1',
+                    account_id: 'acct-1',
+                    provider_type: 'waha',
+                    access_token: encrypt('secret-token'),
+                    waha_api_url: 'http://waha.local',
+                    waha_session_name: 'test_session',
+                  },
+                  error: null,
+                }),
+              }),
+            }),
+          };
+        }
+        if (table === 'messages') {
+          return {
+            insert: () => ({
+              select: () => ({
+                single: async () => ({
+                  data: null,
+                  error: { message: 'Database disk full or deadlocked' },
+                }),
+              }),
+            }),
+          };
+        }
+        return {};
+      }),
+    };
+
+    const factory = await import('./providers/factory');
+    vi.spyOn(factory, 'getWhatsAppProvider').mockReturnValue({
+      type: 'waha',
+      getCapabilities: () => ({
+        sendText: true,
+        sendImage: true,
+        sendDocument: true,
+        sendAudio: true,
+        sendVideo: true,
+        templates: false,
+        interactiveMessages: false,
+        reactions: false,
+        qrCode: true,
+        sessionLifecycle: true,
+      }),
+      sendText: mockSendText,
+      sendMedia: vi.fn(),
+      getStatus: vi.fn(),
+    } as any);
+
+    await expect(
+      sendMessageToConversation(mockDb as SupabaseClient, 'acct-1', {
+        conversationId: 'conv-1',
+        messageType: 'text',
+        contentText: 'Test db fail',
+      })
+    ).rejects.toMatchObject({
+      code: 'db_error',
+      status: 500,
+    });
+
+    expect(mockSendText).toHaveBeenCalledTimes(0);
+  });
 });
 
 
