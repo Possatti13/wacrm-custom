@@ -1,16 +1,16 @@
 #!/usr/bin/env node
 /**
  * ============================================================
- * Ciclopes — Owner & Tenant Provisioning CLI (Security Lockdown)
+ * Ciclopes — Verified Owner & Tenant Provisioning CLI (V1.7.2)
  * ============================================================
  *
  * Usage:
  *   node scripts/provision-owner.mjs \
  *     --account-name="Nome da Empresa" \
  *     --owner-email="owner@empresa.com" \
- *     --owner-name="Nome do Proprietário" \
- *     --currency="BRL" \
- *     --timezone="America/Sao_Paulo" \
+ *     [--owner-name="Nome do Proprietário"] \
+ *     [--currency="BRL"] \
+ *     [--timezone="America/Sao_Paulo"] \
  *     [--dry-run]
  *
  * Requirements:
@@ -20,6 +20,7 @@
  */
 
 import { createClient } from "@supabase/supabase-js";
+import { randomBytes, createHash } from "node:crypto";
 import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 
@@ -43,6 +44,12 @@ function loadEnv() {
 }
 
 loadEnv();
+
+function generateInviteToken() {
+  const token = randomBytes(32).toString("base64url");
+  const hash = createHash("sha256").update(token).digest("hex");
+  return { token, hash };
+}
 
 function parseArgs() {
   const args = process.argv.slice(2);
@@ -106,11 +113,10 @@ async function main() {
   });
 
   console.log("====================================================");
-  console.log("CICLOPES — OWNER PROVISIONING");
+  console.log("CICLOPES — VERIFIED OWNER PROVISIONING");
   console.log("====================================================");
   console.log(`Account Name: ${opts.accountName}`);
   console.log(`Owner Email:  ${maskEmail(opts.ownerEmail)}`);
-  console.log(`Owner Name:   ${opts.ownerName || "(not specified)"}`);
   console.log(`Currency:     ${opts.currency}`);
   console.log(`Timezone:     ${opts.timezone}`);
   console.log(`Mode:         ${opts.dryRun ? "DRY RUN (no changes)" : "PROVISION"}`);
@@ -121,43 +127,17 @@ async function main() {
     return;
   }
 
-  // 1. Check or create Auth user
-  let userId = null;
-  const { data: userList, error: listErr } = await supabase.auth.admin.listUsers();
-  if (!listErr && userList?.users) {
-    const existing = userList.users.find(
-      (u) => u.email?.toLowerCase() === opts.ownerEmail.toLowerCase()
-    );
-    if (existing) {
-      userId = existing.id;
-      console.log(`✓ Existing auth user found (${userId.slice(0, 8)}...)`);
-    }
-  }
+  // 1. Generate cryptographic token for Owner Invitation
+  const { token, hash } = generateInviteToken();
+  const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
 
-  if (!userId) {
-    console.log(`Creating auth user for ${maskEmail(opts.ownerEmail)}...`);
-    const { data: newUser, error: createErr } = await supabase.auth.admin.createUser({
-      email: opts.ownerEmail,
-      email_confirm: true,
-      user_metadata: {
-        full_name: opts.ownerName || opts.accountName,
-      },
-    });
-
-    if (createErr || !newUser?.user) {
-      console.error("Failed to create auth user:", createErr);
-      process.exit(1);
-    }
-    userId = newUser.user.id;
-    console.log(`✓ Auth user created (${userId.slice(0, 8)}...)`);
-  }
-
-  // 2. Provision Account & Profile via RPC
-  console.log("Provisioning tenant workspace and setting Owner role...");
+  // 2. Call RPC to create pending tenant and pending owner invitation
+  console.log("Provisioning pending tenant workspace and owner invitation...");
   const { data: result, error: rpcErr } = await supabase.rpc("provision_new_account", {
     p_account_name: opts.accountName,
     p_owner_email: opts.ownerEmail,
-    p_owner_full_name: opts.ownerName || null,
+    p_token_hash: hash,
+    p_expires_at: expiresAt,
     p_default_currency: opts.currency,
     p_timezone: opts.timezone,
   });
@@ -167,10 +147,27 @@ async function main() {
     process.exit(1);
   }
 
+  // 3. Initiate official Supabase Auth invitation if user not created
+  console.log(`Sending official Auth invitation to ${maskEmail(opts.ownerEmail)}...`);
+  const { error: inviteErr } = await supabase.auth.admin.inviteUserByEmail(opts.ownerEmail, {
+    data: { full_name: opts.ownerName || opts.accountName },
+  });
+
+  if (inviteErr) {
+    console.warn(`[Notice] Supabase Auth inviteUserByEmail: ${inviteErr.message}`);
+  }
+
   console.log("====================================================");
-  console.log("PROVISIONING SUCCESSFUL");
+  console.log("PROVISIONING SUCCESSFUL (PENDING OWNER VERIFICATION)");
   console.log("====================================================");
-  console.log(JSON.stringify(result, null, 2));
+  console.log(JSON.stringify({
+    ok: true,
+    account_id: result.account_id,
+    account_name: result.account_name,
+    owner_email: maskEmail(opts.ownerEmail),
+    status: "pending_owner_verification",
+    verification_required: "Official email ownership proof required before Owner access is activated"
+  }, null, 2));
 }
 
 main().catch((err) => {
