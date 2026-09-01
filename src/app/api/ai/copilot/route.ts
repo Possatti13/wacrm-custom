@@ -9,7 +9,8 @@ export async function POST(req: Request) {
     const { supabase, accountId, userId } = await getCurrentAccount();
     const body = (await req.json()) as CopilotRequest & { query?: string };
 
-    if (body.query) {
+    // If a global workspace query is sent without a conversation context
+    if (body.query && !body.conversationId) {
       const result = await routeCopilotQuery(supabase, accountId, body.query, {
         contactId: body.contactId,
         conversationId: body.conversationId,
@@ -18,14 +19,23 @@ export async function POST(req: Request) {
       return NextResponse.json(result);
     }
 
-    if (!body.action || !body.conversationId) {
+    const conversationId = body.conversationId;
+    if (!conversationId) {
       return NextResponse.json(
-        { error: 'action and conversationId (or query) are required' },
+        { error: 'Parâmetro conversationId (ou query global) é obrigatório.' },
         { status: 400 }
       );
     }
 
-    const result = await runCopilotAction(supabase, accountId, body);
+    const action = body.action || (body.query || body.customPrompt ? 'custom_query' : 'suggest_reply');
+    const customPrompt = body.customPrompt || body.query;
+
+    const result = await runCopilotAction(supabase, accountId, {
+      ...body,
+      action,
+      conversationId,
+      customPrompt,
+    });
     return NextResponse.json(result);
   } catch (err) {
     return toErrorResponse(err);

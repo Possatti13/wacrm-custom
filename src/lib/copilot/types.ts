@@ -6,7 +6,10 @@ export type CopilotActionType =
   | 'summarize'
   | 'suggest_reply'
   | 'overcome_objection'
-  | 'match_catalog';
+  | 'match_catalog'
+  | 'custom_query'
+  | 'analyze_intent'
+  | 'next_step';
 
 export interface CopilotRequest {
   action: CopilotActionType;
@@ -19,6 +22,9 @@ export interface CopilotRequest {
 export interface CopilotResponse {
   action: CopilotActionType;
   content: string;
+  suggestedReply?: string;
+  evidence?: string[];
+  confidence?: 'high' | 'medium' | 'low';
   suggestedAction?: string;
   keyPoints?: string[];
   suggestedItems?: {
@@ -28,3 +34,4 @@ export interface CopilotResponse {
     description?: string;
   }[];
 }
+

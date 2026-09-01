@@ -185,12 +185,13 @@ describe('Phase 16 — Deterministic-First Copilot Router Tests', () => {
       await db.exec(sql);
     }
 
-    // Seed user and get account
+    // Seed user and account under migration 092 invite-only model
+    tenantAId = '11111111-1111-4111-a111-111111111111';
     await db.exec(`
       INSERT INTO auth.users (id, email) VALUES ('${userAId}', 'agent@tenanta.com') ON CONFLICT DO NOTHING;
+      INSERT INTO public.accounts (id, name, owner_user_id) VALUES ('${tenantAId}', 'Tenant A', '${userAId}') ON CONFLICT DO NOTHING;
+      INSERT INTO public.profiles (user_id, email, full_name, account_id, account_role) VALUES ('${userAId}', 'agent@tenanta.com', 'Agent Tenant A', '${tenantAId}', 'owner') ON CONFLICT DO NOTHING;
     `);
-    const accRes = await db.query(`SELECT id FROM public.accounts WHERE owner_user_id = '${userAId}';`);
-    tenantAId = accRes.rows[0].id;
 
     // Seed scoring revision
     await db.exec(`

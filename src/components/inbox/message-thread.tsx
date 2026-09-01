@@ -1228,6 +1228,7 @@ export function MessageThread({
         onOpenChange={setCopilotOpen}
         conversationId={conversation.id}
         contactId={contact.id}
+        contactName={contact.name || contact.phone || "o cliente"}
         onInsertText={(text) => setPrefilledText(text)}
       />
     </div>
