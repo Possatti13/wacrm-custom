@@ -1,67 +1,68 @@
-# CICLOPES — AUTH & TENANT SECURITY ARCHITECTURE (V1.7.0)
+# CICLOPES — AUTH & TENANT SECURITY ARCHITECTURE (V1.7.1)
 
-## 1. Identity vs. Membership Separation
+## 1. Identity vs. Membership vs. Profile vs. Account Contract
 
-In Ciclopes V1, authentication identity is strictly decoupled from workspace membership and tenant access:
+In Ciclopes V1, system concepts are strictly demarcated:
 
-$$\text{Auth Identity} \neq \text{Ciclopes Tenant Membership}$$
+$$\text{Auth Identity} \neq \text{Profile} \neq \text{Membership} \neq \text{Account}$$
 
-1. **Auth Identity (`auth.users`)**:
-   - Represents a cryptographic identity managed by Supabase Auth (email, password hash, metadata).
-   - Creation of an `auth.users` row (e.g. via direct public API or uninvited signup) **NEVER** creates an account, workspace, company, or owner role.
-   - Uninvited signups produce an **Inert User Profile** (`profiles.account_id = NULL`, `profiles.account_role = NULL`).
-
-2. **Inert User State**:
-   - Inert users can establish a Supabase Auth session, but have zero access to any tenant data.
-   - RLS on all operational tables (`contacts`, `conversations`, `messages`, `deals`, `whatsapp_config`, `pipelines`, etc.) evaluates `is_account_member(account_id)` $\to$ `false`.
-   - Application route guards and `DashboardShellInner` detect `account_id === null` and render the neutral **"Acesso Não Vinculado"** card, preventing navigation into `/inbox`, `/dashboard`, `/pipeline`, `/settings`, or `/onboarding`.
-   - Internal API endpoints calling `getCurrentAccount()` or `requireRole(...)` throw `ForbiddenError` (HTTP 403).
-
-3. **Workspace Membership (`profiles`)**:
-   - Membership is established exclusively through two authorized channels:
-     - **Invited Member**: Redeeming an authorized cryptographic invitation link (`redeem_invitation`).
-     - **Tenant Owner**: Administrative server-side provisioning (`scripts/provision-owner.mjs` / `provision_new_account`).
+| Concept | Table / Location | Description & State on Uninvited Raw Signup |
+| :--- | :--- | :--- |
+| **IDENTITY** | `auth.users` | Cryptographic auth credentials. Created if Public Signup is ON; non-existent if Public Signup is OFF. |
+| **PROFILE** | `public.profiles` | Public metadata row (`id`, `user_id`, `email`, `full_name`). On uninvited signup, an **Inert Profile** is created with `account_id = NULL` and `account_role = NULL`. |
+| **MEMBERSHIP** | `profiles.account_role` | Active role binding to a tenant (`owner`, `admin`, `agent`, `viewer`). On uninvited signup: **NO MEMBERSHIP** (`null`). |
+| **ACCOUNT** | `public.accounts` | Isolated tenant workspace. On uninvited signup: **0 ACCOUNTS CREATED**. |
 
 ---
 
-## 2. True Invite-Only Architecture
+## 2. Authentication Models
 
-```
-                       INTERNET / VISITOR
-                               │
-                               ▼
-                       Supabase Auth User
-                               │
-                ┌──────────────┴──────────────┐
-                │                             │
-          Sem Convite                   Convite Válido
-                │                             │
-                ▼                             ▼
-         INERT USER PROFILE           redeem_invitation()
-     (account_id = NULL)                      │
-                │                             ▼
-                X                     MEMBERSHIP ATTACHED
-       PRODUTO BLOQUEADO            (Target account_id, role)
-```
+### MODEL A — TRUE CLOSED AUTH (Preferred Production Architecture)
+- **Public Signup:** `OFF` (`enable_signup = false` in Supabase Auth config).
+- **Random Visitor:** Attempting `POST /auth/v1/signup` is directly **REJECTED** by Supabase GoTrue Auth (`400 Bad Request / Signups not allowed`).
+- **Identity Creation:** Exclusively executed server-side via `admin.createUser` / `admin.inviteUserByEmail` or administrative provisioning.
+- **Email Ownership:** Mandatory verified email ownership before workspace access.
+- **Residual Attack Surface:** 0 arbitrary `auth.users`.
 
-### Invitation Security Model
-- **Token Entropy**: 32 bytes CSPRNG (`crypto.randomBytes(32).toString('base64url')` $\approx$ 256 bits of entropy).
-- **Zero Raw Tokens at Rest**: The plaintext token is shown to the administrator exactly once. The database persists only `token_hash = SHA-256(token)`.
-- **Atomic Locking**: `redeem_invitation` locks the `account_invitations` row `FOR UPDATE`, eliminating concurrent double-redemption race conditions.
-- **Email Binding**: If an invitation specifies `invited_email`, `redeem_invitation` strictly enforces `LOWER(caller.email) = LOWER(invite.invited_email)`.
-- **Server-Dictated Roles**: The assigned role is loaded strictly from `account_invitations.role` in the database; client-supplied role parameters are ignored.
-- **Data Orphan Protection**: If a caller already owns domain data or belongs to another shared tenant, redemption is rejected (`SQLSTATE 23505`).
+### MODEL B — APPLICATION INVITE-ONLY (Fallback Architecture)
+- **Public Signup:** `ON` (`enable_signup = true` in Supabase Auth config).
+- **Random Visitor:** Can create an unconfirmed/confirmed raw identity in `auth.users`.
+- **Isolation Enforcement:**
+  - Raw identities receive an **Inert Profile** (`account_id = NULL`, `account_role = NULL`).
+  - RLS blocks all tenant tables (`contacts`, `conversations`, `messages`, `deals`, `whatsapp_config`, `pipelines`).
+  - Application shell displays the neutral Hellenic card **"Acesso Não Vinculado"**.
+  - Internal APIs throw `ForbiddenError` (HTTP 403).
+- **Email Ownership Gate:** `redeem_invitation` requires `email_confirmed_at IS NOT NULL` and `LOWER(email) = LOWER(invited_email)`.
+- **Residual Attack Surface:** Arbitrary unattached `auth.users` identities in Supabase Auth internal table.
 
 ---
 
-## 3. Privilege Escalation Defense
+## 3. Verified Email Ownership (Migration 093)
 
-To prevent direct REST tampering via Supabase client:
-- **Trigger `tr_enforce_profile_privilege_columns`**:
-  - Attached to `profiles` as `BEFORE INSERT OR UPDATE`.
-  - Runs as `SECURITY INVOKER`.
-  - When the executing client is `authenticated` or `anon`, any attempt to set or modify `account_id` or `account_role` raises exception `42501 (Privilege escalation)`.
-  - Legitimate modifications occur strictly inside `SECURITY DEFINER` functions owned by `postgres` (`redeem_invitation`, `provision_new_account`) or backend processes running as `service_role`.
+To eliminate the **Email Matching vs. Email Ownership** vulnerability:
+- `redeem_invitation` queries `email_confirmed_at` and `confirmed_at` from `auth.users`.
+- If an unverified user attempts to redeem an invitation, the database raises exception `42501 (Email unverified)`.
+- Even if an attacker registers an unconfirmed account using a victim's invited email address, they **CANNOT** claim the invitation without proving possession of the mailbox.
+
+```
+                    COLLABORATOR INVITATION
+                              │
+                              ▼
+                  account_invitations created
+                   (invited_email = 'user@co')
+                              │
+               ┌──────────────┴──────────────┐
+               │                             │
+       Attacker Unverified            Legitimate Recipient
+     (email_confirmed_at = NULL)    (email_confirmed_at = NOW())
+               │                             │
+               ▼                             ▼
+       redeem_invitation()           redeem_invitation()
+               │                             │
+               X                             ▼
+      REJECTED (HTTP 403)              MEMBERSHIP GRANTED
+      "Email unverified"             (account_id, server role)
+```
 
 ---
 
@@ -78,20 +79,6 @@ node scripts/provision-owner.mjs \
   --timezone="America/Sao_Paulo"
 ```
 
-### Safety Features
-- **Dry-run mode**: `--dry-run` flag validates input without modifying the database.
-- **Service Role Isolation**: Uses `SUPABASE_SERVICE_ROLE_KEY` server-side only; never bundled into client assets.
-- **Idempotency**: Links existing auth identities or creates confirmed auth users with full name metadata.
-- **Zero Secret Logging**: Outputs masked emails and IDs (`te***@empresa.com`).
-
----
-
-## 5. Summary of Roles
-
-| Role | Operational Scope | Can Manage Team? | Can Access Settings? | Account Creation |
-| :--- | :--- | :--- | :--- | :--- |
-| **Owner** | Full read/write across tenant data | Yes (Admin & Members) | Yes | Controlled Admin Provisioning |
-| **Admin** | Full read/write across tenant data | Yes (Agents & Viewers) | Yes | No |
-| **Agent** | Read/write operational records | No | No | No |
-| **Viewer** | Read-only across tenant records | No | No | No |
-| **Inert** | **ZERO ACCESS** | No | No | No |
+- Creates confirmed auth user with `email_confirmed_at = NOW()`.
+- Calls RPC `public.provision_new_account` (`SECURITY DEFINER` granted only to `service_role`).
+- Sets `accounts.owner_user_id` and assigns `profiles.account_role = 'owner'`.
