@@ -28,6 +28,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { getContactDisplayName, getContactInitials } from "@/lib/contacts/display";
 
 interface ConversationListProps {
   activeConversationId: string | null;
@@ -329,72 +330,69 @@ export function ConversationList({
           />
         </div>
 
-        {/* Segmented Filter Pills matching Visual Reference 4 */}
-        <div className="flex items-center gap-1.5">
+        {/* 3 Main Segmented Controls */}
+        <div className="grid grid-cols-3 gap-1 rounded-lg bg-muted/50 p-1">
           <button
             type="button"
             onClick={() => setMainSegment("all")}
             className={cn(
-              "flex-1 py-1.5 px-2 rounded-md text-xs font-semibold transition-all text-center",
+              "rounded-md py-1.5 text-xs font-medium transition-colors",
               mainSegment === "all"
-                ? "bg-[#1E3A5F] text-white shadow-xs"
-                : "bg-muted/60 text-muted-foreground hover:text-foreground hover:bg-muted"
+                ? "bg-background text-foreground shadow-xs font-semibold"
+                : "text-muted-foreground hover:text-foreground"
             )}
           >
             Todas
           </button>
-
           <button
             type="button"
             onClick={() => setMainSegment("mine")}
             className={cn(
-              "flex-1 py-1.5 px-2 rounded-md text-xs font-semibold transition-all text-center",
+              "rounded-md py-1.5 text-xs font-medium transition-colors",
               mainSegment === "mine"
-                ? "bg-[#1E3A5F] text-white shadow-xs"
-                : "bg-muted/60 text-muted-foreground hover:text-foreground hover:bg-muted"
+                ? "bg-background text-foreground shadow-xs font-semibold"
+                : "text-muted-foreground hover:text-foreground"
             )}
           >
             Minhas
           </button>
-
           <button
             type="button"
             onClick={() => setMainSegment("priority")}
             className={cn(
-              "flex-1 py-1.5 px-2 rounded-md text-xs font-semibold transition-all flex items-center justify-center gap-1",
+              "rounded-md py-1.5 text-xs font-medium transition-colors flex items-center justify-center gap-1",
               mainSegment === "priority"
-                ? "bg-[#1E3A5F] text-white shadow-xs"
-                : "bg-muted/60 text-muted-foreground hover:text-foreground hover:bg-muted"
+                ? "bg-background text-foreground shadow-xs font-semibold"
+                : "text-muted-foreground hover:text-foreground"
             )}
           >
-            <Star className="size-3 fill-current" />
-            <span>Prioridade</span>
+            <Star className="size-3 text-amber-500 fill-amber-500/30" />
+            Prioridade
           </button>
         </div>
       </div>
 
-      {/* Conversation List Scroll Area */}
-      <ScrollArea className="flex-1 min-h-0">
+      {/* Conversation rows */}
+      <ScrollArea className="flex-1">
         {loading ? (
-          <div className="p-6 space-y-3">
-            {[1, 2, 3, 4].map((i) => (
+          <div className="p-3 space-y-2">
+            {[1, 2, 3, 4, 5].map((i) => (
               <div key={i} className="h-16 bg-muted/40 animate-pulse rounded-lg border border-border/40" />
             ))}
           </div>
         ) : filtered.length === 0 ? (
-          <div className="px-4 py-12 text-center text-muted-foreground space-y-1">
-            <p className="text-xs font-semibold">Nenhuma conversa encontrada</p>
-            <p className="text-[11px]">Tente ajustar a busca ou os filtros acima.</p>
+          <div className="px-4 py-12 text-center text-muted-foreground space-y-2">
+            <p className="text-xs font-semibold text-foreground">Nenhuma conversa encontrada</p>
+            <p className="text-[11px] leading-relaxed">
+              Tente ajustar os filtros ou importe o histórico disponível do WhatsApp em Configurações.
+            </p>
           </div>
         ) : (
           <div className="divide-y divide-border/40">
             {filtered.map((conv) => {
               const contact = conv.contact;
-              const displayName =
-                contact?.name ||
-                contact?.phone ||
-                (contact?.whatsapp_lid ? "Contato WhatsApp" : "Contato");
-              const initials = displayName.charAt(0).toUpperCase();
+              const displayName = getContactDisplayName(contact);
+              const initials = getContactInitials(displayName);
               const isActive = conv.id === activeConversationId;
 
               const formatMsgTime = () => {
@@ -411,14 +409,14 @@ export function ConversationList({
                   type="button"
                   onClick={() => onSelect(conv)}
                   className={cn(
-                    "flex w-full items-start gap-3 p-3.5 text-left transition-all relative group",
+                    "flex w-full items-start gap-3 p-3.5 text-left transition-all relative group min-h-[64px]",
                     isActive
-                      ? "bg-orange-500/[0.08] dark:bg-orange-500/[0.12] border-l-[3.5px] border-[#D16A3A]"
+                      ? "bg-primary/[0.08] dark:bg-primary/[0.14] border-l-[3.5px] border-[#D16A3A]"
                       : "hover:bg-muted/40 border-l-[3.5px] border-transparent"
                   )}
                 >
                   {/* Avatar */}
-                  <Avatar className="size-10 shrink-0 border border-border">
+                  <Avatar className="size-10 shrink-0 border border-border shadow-xs">
                     {contact?.avatar_url ? (
                       <AvatarImage src={contact.avatar_url} alt={displayName} />
                     ) : null}

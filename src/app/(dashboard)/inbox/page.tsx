@@ -17,6 +17,8 @@ import { toast } from "sonner";
 import { WifiOff } from "lucide-react";
 import { cn } from "@/lib/utils";
 
+import { Sheet, SheetContent } from "@/components/ui/sheet";
+
 // Remembers the agent's show/hide choice for the desktop contact panel
 // across reloads and sessions (device-scoped, like the theme prefs).
 const CONTACT_PANEL_STORAGE_KEY = "wacrm:inbox:contact-panel-open";
@@ -40,6 +42,7 @@ export default function InboxPage() {
   const [whatsappConnected, setWhatsappConnected] = useState<boolean | null>(
     null
   );
+  const [mobileContextOpen, setMobileContextOpen] = useState(false);
   /**
    * Bumped whenever we want children (ConversationList, MessageThread)
    * to refetch from the DB — used as a safety net against missed
@@ -68,6 +71,11 @@ export default function InboxPage() {
   }, []);
 
   const handleToggleContactPanel = useCallback(() => {
+    if (typeof window !== "undefined" && window.innerWidth < 1024) {
+      setMobileContextOpen((prev) => !prev);
+      return;
+    }
+
     setContactPanelOpen((prev) => {
       const next = !prev;
       try {
@@ -465,15 +473,7 @@ export default function InboxPage() {
       setActiveConversation(conv);
       setActiveContact(conv.contact ?? null);
       setMessages([]);
-      // Optimistically clear the unread badge for this conv. The
-      // server-side reset is fired by the unread-reset effect inside
-      // MessageThread (which reads activeConversation.unread_count, not
-      // the list copy — so we deliberately leave that intact below to
-      // keep the effect firing), and the realtime UPDATE that comes
-      // back will sync to 0 again as a no-op. Zeroing the list copy
-      // here means the user sees the badge disappear the instant they
-      // click instead of waiting for the round-trip — and it persists
-      // even if the realtime UPDATE is dropped.
+      // Optimistically clear the unread badge for this conv.
       setConversations((prev) =>
         prev.map((c) =>
           c.id === conv.id && c.unread_count > 0
@@ -481,17 +481,7 @@ export default function InboxPage() {
             : c,
         ),
       );
-      // Record the selection on the deep-link ref BEFORE we change the
-      // URL. The router.replace below flips `deepLinkConvId`, which can
-      // in turn cause ConversationList to refetch and eventually call
-      // handleConversationsLoaded again. Without this line, the ref
-      // still points at the previous value, the auto-select block
-      // sees `ref !== deepLinkConvId`, fires a second time, and
-      // clobbers the messages MessageThread just fetched.
       autoSelectedForDeepLinkRef.current = conv.id;
-      // Reflect the selection in the URL so a refresh lands the user
-      // back in the same thread, and so copy-paste links work. Use
-      // replace() to avoid polluting browser history with every click.
       router.replace(`/inbox?c=${conv.id}`, { scroll: false });
     },
     [activeConversation?.id, router]
@@ -504,12 +494,9 @@ export default function InboxPage() {
     setActiveConversation(null);
     setActiveContact(null);
     setMessages([]);
-    // Clearing the ref lets the deep-link auto-selector fire again if
-    // the user later visits /inbox?c=<same-id> — desirable UX.
     autoSelectedForDeepLinkRef.current = null;
     router.replace("/inbox", { scroll: false });
   }, [router]);
-
 
   const handleMessagesLoaded = useCallback((loaded: Message[]) => {
     setMessages(loaded);
@@ -576,17 +563,11 @@ export default function InboxPage() {
     }
   }, []);
 
-  // On mobile (<lg) we show a SINGLE pane — either the list or the
-  // thread — rather than cramming both side-by-side. Selecting a
-  // conversation slides the thread in; the thread's back button pops
-  // it back to the list. On lg+ both panes render side-by-side as
-  // before, unchanged.
   const hasActiveConv = !!activeConversation;
 
   return (
-    <div className="-m-4 flex h-[calc(100vh-3.5rem)] flex-col overflow-hidden sm:-m-6">
-      {/* WhatsApp connection banner — in the flex column, not absolute,
-          so it pushes the panels down instead of overlapping them. */}
+    <div className="-m-3 sm:-m-4 lg:-m-6 flex h-[calc(100dvh-3.5rem)] lg:h-[calc(100vh-3.5rem)] flex-col overflow-hidden">
+      {/* WhatsApp connection banner */}
       {whatsappConnected === false && (
         <div className="flex shrink-0 items-center justify-center gap-2 border-b border-amber-500/20 bg-amber-500/10 px-4 py-2">
           <WifiOff className="h-4 w-4 text-amber-400" />
@@ -596,7 +577,7 @@ export default function InboxPage() {
         </div>
       )}
 
-      <div className="flex flex-1 overflow-hidden">
+      <div className="flex flex-1 overflow-hidden min-w-0">
         {/* Left panel: Conversation list.
             Hidden on mobile when a conversation is selected so the
             thread can occupy the full width. Always visible on lg+. */}
@@ -617,14 +598,7 @@ export default function InboxPage() {
 
         {/* Center panel: Message thread.
             Hidden on mobile when no conversation is selected so the
-            list can occupy the full width. Always visible on lg+
-            (shows its own empty-state if no thread is picked yet).
-
-            `min-w-0` is load-bearing: without it, a single wide piece
-            of content inside the thread (long quote preview, very
-            long URL in a message body) forces the flex child past
-            its share and pushes the contact-sidebar panel off-screen
-            on the right. Issue #165. */}
+            list can occupy the full width. Always visible on lg+. */}
         <div
           className={cn(
             "flex h-full min-w-0 flex-1 lg:flex",
@@ -648,9 +622,9 @@ export default function InboxPage() {
           />
         </div>
 
-        {/* Right panel: Continuous Intelligence & Context Sidebar */}
+        {/* Right panel: Continuous Intelligence & Context Sidebar (Desktop >= 1024px) */}
         {contactPanelOpen && (
-          <div className="hidden lg:block w-[340px] xl:w-[360px] shrink-0 h-full">
+          <div className="hidden lg:block w-[340px] xl:w-[360px] shrink-0 h-full border-l border-border bg-card">
             <IntelligenceSidebar
               contact={activeContact}
               conversationId={activeConversation?.id}
@@ -658,7 +632,24 @@ export default function InboxPage() {
             />
           </div>
         )}
+
+        {/* Mobile / Tablet Slide-Over Sheet for Commercial Context (< 1024px) */}
+        <Sheet open={mobileContextOpen} onOpenChange={setMobileContextOpen}>
+          <SheetContent
+            side="right"
+            className="w-full sm:max-w-[380px] p-0 border-l border-border bg-card text-foreground"
+          >
+            <div className="h-full flex flex-col">
+              <IntelligenceSidebar
+                contact={activeContact}
+                conversationId={activeConversation?.id}
+                onJumpToMessage={handleJumpToMessage}
+              />
+            </div>
+          </SheetContent>
+        </Sheet>
       </div>
     </div>
   );
 }
+

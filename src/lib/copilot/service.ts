@@ -8,6 +8,7 @@ import { generateReply } from '@/lib/ai/generate';
 import type { ChatMessage, AiProvider } from '@/lib/ai/types';
 import { sanitizePii } from '@/lib/intelligence/on-demand';
 import type { ContactCatalogInterestWithItem, ContactObjection } from '@/lib/leads/types';
+import { getContactDisplayName } from '@/lib/contacts/display';
 
 export interface FormattedConversationMessage {
   id: string;
@@ -121,13 +122,13 @@ export async function runCopilotAction(
   if (effectiveContactId) {
     const { data: contact } = await db
       .from('contacts')
-      .select('name, phone')
+      .select('name, phone, avatar_url, whatsapp_lid')
       .eq('id', effectiveContactId)
       .eq('account_id', accountId)
       .maybeSingle();
 
     if (contact) {
-      contactName = contact.name || contact.phone || 'Cliente';
+      contactName = getContactDisplayName(contact);
       contactPhone = contact.phone || '';
     }
   }
@@ -139,7 +140,7 @@ export async function runCopilotAction(
     .select('id, sender_type, content_type, content_text, media_url, created_at')
     .eq('conversation_id', req.conversationId)
     .order('created_at', { ascending: false })
-    .limit(30);
+    .limit(50);
 
   if (msgErr) {
     throw new Error(`Erro ao carregar mensagens da conversa: ${msgErr.message}`);

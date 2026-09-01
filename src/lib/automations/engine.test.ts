@@ -6,6 +6,7 @@ const h = vi.hoisted(() => ({
   state: {
     owned: null as { id: string } | null,
     ownedCustomField: null as { id: string } | null,
+    accountTimezone: 'America/Sao_Paulo' as string,
     automations: [] as Record<string, unknown>[],
     steps: [] as Record<string, unknown>[],
     fromCalls: [] as string[],
@@ -24,6 +25,9 @@ vi.mock("./admin-client", () => {
     filters: [string, string, unknown][];
   }) {
     const { table, type } = ops;
+    if (table === "accounts") {
+      return { data: { timezone: state.accountTimezone, default_currency: 'BRL' }, error: null };
+    }
     if (table === "contacts") {
       if (type === "update") {
         state.updateCalls.push({ table, filters: ops.filters });
@@ -43,7 +47,15 @@ vi.mock("./admin-client", () => {
       }
       return { data: null, error: null };
     }
-    if (table === "automations") return { data: state.automations, error: null };
+    if (table === "automations") {
+      // Filter out by is_active eq filter if present in mock query
+      const isActiveFilter = ops.filters.find(f => f[0] === 'eq' && f[1] === 'is_active');
+      if (isActiveFilter) {
+        const filtered = state.automations.filter(a => a.is_active === isActiveFilter[2]);
+        return { data: filtered, error: null };
+      }
+      return { data: state.automations, error: null };
+    }
     if (table === "automation_logs") {
       if (type === "insert") return { data: { id: "log1" }, error: null };
       if (type === "update") return { data: null, error: null };
@@ -96,7 +108,13 @@ vi.mock("./meta-send", () => ({
   engineSendInteractive: vi.fn(async () => ({ whatsapp_message_id: "m1" })),
 }));
 
-import { runAutomationsForTrigger, triggerMatches } from "./engine";
+import {
+  runAutomationsForTrigger,
+  resumePendingExecution,
+  triggerMatches,
+  evaluateTimeOfDayWindow,
+  getMinutesInTimezone,
+} from "./engine";
 import type { Automation } from "@/types";
 
 const ACCOUNT = "acct-1";
@@ -334,5 +352,192 @@ describe("triggerMatches — interactive_reply", () => {
   it("does not match when no reply id is present or config is empty", () => {
     expect(triggerMatches(automation(["yes"]), {})).toBe(false);
     expect(triggerMatches(automation([]), { interactive_reply_id: "yes" })).toBe(false);
+  });
+});
+
+describe("evaluateTimeOfDayWindow — business hours & timezone fidelity", () => {
+  const WINDOW_OUTSIDE_HOURS = "18:00-09:00"; // Legacy out_of_office template (true when outside 09:00-18:00)
+  const WINDOW_INSIDE_HOURS = "09:00-18:00";  // Regular business hours window
+
+  it("08:59 America/Sao_Paulo is OUTSIDE business hours (true in 18:00-09:00)", () => {
+    // 08:59 BRT = 11:59 UTC
+    const date = new Date("2026-09-01T11:59:00Z");
+    expect(getMinutesInTimezone(date, "America/Sao_Paulo")).toBe(8 * 60 + 59);
+    expect(evaluateTimeOfDayWindow(WINDOW_OUTSIDE_HOURS, "America/Sao_Paulo", date)).toBe(true);
+    expect(evaluateTimeOfDayWindow(WINDOW_INSIDE_HOURS, "America/Sao_Paulo", date)).toBe(false);
+  });
+
+  it("09:00 America/Sao_Paulo is INSIDE business hours (boundary start)", () => {
+    // 09:00 BRT = 12:00 UTC
+    const date = new Date("2026-09-01T12:00:00Z");
+    expect(getMinutesInTimezone(date, "America/Sao_Paulo")).toBe(9 * 60);
+    expect(evaluateTimeOfDayWindow(WINDOW_OUTSIDE_HOURS, "America/Sao_Paulo", date)).toBe(false);
+    expect(evaluateTimeOfDayWindow(WINDOW_INSIDE_HOURS, "America/Sao_Paulo", date)).toBe(true);
+  });
+
+  it("12:00 America/Sao_Paulo is INSIDE business hours", () => {
+    // 12:00 BRT = 15:00 UTC
+    const date = new Date("2026-09-01T15:00:00Z");
+    expect(getMinutesInTimezone(date, "America/Sao_Paulo")).toBe(12 * 60);
+    expect(evaluateTimeOfDayWindow(WINDOW_OUTSIDE_HOURS, "America/Sao_Paulo", date)).toBe(false);
+    expect(evaluateTimeOfDayWindow(WINDOW_INSIDE_HOURS, "America/Sao_Paulo", date)).toBe(true);
+  });
+
+  it("16:31 America/Sao_Paulo (Incident timestamp) MUST classify as INSIDE business hours", () => {
+    // 16:31 BRT = 19:31 UTC (Incident: VPS evaluated 19:31 in UTC clock and triggered out-of-office)
+    const date = new Date("2026-09-01T19:31:00Z");
+    expect(getMinutesInTimezone(date, "America/Sao_Paulo")).toBe(16 * 60 + 31);
+    // In America/Sao_Paulo, 16:31 is NOT in 18:00-09:00 (out-of-office should NOT fire)
+    expect(evaluateTimeOfDayWindow(WINDOW_OUTSIDE_HOURS, "America/Sao_Paulo", date)).toBe(false);
+    // In America/Sao_Paulo, 16:31 IS in 09:00-18:00
+    expect(evaluateTimeOfDayWindow(WINDOW_INSIDE_HOURS, "America/Sao_Paulo", date)).toBe(true);
+  });
+
+  it("17:59 America/Sao_Paulo is INSIDE business hours", () => {
+    // 17:59 BRT = 20:59 UTC
+    const date = new Date("2026-09-01T20:59:00Z");
+    expect(getMinutesInTimezone(date, "America/Sao_Paulo")).toBe(17 * 60 + 59);
+    expect(evaluateTimeOfDayWindow(WINDOW_OUTSIDE_HOURS, "America/Sao_Paulo", date)).toBe(false);
+    expect(evaluateTimeOfDayWindow(WINDOW_INSIDE_HOURS, "America/Sao_Paulo", date)).toBe(true);
+  });
+
+  it("18:00 America/Sao_Paulo is OUTSIDE business hours (boundary end, out-of-office begins)", () => {
+    // 18:00 BRT = 21:00 UTC
+    const date = new Date("2026-09-01T21:00:00Z");
+    expect(getMinutesInTimezone(date, "America/Sao_Paulo")).toBe(18 * 60);
+    expect(evaluateTimeOfDayWindow(WINDOW_OUTSIDE_HOURS, "America/Sao_Paulo", date)).toBe(true);
+    expect(evaluateTimeOfDayWindow(WINDOW_INSIDE_HOURS, "America/Sao_Paulo", date)).toBe(false);
+  });
+
+  it("18:01 America/Sao_Paulo is OUTSIDE business hours", () => {
+    // 18:01 BRT = 21:01 UTC
+    const date = new Date("2026-09-01T21:01:00Z");
+    expect(getMinutesInTimezone(date, "America/Sao_Paulo")).toBe(18 * 60 + 1);
+    expect(evaluateTimeOfDayWindow(WINDOW_OUTSIDE_HOURS, "America/Sao_Paulo", date)).toBe(true);
+    expect(evaluateTimeOfDayWindow(WINDOW_INSIDE_HOURS, "America/Sao_Paulo", date)).toBe(false);
+  });
+
+  it("proves UTC server environment does NOT alter account timezone calculation", () => {
+    // Regardless of host machine timezone, evaluateTimeOfDayWindow with target timezone evaluates consistently
+    const incidentUtc = new Date("2026-09-01T19:31:16.359Z");
+    // Under America/Sao_Paulo: 16:31 -> false for outside-hours
+    expect(evaluateTimeOfDayWindow("18:00-09:00", "America/Sao_Paulo", incidentUtc)).toBe(false);
+    // Under UTC directly: 19:31 -> true for outside-hours (the bug)
+    expect(evaluateTimeOfDayWindow("18:00-09:00", "UTC", incidentUtc)).toBe(true);
+  });
+});
+
+describe("Legacy Automation Isolation & is_active toggle enforcement", () => {
+  it("never executes steps when automation is_active = false", async () => {
+    h.state.owned = { id: "c1" };
+    h.state.automations = [
+      {
+        id: "a-disabled",
+        account_id: ACCOUNT,
+        user_id: "u1",
+        name: "Fora do horário",
+        trigger_type: "new_message_received",
+        trigger_config: {},
+        is_active: false, // DISABLED
+      },
+    ];
+    h.state.steps = [updateStep()];
+
+    await runAutomationsForTrigger({
+      accountId: ACCOUNT,
+      triggerType: "new_message_received",
+      contactId: "c1",
+      context: { message_text: "Olá" },
+    });
+
+    // Zero steps executed, zero updates
+    expect(h.state.updateCalls).toHaveLength(0);
+  });
+
+  it("executes steps when automation is_active = true and conditions match", async () => {
+    h.state.owned = { id: "c1" };
+    h.state.automations = [
+      {
+        id: "a-active",
+        account_id: ACCOUNT,
+        user_id: "u1",
+        name: "Active Rule",
+        trigger_type: "new_message_received",
+        trigger_config: {},
+        is_active: true, // ACTIVE
+      },
+    ];
+    h.state.steps = [updateStep()];
+
+    await runAutomationsForTrigger({
+      accountId: ACCOUNT,
+      triggerType: "new_message_received",
+      contactId: "c1",
+      context: { message_text: "Olá" },
+    });
+
+    // Successfully executed
+    expect(h.state.updateCalls).toHaveLength(1);
+  });
+
+  it("proves single inbound with ALL legacy automations disabled produces 0 executions", async () => {
+    h.state.owned = { id: "c1" };
+    h.state.automations = [
+      { id: "a1", account_id: ACCOUNT, user_id: "u1", name: "Menu inicial", trigger_type: "first_inbound_message", is_active: false },
+      { id: "a2", account_id: ACCOUNT, user_id: "u1", name: "Fora do horário", trigger_type: "new_message_received", is_active: false },
+      { id: "a3", account_id: ACCOUNT, user_id: "u1", name: "Follow-up 24h", trigger_type: "new_message_received", is_active: false },
+      { id: "a4", account_id: ACCOUNT, user_id: "u1", name: "Lead quente", trigger_type: "keyword_match", trigger_config: { keywords: ["orçamento"], match_type: "contains" }, is_active: false },
+    ];
+    h.state.steps = [updateStep()];
+
+    // 1. Inbound new message trigger
+    await runAutomationsForTrigger({
+      accountId: ACCOUNT,
+      triggerType: "new_message_received",
+      contactId: "c1",
+      context: { message_text: "Quero um orçamento" },
+    });
+
+    // 2. First message trigger
+    await runAutomationsForTrigger({
+      accountId: ACCOUNT,
+      triggerType: "first_inbound_message",
+      contactId: "c1",
+      context: { message_text: "Quero um orçamento" },
+    });
+
+    expect(h.state.updateCalls).toHaveLength(0);
+  });
+
+  it("resumePendingExecution skips execution when automation is_active = false", async () => {
+    h.state.owned = { id: "c1" };
+    h.state.automations = [
+      {
+        id: "a-wait-disabled",
+        account_id: ACCOUNT,
+        user_id: "u1",
+        name: "Follow-up 24h",
+        trigger_type: "new_message_received",
+        trigger_config: {},
+        is_active: false, // DISABLED
+      },
+    ];
+    h.state.steps = [updateStep()];
+
+    await resumePendingExecution({
+      id: "pending-1",
+      automation_id: "a-wait-disabled",
+      user_id: "u1",
+      account_id: ACCOUNT,
+      contact_id: "c1",
+      log_id: "log1",
+      parent_step_id: null,
+      branch: null,
+      next_step_position: 1,
+      context: {},
+    });
+
+    // Zero steps executed when automation has been disabled
+    expect(h.state.updateCalls).toHaveLength(0);
   });
 });

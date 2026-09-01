@@ -72,6 +72,8 @@ export async function POST(request: Request) {
 
     let initialSyncWindowHours: number | undefined
     let mode: 'now' | '24h' | '7d' | '30d' | undefined
+    let waitForCompletion = false
+
     try {
       const body = await request.json().catch(() => ({}))
       if (typeof body.initialSyncWindowHours === 'number') {
@@ -90,6 +92,10 @@ export async function POST(request: Request) {
                 : 'now'
       }
 
+      if (body.waitForCompletion === true || body.sync === true) {
+        waitForCompletion = true
+      }
+
       if (mode) {
         await supabase
           .from('whatsapp_config')
@@ -103,13 +109,53 @@ export async function POST(request: Request) {
       // Body optional
     }
 
-    const result = await reconcileWahaMessages({
+    if (waitForCompletion) {
+      const result = await reconcileWahaMessages({
+        accountId,
+        mode,
+        initialSyncWindowHours,
+      })
+      return NextResponse.json(result)
+    }
+
+    // Default: Asynchronous non-blocking background reconciliation
+    // Mark sync state as 'syncing' immediately so client sees instant progress
+    await supabase.from('whatsapp_sync_state').upsert(
+      {
+        account_id: accountId,
+        provider: 'waha',
+        last_sync_started_at: new Date().toISOString(),
+        last_sync_status: 'syncing',
+        last_sync_error: null,
+        sync_stats: {
+          historyMode: mode || 'now',
+          chatsDiscovered: 0,
+          chatsProcessed: 0,
+          messagesDiscovered: 0,
+          messagesInserted: 0,
+          duplicatesIgnored: 0,
+          errorsCount: 0,
+        },
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: 'account_id,provider' }
+    )
+
+    // Fire and forget in background
+    reconcileWahaMessages({
       accountId,
       mode,
       initialSyncWindowHours,
+    }).catch((err) => {
+      console.error('[waha-sync-route] background reconciliation failed:', err)
     })
 
-    return NextResponse.json(result)
+    return NextResponse.json({
+      success: true,
+      status: 'syncing',
+      message: 'Sincronização de histórico iniciada em segundo plano.',
+      mode: mode || 'now',
+    })
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Failed to reconcile WAHA messages'
     return NextResponse.json({ error: message }, { status: 500 })

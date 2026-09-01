@@ -3,6 +3,7 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import { findExistingContact, findExistingContactByLid, isUniqueViolation } from '@/lib/contacts/dedupe'
 import { runAutomationsForTrigger } from '@/lib/automations/engine'
 import { dispatchInboundToAiReply } from '@/lib/ai/auto-reply'
+import { isGenericPlaceholderName } from '@/lib/contacts/display'
 import type { NormalizedInboundEvent, NormalizedInboundMessageEvent } from './types'
 
 let _adminClient: any = null
@@ -29,6 +30,8 @@ export interface InboundProcessorOptions {
   event: NormalizedInboundEvent
   db?: SupabaseClient
   userId?: string | null
+  isHistoryImport?: boolean
+  avatarUrl?: string | null
 }
 
 export async function processNormalizedInboundEvent(
@@ -56,7 +59,7 @@ export async function processNormalizedInboundEvent(
   }
 
   if (event.type === 'message') {
-    return processInboundMessage(db, event, options.userId)
+    return processInboundMessage(db, event, options)
   }
 
   return { processed: false, error: 'unhandled_event_type' }
@@ -65,9 +68,11 @@ export async function processNormalizedInboundEvent(
 async function processInboundMessage(
   db: any,
   event: NormalizedInboundMessageEvent,
-  providedUserId?: string | null
+  options: InboundProcessorOptions
 ): Promise<ProcessInboundResult> {
   const isOutboundFromMe = Boolean(event.fromMe)
+  const isHistoryImport = Boolean(options.isHistoryImport)
+  const providedUserId = options.userId
 
   // 1. Resolve agent user_id within account context
   let userId: string = providedUserId || ''
@@ -90,7 +95,8 @@ async function processInboundMessage(
     userId,
     event.fromPhone || null,
     event.senderName,
-    event.lid
+    event.lid,
+    options.avatarUrl
   )
   if (!contactOutcome || !contactOutcome.contact?.id) {
     return { processed: false, error: 'contact_creation_failed' }
@@ -140,7 +146,11 @@ async function processInboundMessage(
 
   const isFirstInboundMessage = !priorCustomerMessages || priorCustomerMessages.length === 0
 
-  // 6. Insert message with source_provider
+  // 6. Insert message with source_provider & true chronological timestamps
+  const messageTimestampIso = event.timestamp
+    ? new Date(event.timestamp * 1000).toISOString()
+    : new Date().toISOString()
+
   const { data: insertedMessage, error: insertError } = await db
     .from('messages')
     .insert({
@@ -152,7 +162,8 @@ async function processInboundMessage(
       message_id: event.externalMessageId || null,
       source_provider: event.provider || null,
       status: 'delivered',
-      occurred_at: event.timestamp ? new Date(event.timestamp * 1000).toISOString() : new Date().toISOString(),
+      created_at: messageTimestampIso,
+      occurred_at: messageTimestampIso,
     })
     .select('*')
     .single()
@@ -192,10 +203,6 @@ async function processInboundMessage(
   const messageId = insertedMessage?.id || `msg-${Date.now()}`
 
   // 7. Update conversation unread count & status monotonically
-  const messageTimestampIso = event.timestamp
-    ? new Date(event.timestamp * 1000).toISOString()
-    : new Date().toISOString()
-
   const previewText = event.content.text || `[${event.content.type}]`
 
   const { data: currentConv } = await db
@@ -209,9 +216,13 @@ async function processInboundMessage(
   const isMoreRecent = !currentLastMessageAt || messageTimestampIso >= currentLastMessageAt
 
   const convUpdatePayload: Record<string, unknown> = {
-    // Increment unread count only for customer incoming messages, not for outbound fromMe messages
-    unread_count: isOutboundFromMe ? currentUnread : currentUnread + 1,
-    status: conversation.status === 'closed' ? 'open' : conversation.status,
+    // History import does NOT increment unread counters
+    unread_count: isHistoryImport
+      ? currentUnread
+      : isOutboundFromMe
+        ? currentUnread
+        : currentUnread + 1,
+    status: conversation.status === 'closed' && !isHistoryImport ? 'open' : conversation.status,
   }
 
   if (isMoreRecent) {
@@ -224,8 +235,8 @@ async function processInboundMessage(
     .update(convUpdatePayload)
     .eq('id', conversation.id)
 
-  // 8. Trigger Automations & AI hook only for customer messages (never for outbound agent replies)
-  if (!isOutboundFromMe) {
+  // 8. Trigger Automations & AI hook only for LIVE customer messages (never for historical import or agent outbound)
+  if (!isOutboundFromMe && !isHistoryImport) {
     try {
       await runAutomationsForTrigger({
         triggerType: 'new_message_received',
@@ -283,7 +294,8 @@ async function findOrCreateContact(
   userId: string,
   phone: string | null,
   name: string,
-  lid?: string
+  lid?: string,
+  avatarUrl?: string | null
 ) {
   let existing: any = null
 
@@ -298,7 +310,7 @@ async function findOrCreateContact(
   }
 
   if (existing) {
-    // If contact exists, backfill LID or phone if missing
+    // If contact exists, backfill LID or phone or avatar if missing
     const updates: Record<string, unknown> = {}
     if (lid && !existing.whatsapp_lid) {
       updates.whatsapp_lid = lid
@@ -306,8 +318,12 @@ async function findOrCreateContact(
     if (phone && !existing.phone) {
       updates.phone = phone
     }
-    if (name && (!existing.name || existing.name === 'WhatsApp Contact' || existing.name === 'Unknown')) {
-      updates.name = name
+    if (avatarUrl && !existing.avatar_url) {
+      updates.avatar_url = avatarUrl
+    }
+    // Update name only if incoming name is valid AND existing name is missing/generic
+    if (name && !isGenericPlaceholderName(name) && (!existing.name || isGenericPlaceholderName(existing.name))) {
+      updates.name = name.trim()
     }
 
     if (Object.keys(updates).length > 0) {
@@ -330,19 +346,39 @@ async function findOrCreateContact(
   }
 
   // 3. Insert new contact
+  const initialName = name && !isGenericPlaceholderName(name)
+    ? name.trim()
+    : (lid ? 'Contato WhatsApp' : null)
+
   const insertPayload: Record<string, unknown> = {
     account_id: accountId,
     user_id: userId,
     phone: phone || null,
-    name: name || (lid ? 'Contato WhatsApp' : null),
+    name: initialName,
     whatsapp_lid: lid || null,
   }
 
-  const { data, error } = await db
+  if (avatarUrl) {
+    insertPayload.avatar_url = avatarUrl
+  }
+
+  let { data, error } = await db
     .from('contacts')
     .insert(insertPayload)
     .select('*')
     .single()
+
+  if (error && (error.message?.includes('avatar_url') || error.code === '42703')) {
+    // If schema in test environment lacks avatar_url column, retry without it
+    delete insertPayload.avatar_url
+    const retry = await db
+      .from('contacts')
+      .insert(insertPayload)
+      .select('*')
+      .single()
+    data = retry.data
+    error = retry.error
+  }
 
   if (error) {
     if (isUniqueViolation(error)) {

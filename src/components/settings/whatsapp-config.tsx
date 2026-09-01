@@ -68,6 +68,8 @@ interface WahaSyncState {
     duplicatesIgnored?: number;
     durationMs?: number;
     chatsScanned?: number;
+    chatsDiscovered?: number;
+    chatsProcessed?: number;
     chatsSucceeded?: number;
     chatsFailed?: number;
     errorsCount?: number;
@@ -956,6 +958,14 @@ function WahaExperiencePanel({
     }
   }
 
+  useEffect(() => {
+    if (syncState?.last_sync_status !== 'syncing' && !syncingNow) return;
+    const interval = setInterval(() => {
+      void loadStatus();
+    }, 2000);
+    return () => clearInterval(interval);
+  }, [syncState?.last_sync_status, syncingNow]);
+
   async function handleManualSync() {
     setSyncingNow(true);
     try {
@@ -976,24 +986,19 @@ function WahaExperiencePanel({
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
 
-      if (data.status === 'success' || (data.success && (!data.stats || data.stats.chatsFailed === 0))) {
-        toast.success(
-          `Sincronização concluída: ${data.stats?.messagesInserted ?? 0} nova(s) mensagem(ns), ${data.stats?.duplicatesIgnored ?? 0} existente(s).`
-        );
-      } else if (data.status === 'partial') {
-        toast.warning(
-          `Sincronização parcial: ${data.stats?.messagesInserted ?? 0} nova(s), ${data.stats?.chatsFailed ?? 0} conversa(s) falharam.`
-        );
-      } else {
-        toast.error(data.error || data.reason || 'Falha ao sincronizar histórico do WhatsApp.');
-      }
+      toast.info('Sincronização de histórico iniciada em segundo plano.');
       void loadStatus();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Falha na sincronização');
-    } finally {
+      toast.error(err instanceof Error ? err.message : 'Falha ao iniciar sincronização');
       setSyncingNow(false);
     }
   }
+
+  const isSyncing = syncingNow || syncState?.last_sync_status === 'syncing';
+  const syncStats = syncState?.sync_stats;
+  const chatsTotal = syncStats?.chatsDiscovered || syncStats?.chatsScanned || 0;
+  const chatsDone = syncStats?.chatsProcessed || 0;
+  const progressPercent = chatsTotal > 0 ? Math.min(100, Math.round((chatsDone / chatsTotal) * 100)) : isSyncing ? 15 : 0;
 
   return (
     <div className="grid gap-6 lg:grid-cols-[1fr_380px]">
@@ -1088,7 +1093,12 @@ function WahaExperiencePanel({
                         ? new Date(syncState.last_sync_completed_at).toLocaleTimeString()
                         : 'Recente'}
                     </p>
-                    {syncState?.last_sync_status === 'failed' || syncState?.last_sync_status === 'error' ? (
+                    {isSyncing ? (
+                      <div className="mt-0.5 flex items-center gap-1.5 text-xs text-primary font-medium">
+                        <Loader2 className="size-3.5 animate-spin" />
+                        <span>Sincronizando histórico...</span>
+                      </div>
+                    ) : syncState?.last_sync_status === 'failed' || syncState?.last_sync_status === 'error' ? (
                       <div className="mt-0.5 flex items-center gap-1.5 text-xs text-red-400">
                         <AlertCircle className="size-3.5" />
                         <span>Falha na sincronização</span>
@@ -1108,11 +1118,6 @@ function WahaExperiencePanel({
                 </div>
 
                 <div className="flex flex-wrap gap-2.5 pt-2">
-                  <Button onClick={handleManualSync} disabled={syncingNow} size="sm">
-                    {syncingNow ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
-                    {t('wahaSyncNow')}
-                  </Button>
-
                   <Button
                     variant="outline"
                     onClick={handleRestartConnection}
@@ -1231,41 +1236,107 @@ function WahaExperiencePanel({
           </CardContent>
         </Card>
 
-        {/* Initial Sync Policy Window Selector */}
-        <Card>
+        {/* Initial Sync Policy Window Selector & Progress UI */}
+        <Card className="border-border">
           <CardHeader className="pb-3">
             <CardTitle className="text-sm text-foreground flex items-center gap-2">
               <Clock className="size-4 text-primary" />
-              {t('wahaInitialSyncTitle')}
+              Importação de Histórico de Conversas
             </CardTitle>
-            <CardDescription className="text-xs">{t('wahaInitialSyncDesc')}</CardDescription>
+            <CardDescription className="text-xs">
+              Importaremos o histórico disponível nesta sessão do WhatsApp com segurança e sem disparar respostas automáticas.
+            </CardDescription>
           </CardHeader>
-          <CardContent>
+          <CardContent className="space-y-4">
             <div className="grid gap-2 sm:grid-cols-2">
               {[
-                { hours: 0, label: t('wahaSyncNowOnly'), desc: 'Mais rápido e seguro para o piloto' },
-                { hours: 24, label: t('wahaSync24h'), desc: 'Recupera mensagens do último dia' },
-                { hours: 168, label: t('wahaSync7d'), desc: 'Histórico da última semana' },
-                { hours: 720, label: t('wahaSync30d'), desc: 'Histórico dos últimos 30 dias' },
+                { hours: 0, label: 'A partir de agora', desc: 'Apenas novas mensagens recebidas' },
+                { hours: 24, label: 'Últimas 24 horas', desc: 'Histórico do último dia de atendimento' },
+                { hours: 168, label: 'Últimos 7 dias', desc: 'Histórico da última semana' },
+                { hours: 720, label: 'Últimos 30 dias (Recomendado)', desc: 'Histórico comercial do último mês' },
               ].map((opt) => (
                 <div
                   key={opt.hours}
                   role="button"
                   tabIndex={0}
-                  onClick={() => setInitialSyncHours(opt.hours)}
+                  onClick={() => !isSyncing && setInitialSyncHours(opt.hours)}
                   onKeyDown={(e) => {
-                    if (e.key === 'Enter' || e.key === ' ') setInitialSyncHours(opt.hours);
+                    if (!isSyncing && (e.key === 'Enter' || e.key === ' ')) setInitialSyncHours(opt.hours);
                   }}
                   className={`cursor-pointer rounded-lg border p-3 transition-all ${
                     initialSyncHours === opt.hours
                       ? 'border-primary bg-primary/5 ring-1 ring-primary'
                       : 'border-border bg-background hover:bg-muted/40'
-                  }`}
+                  } ${isSyncing ? 'opacity-60 pointer-events-none' : ''}`}
                 >
                   <p className="text-xs font-semibold text-foreground">{opt.label}</p>
                   <p className="text-[11px] text-muted-foreground mt-0.5">{opt.desc}</p>
                 </div>
               ))}
+            </div>
+
+            {/* Live Progress or Summary */}
+            {isSyncing && (
+              <div className="rounded-xl border border-primary/30 bg-primary/5 p-4 space-y-3">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="font-semibold text-foreground flex items-center gap-2">
+                    <Loader2 className="size-3.5 animate-spin text-primary" />
+                    Sincronizando conversas...
+                  </span>
+                  <span className="font-bold text-primary">{progressPercent}%</span>
+                </div>
+
+                <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
+                  <div
+                    className="h-full bg-primary transition-all duration-500 ease-out"
+                    style={{ width: `${progressPercent}%` }}
+                  />
+                </div>
+
+                <div className="grid grid-cols-3 gap-2 text-center text-xs">
+                  <div className="rounded-lg bg-background/60 p-2 border border-border/50">
+                    <p className="text-[10px] text-muted-foreground">Conversas</p>
+                    <p className="font-bold text-foreground">{chatsDone} / {chatsTotal || '...'}</p>
+                  </div>
+                  <div className="rounded-lg bg-background/60 p-2 border border-border/50">
+                    <p className="text-[10px] text-muted-foreground">Importadas</p>
+                    <p className="font-bold text-emerald-400">{syncStats?.messagesInserted || 0}</p>
+                  </div>
+                  <div className="rounded-lg bg-background/60 p-2 border border-border/50">
+                    <p className="text-[10px] text-muted-foreground">Existentes</p>
+                    <p className="font-bold text-muted-foreground">{syncStats?.duplicatesIgnored || 0}</p>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {!isSyncing && syncStats && (
+              <div className="rounded-xl border border-border/70 bg-muted/30 p-3 flex items-center justify-between gap-3 text-xs">
+                <div className="space-y-0.5">
+                  <p className="font-semibold text-foreground">Último resultado de sincronização</p>
+                  <p className="text-[11px] text-muted-foreground">
+                    {syncStats.messagesInserted} mensagens importadas, {syncStats.duplicatesIgnored} já existentes ({syncStats.chatsSucceeded || 0} conversas).
+                  </p>
+                </div>
+                <Badge variant="outline" className="text-[10px] shrink-0 border-emerald-600/30 text-emerald-400">
+                  {syncState?.last_sync_status === 'success' ? 'Concluído' : syncState?.last_sync_status}
+                </Badge>
+              </div>
+            )}
+
+            <div className="pt-1">
+              <Button
+                onClick={handleManualSync}
+                disabled={isSyncing || !isWorking}
+                className="w-full sm:w-auto"
+              >
+                {isSyncing ? (
+                  <Loader2 className="size-4 animate-spin mr-2" />
+                ) : (
+                  <RefreshCw className="size-4 mr-2" />
+                )}
+                {isSyncing ? 'Sincronizando em segundo plano...' : 'Iniciar Importação de Histórico'}
+              </Button>
             </div>
           </CardContent>
         </Card>

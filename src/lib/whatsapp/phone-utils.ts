@@ -102,3 +102,56 @@ export function phoneVariants(sanitized: string): string[] {
 export function isRecipientNotAllowedError(message: string): boolean {
   return /131030|not in allowed list|not in the allowed list/i.test(message)
 }
+
+/**
+ * Formats a phone number for clear, legible human display in Brazilian standard
+ * or E.164 format.
+ * Examples:
+ *  "5511999998888" → "+55 (11) 99999-8888"
+ *  "551133334444"  → "+55 (11) 3333-4444"
+ *  "11999998888"   → "(11) 99999-8888"
+ */
+export function formatPhoneNumber(phone?: string | null): string {
+  if (!phone) return ''
+  const clean = phone.trim()
+  const digits = clean.replace(/\D/g, '')
+
+  if (clean.startsWith('+') && !clean.startsWith('+55')) {
+    return clean
+  }
+
+  if (digits.length === 13 && digits.startsWith('55')) {
+    const ddd = digits.slice(2, 4)
+    const part1 = digits.slice(4, 9)
+    const part2 = digits.slice(9)
+    return `+55 (${ddd}) ${part1}-${part2}`
+  }
+
+  if (digits.length === 12 && digits.startsWith('55')) {
+    const ddd = digits.slice(2, 4)
+    const part1 = digits.slice(4, 8)
+    const part2 = digits.slice(8)
+    return `+55 (${ddd}) ${part1}-${part2}`
+  }
+
+  if (digits.length === 11) {
+    const ddd = digits.slice(0, 2)
+    const part1 = digits.slice(2, 7)
+    const part2 = digits.slice(7)
+    return `(${ddd}) ${part1}-${part2}`
+  }
+
+  if (digits.length === 10) {
+    const ddd = digits.slice(0, 2)
+    const part1 = digits.slice(2, 6)
+    const part2 = digits.slice(6)
+    return `(${ddd}) ${part1}-${part2}`
+  }
+
+  if (digits.length >= 8) {
+    return clean.startsWith('+') ? clean : `+${digits}`
+  }
+
+  return clean
+}
+

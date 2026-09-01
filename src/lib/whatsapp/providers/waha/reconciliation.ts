@@ -2,13 +2,14 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import { decrypt } from '@/lib/whatsapp/encryption'
 import {
   getWahaSession,
-  getWahaChats,
+  getWahaChatsOverview,
   getWahaChatMessages,
   resolveWahaLidToPhoneNumber,
   type WahaConfig,
 } from '../../waha-api'
 import { normalizeWahaInbound } from './normalize-inbound'
 import { processNormalizedInboundEvent } from '../../inbound/processor'
+import { isGenericPlaceholderName } from '@/lib/contacts/display'
 import type { WhatsAppHistoryImportMode } from '@/types'
 
 export interface ReconcileOptions {
@@ -36,6 +37,8 @@ export interface ReconcileStats {
   duplicatesIgnored: number
   errorsCount: number
   durationMs: number
+  chatsDiscovered?: number
+  chatsProcessed?: number
 }
 
 export type SyncStatus = 'success' | 'partial' | 'failed' | 'idle' | 'syncing' | 'error'
@@ -252,15 +255,37 @@ export async function reconcileWahaMessages(
   }
 
   try {
-    // 5. Fetch chats from WAHA
-    const chats = options.forcedChatId
-      ? [{ id: options.forcedChatId }]
-      : await getWahaChats(wahaConfig, { limit: 100 })
+    // 5. Fetch all active chats from WAHA with pagination
+    let chats: Array<{ id: string; name?: string; picture?: string | null; timestamp?: number; isGroup?: boolean }> = []
+    if (options.forcedChatId) {
+      chats = [{ id: options.forcedChatId }]
+    } else {
+      const pageSize = 100
+      let offset = 0
+      let hasMore = true
+      while (hasMore && offset < 5000) {
+        const batch = await getWahaChatsOverview(wahaConfig, { limit: pageSize, offset })
+        if (!batch || batch.length === 0) {
+          hasMore = false
+          break
+        }
+        chats.push(...batch)
+        if (batch.length < pageSize) {
+          hasMore = false
+        } else {
+          offset += pageSize
+        }
+      }
+    }
 
+    stats.chatsDiscovered = chats.length
     stats.chatsScanned = chats.length
+    stats.chatsProcessed = 0
 
     // 6. Iterate through each chat and pull messages since boundary
-    for (const chat of chats) {
+    for (let chatIdx = 0; chatIdx < chats.length; chatIdx++) {
+      const chat = chats[chatIdx]
+      stats.chatsProcessed = chatIdx + 1
       const rawChatId = chat.id as unknown
       const chatIdStr =
         typeof rawChatId === 'string'
@@ -309,72 +334,116 @@ export async function reconcileWahaMessages(
       stats.chatsEligible++
 
       try {
-        const rawMessages = await getWahaChatMessages(wahaConfig, chatIdStr, {
-          limit: 100,
-          downloadMedia: false,
-          filterTimestampGte: syncFromTimestamp,
-          filterTimestampLte: nowTimestamp,
-        })
+        let msgOffset = 0
+        let hasMoreMsgs = true
+        const msgPageSize = 100
+        const chatName = chat.name
+        const chatPicture = chat.picture || null
 
-        // Sort chronologically ascending so replay preserves true message order
-        const filtered = rawMessages
-          .filter(
-            (m) =>
-              typeof m.timestamp === 'number' &&
-              m.timestamp >= syncFromTimestamp &&
-              m.timestamp <= nowTimestamp
-          )
-          .sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0))
+        while (hasMoreMsgs && msgOffset < 2000) {
+          const rawMessages = await getWahaChatMessages(wahaConfig, chatIdStr, {
+            limit: msgPageSize,
+            offset: msgOffset,
+            downloadMedia: false,
+            filterTimestampGte: syncFromTimestamp,
+            filterTimestampLte: nowTimestamp,
+          })
 
-        for (const rawMsg of filtered) {
-          stats.messagesDiscovered++
-
-          const eventPayload = {
-            event: 'message',
-            session: configRow.waha_session_name,
-            payload: {
-              ...rawMsg,
-              chatId: chatIdStr,
-            },
+          if (!rawMessages || rawMessages.length === 0) {
+            hasMoreMsgs = false
+            break
           }
 
-          const normalized = normalizeWahaInbound(eventPayload, accountId)
-          if (!normalized || normalized.type !== 'message') {
-            continue
-          }
+          // Sort chronologically ascending so replay preserves true message order
+          const filtered = rawMessages
+            .filter(
+              (m) =>
+                typeof m.timestamp === 'number' &&
+                m.timestamp >= syncFromTimestamp &&
+                m.timestamp <= nowTimestamp
+            )
+            .sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0))
 
-          // Resolve WhatsApp Privacy LID to Phone Number server-side if not already resolved
-          if (normalized.lid && !normalized.fromPhone) {
-            try {
-              const resolved = await resolveWahaLidToPhoneNumber(wahaConfig, normalized.lid)
-              if (resolved) {
-                normalized.fromPhone = resolved
+          for (const rawMsg of filtered) {
+            stats.messagesDiscovered++
+
+            const eventPayload = {
+              event: 'message',
+              session: configRow.waha_session_name,
+              payload: {
+                ...rawMsg,
+                chatId: chatIdStr,
+                pushName: rawMsg._data?.notifyName || chatName || undefined,
+              },
+            }
+
+            const normalized = normalizeWahaInbound(eventPayload, accountId)
+            if (!normalized || normalized.type !== 'message') {
+              continue
+            }
+
+            if (chatName && isGenericPlaceholderName(normalized.senderName)) {
+              normalized.senderName = chatName
+            }
+
+            // Resolve WhatsApp Privacy LID to Phone Number server-side if not already resolved
+            if (normalized.lid && !normalized.fromPhone) {
+              try {
+                const resolved = await resolveWahaLidToPhoneNumber(wahaConfig, normalized.lid)
+                if (resolved) {
+                  normalized.fromPhone = resolved
+                }
+              } catch {
+                // Non-fatal
               }
-            } catch {
-              // Non-fatal
+            }
+
+            try {
+              const processResult = await processNormalizedInboundEvent({
+                event: normalized,
+                db,
+                isHistoryImport: true,
+                avatarUrl: chatPicture,
+              })
+
+              if (processResult.duplicate) {
+                stats.duplicatesIgnored++
+              } else if (processResult.processed) {
+                stats.messagesInserted++
+              } else {
+                stats.errorsCount++
+              }
+            } catch (itemErr) {
+              stats.errorsCount++
+              console.error('[waha-reconcile] message ingestion error:', itemErr)
             }
           }
 
-          try {
-            const processResult = await processNormalizedInboundEvent({
-              event: normalized,
-              db,
-            })
-
-            if (processResult.duplicate) {
-              stats.duplicatesIgnored++
-            } else if (processResult.processed) {
-              stats.messagesInserted++
-            } else {
-              stats.errorsCount++
-            }
-          } catch (itemErr) {
-            stats.errorsCount++
-            console.error('[waha-reconcile] message ingestion error:', itemErr)
+          if (rawMessages.length < msgPageSize) {
+            hasMoreMsgs = false
+          } else {
+            msgOffset += msgPageSize
           }
         }
 
         stats.chatsSucceeded++
+
+        // Periodic checkpoint save every 5 chats
+        if (chatIdx > 0 && chatIdx % 5 === 0) {
+          stats.durationMs = Date.now() - startTime
+          await db.from('whatsapp_sync_state').upsert(
+            {
+              account_id: accountId,
+              provider: 'waha',
+              session_name: configRow.waha_session_name,
+              last_sync_status: 'syncing',
+              last_sync_cursor: chatIdStr,
+              sync_stats: stats,
+              updated_at: new Date().toISOString(),
+            },
+            { onConflict: 'account_id,provider' }
+          ).catch(() => {})
+        }
       } catch (chatErr) {
         stats.chatsFailed++
         stats.errorsCount++

@@ -103,6 +103,7 @@ export async function runAutomationsForTrigger(input: DispatchInput): Promise<vo
     if (!automations || automations.length === 0) return
 
     for (const automation of automations as Automation[]) {
+      if (!automation.is_active) continue
       if (!triggerMatches(automation, input.context)) continue
       try {
         await executeAutomation(automation, input)
@@ -145,6 +146,12 @@ export async function resumePendingExecution(pending: {
   if (error || !automation) {
     console.error('[automations] resume: missing automation', pending.automation_id, error)
     await markPending(pending.id, 'failed')
+    return
+  }
+
+  if (!automation.is_active) {
+    console.info('[automations] resume: automation is inactive, cancelling pending execution', pending.automation_id)
+    await markPending(pending.id, 'done')
     return
   }
 
@@ -678,23 +685,74 @@ async function evaluateCondition(cfg: ConditionStepConfig, args: ExecuteArgs): P
       return text.toLowerCase().includes((cfg.value ?? '').toLowerCase())
     }
     case 'time_of_day': {
-      // operand form "HH:mm-HH:mm" — true if now is within that window
-      // (supports over-midnight ranges like "18:00-09:00").
-      const [from, to] = (cfg.operand ?? '').split('-')
-      if (!from || !to) return false
-      const now = new Date()
-      const mins = now.getHours() * 60 + now.getMinutes()
-      const parse = (s: string) => {
-        const [h, m] = s.split(':').map(Number)
-        return (h || 0) * 60 + (m || 0)
+      const operand = cfg.operand ?? ''
+      if (!operand) return false
+
+      let timezone = 'America/Sao_Paulo'
+      if (args.automation.account_id) {
+        const { data: acct } = await db
+          .from('accounts')
+          .select('timezone')
+          .eq('id', args.automation.account_id)
+          .maybeSingle()
+        if (acct?.timezone) {
+          timezone = acct.timezone
+        }
       }
-      const f = parse(from)
-      const t = parse(to)
-      return f <= t ? mins >= f && mins < t : mins >= f || mins < t
+      return evaluateTimeOfDayWindow(operand, timezone)
     }
     default:
       return false
   }
+}
+
+/**
+ * Extracts minutes from midnight (0..1439) for a given Date in the target IANA timezone.
+ */
+export function getMinutesInTimezone(date: Date, timezone: string): number {
+  let validTz = 'America/Sao_Paulo'
+  try {
+    Intl.DateTimeFormat(undefined, { timeZone: timezone })
+    validTz = timezone
+  } catch {
+    validTz = 'America/Sao_Paulo'
+  }
+
+  const formatter = new Intl.DateTimeFormat('en-GB', {
+    timeZone: validTz,
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  })
+  const parts = formatter.formatToParts(date)
+  let hour = 0
+  let minute = 0
+  for (const part of parts) {
+    if (part.type === 'hour') hour = parseInt(part.value, 10)
+    if (part.type === 'minute') minute = parseInt(part.value, 10)
+  }
+  return (hour % 24) * 60 + minute
+}
+
+/**
+ * Evaluates whether a given Date is within a "HH:mm-HH:mm" window in the specified timezone.
+ * Supports over-midnight ranges like "18:00-09:00" (outside business hours).
+ */
+export function evaluateTimeOfDayWindow(
+  window: string,
+  timezone: string = 'America/Sao_Paulo',
+  date: Date = new Date(),
+): boolean {
+  const [from, to] = (window ?? '').split('-')
+  if (!from || !to) return false
+  const mins = getMinutesInTimezone(date, timezone)
+  const parse = (s: string) => {
+    const [h, m] = s.split(':').map(Number)
+    return (h || 0) * 60 + (m || 0)
+  }
+  const f = parse(from)
+  const t = parse(to)
+  return f <= t ? mins >= f && mins < t : mins >= f || mins < t
 }
 
 function waitMs(cfg: WaitStepConfig): number {

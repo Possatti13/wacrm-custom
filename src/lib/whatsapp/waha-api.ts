@@ -226,6 +226,108 @@ export async function configureWahaWebhook(
   });
 }
 
+export interface WahaChatOverview {
+  id: string;
+  name?: string;
+  picture?: string | null;
+  lastMessage?: unknown;
+  timestamp?: number;
+  unreadCount?: number;
+  isGroup?: boolean;
+}
+
+/**
+ * Lists chats overview from WAHA (including picture and lastMessage if available).
+ * Falls back to standard getWahaChats if overview endpoint is unavailable.
+ */
+export async function getWahaChatsOverview(
+  config: WahaConfig,
+  options: { limit?: number; offset?: number } = {}
+): Promise<WahaChatOverview[]> {
+  const params = new URLSearchParams();
+  if (options.limit) params.set('limit', String(options.limit));
+  if (options.offset) params.set('offset', String(options.offset));
+
+  const queryStr = params.toString() ? `?${params.toString()}` : '';
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const result = await wahaFetch<any[]>(
+      config,
+      `/api/${encodeURIComponent(config.session)}/chats/overview${queryStr}`
+    );
+
+    if (Array.isArray(result)) {
+      return result
+        .map((raw) => {
+          const idStr =
+            typeof raw.id === 'string'
+              ? raw.id
+              : (raw.id?._serialized ||
+                (raw.id?.user && raw.id?.server ? `${raw.id.user}@${raw.id.server}` : String(raw.id || '')));
+
+          const pictureUrl =
+            typeof raw.picture === 'string' && raw.picture.length > 0
+              ? raw.picture
+              : typeof raw.pictureUrl === 'string' && raw.pictureUrl.length > 0
+                ? raw.pictureUrl
+                : null;
+
+          return {
+            id: idStr,
+            name: raw.name || raw.pushname || raw.formattedTitle,
+            picture: pictureUrl,
+            lastMessage: raw.lastMessage,
+            timestamp:
+              typeof raw.timestamp === 'number'
+                ? raw.timestamp
+                : (raw.lastMessage?.timestamp || raw.t),
+            unreadCount:
+              typeof raw.unreadCount === 'number' ? raw.unreadCount : (raw.unreadCount || 0),
+            isGroup: Boolean(raw.isGroup || (idStr && idStr.endsWith('@g.us'))),
+          };
+        })
+        .filter((c) => Boolean(c.id) && c.id !== '[object Object]');
+    }
+  } catch {
+    // Non-fatal: fallback to standard chats endpoint if /overview is unavailable on older engine versions
+  }
+
+  const rawChats = await getWahaChats(config, options);
+  return rawChats.map((c) => ({
+    ...c,
+    picture: null,
+  }));
+}
+
+/**
+ * Retrieves profile picture URL for a specific chat or contact.
+ * Returns null if unavailable or privacy restricted.
+ */
+export async function getWahaChatPicture(
+  config: WahaConfig,
+  chatId: string
+): Promise<string | null> {
+  if (!chatId || chatId === '[object Object]') return null;
+
+  try {
+    const encodedChat = encodeURIComponent(chatId);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const result = await wahaFetch<any>(
+      config,
+      `/api/${encodeURIComponent(config.session)}/chats/${encodedChat}/picture`
+    );
+
+    if (result) {
+      if (typeof result === 'string' && result.startsWith('http')) return result;
+      if (typeof result.url === 'string' && result.url.startsWith('http')) return result.url;
+      if (typeof result.picture === 'string' && result.picture.startsWith('http')) return result.picture;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Lists all active chats from the WAHA engine for the session.
  */

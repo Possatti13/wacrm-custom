@@ -8,16 +8,22 @@ import {
 import { encrypt } from './encryption'
 
 // Mock waha-api
-vi.mock('./waha-api', () => ({
-  getWahaSession: vi.fn(),
-  getWahaChats: vi.fn(),
-  getWahaChatMessages: vi.fn(),
-  resolveWahaLidToPhoneNumber: vi.fn(),
-}))
+vi.mock('./waha-api', () => {
+  const getWahaChats = vi.fn()
+  const getWahaChatsOverview = vi.fn((config, options) => getWahaChats(config, options))
+  return {
+    getWahaSession: vi.fn(),
+    getWahaChats,
+    getWahaChatsOverview,
+    getWahaChatMessages: vi.fn(),
+    resolveWahaLidToPhoneNumber: vi.fn(),
+  }
+})
 
 import {
   getWahaSession,
   getWahaChats,
+  getWahaChatsOverview,
   getWahaChatMessages,
 } from './waha-api'
 
