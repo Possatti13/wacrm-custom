@@ -179,7 +179,7 @@ export async function POST(request: Request) {
     if (!limit.success) return rateLimitResponse(limit);
 
     const body = (await request.json().catch(() => null)) as
-      | { role?: unknown; expiresInDays?: unknown; label?: unknown }
+      | { role?: unknown; expiresInDays?: unknown; label?: unknown; invitedEmail?: unknown; email?: unknown }
       | null;
 
     const role = body?.role;
@@ -214,6 +214,19 @@ export async function POST(request: Request) {
       label = trimmed === "" ? null : trimmed;
     }
 
+    let invitedEmail: string | null = null;
+    const rawEmail = body?.invitedEmail ?? body?.email;
+    if (typeof rawEmail === "string" && rawEmail.trim().length > 0) {
+      const trimmedEmail = rawEmail.trim().toLowerCase();
+      if (!trimmedEmail.includes("@") || trimmedEmail.length > 255) {
+        return NextResponse.json(
+          { error: "Invalid email format for invitation" },
+          { status: 400 },
+        );
+      }
+      invitedEmail = trimmedEmail;
+    }
+
     const { token, hash } = generateInviteToken();
 
     const { data, error } = await ctx.supabase
@@ -224,9 +237,10 @@ export async function POST(request: Request) {
         role,
         created_by_user_id: ctx.userId,
         label,
+        invited_email: invitedEmail,
         expires_at: expiresAt.toISOString(),
       })
-      .select("id, role, label, expires_at, created_at")
+      .select("id, role, label, invited_email, expires_at, created_at")
       .single();
 
     if (error || !data) {

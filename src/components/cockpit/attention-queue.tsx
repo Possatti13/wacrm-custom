@@ -97,11 +97,11 @@ export function AttentionQueue({
 
   return (
     <Card className="border-border/70 shadow-sm">
-      <CardHeader className="p-5 pb-3 border-b border-border/40">
+      <CardHeader className="p-5 pb-3 border-b border-border/60">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div>
             <div className="flex items-center gap-2">
-              <CardTitle className="text-lg font-bold font-serif tracking-tight text-foreground">
+              <CardTitle className="text-base font-bold font-sans tracking-tight text-foreground">
                 Precisa de Atenção
               </CardTitle>
               <Badge variant="secondary" className="font-sans text-xs">
@@ -109,17 +109,17 @@ export function AttentionQueue({
               </Badge>
             </div>
             <p className="text-xs text-muted-foreground mt-0.5">
-              Oportunidades em risco, follow-ups atrasados e leads quentes sem ação.
+              Oportunidades em risco, follow-ups atrasados e leads quentes sem ação imediata.
             </p>
           </div>
 
           {/* Priority filter pills */}
-          <div className="flex items-center gap-1 bg-secondary/70 p-1 rounded-lg border border-border/80 text-xs">
+          <div className="flex items-center gap-1 bg-muted/60 p-1 rounded-lg border border-border/80 text-xs">
             <button
               onClick={() => onPriorityFilterChange("all")}
-              className={`px-2.5 py-1 rounded-md transition-all font-medium ${
+              className={`px-2.5 py-1 rounded-md transition-all font-semibold ${
                 priorityFilter === "all"
-                  ? "bg-background text-foreground shadow-sm"
+                  ? "bg-[#1E3A5F] text-[#F7F3EC] dark:bg-primary dark:text-primary-foreground shadow-xs"
                   : "text-muted-foreground hover:text-foreground"
               }`}
             >
@@ -127,30 +127,30 @@ export function AttentionQueue({
             </button>
             <button
               onClick={() => onPriorityFilterChange("urgent")}
-              className={`px-2.5 py-1 rounded-md transition-all font-medium ${
+              className={`px-2.5 py-1 rounded-md transition-all font-semibold ${
                 priorityFilter === "urgent"
-                  ? "bg-rose-500/20 text-rose-300 font-semibold"
-                  : "text-muted-foreground hover:text-foreground"
+                  ? "bg-rose-500 text-white shadow-xs"
+                  : "text-rose-600 dark:text-rose-400 hover:bg-rose-500/10"
               }`}
             >
               Urgente ({urgentCount})
             </button>
             <button
               onClick={() => onPriorityFilterChange("high")}
-              className={`px-2.5 py-1 rounded-md transition-all font-medium ${
+              className={`px-2.5 py-1 rounded-md transition-all font-semibold ${
                 priorityFilter === "high"
-                  ? "bg-orange-500/20 text-orange-300 font-semibold"
-                  : "text-muted-foreground hover:text-foreground"
+                  ? "bg-[#D16A3A] text-white shadow-xs"
+                  : "text-[#D16A3A] hover:bg-[#D16A3A]/10"
               }`}
             >
               Alto ({highCount})
             </button>
             <button
               onClick={() => onPriorityFilterChange("medium")}
-              className={`px-2.5 py-1 rounded-md transition-all font-medium ${
+              className={`px-2.5 py-1 rounded-md transition-all font-semibold ${
                 priorityFilter === "medium"
-                  ? "bg-blue-500/20 text-blue-300 font-semibold"
-                  : "text-muted-foreground hover:text-foreground"
+                  ? "bg-blue-600 text-white shadow-xs"
+                  : "text-blue-600 dark:text-blue-400 hover:bg-blue-500/10"
               }`}
             >
               Médio ({mediumCount})

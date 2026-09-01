@@ -216,6 +216,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setAccount(accountRow);
       } else {
         lastFetchedUserIdRef.current = null;
+        setProfile(null);
+        setAccount(null);
       }
     } catch (err) {
       console.error("[AuthProvider] fetchProfile threw:", err);

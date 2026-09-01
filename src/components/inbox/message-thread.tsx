@@ -29,6 +29,7 @@ import {
   PanelRightClose,
   Sparkles,
 } from "lucide-react";
+import { CiclopesSymbol } from "@/components/brand/ciclopes-symbol";
 import { format, isToday, isYesterday, differenceInHours } from "date-fns";
 import { useTranslations } from "next-intl";
 import { Badge } from "@/components/ui/badge";
@@ -143,16 +144,10 @@ const STATUS_OPTIONS: { label: string; value: ConversationStatus; color: string 
 ];
 
 /**
- * WhatsApp-style doodle background applied to the chat area (both the
- * active thread and the empty state). The SVG tile lives at
- * `/public/inbox-doodle.svg`; the slate-950 colour sits underneath so
- * the doodles read as a subtle pattern rather than a stark grid.
- *
- * Defined once at module scope so the two render paths can't drift —
- * if we ever switch the asset, both spots update together.
+ * Ciclopes refined architectural background for the chat canvas.
  */
-const DOODLE_BG_CLASSES =
-  "bg-background bg-[url('/inbox-doodle.svg')] bg-repeat";
+const THREAD_BG_CLASSES =
+  "bg-background relative";
 
 export function MessageThread({
   conversation,
@@ -863,21 +858,33 @@ export function MessageThread({
     [conversation, user?.id, onAssignChange],
   );
 
-  // Empty state — same WhatsApp-style doodle background as the active
-  // thread below, so swapping between empty/selected doesn't change the
-  // pattern under the user's eye.
+  // Authorial Empty State — Helênico Contemporâneo
   if (!conversation || !contact) {
     return (
-      <div className={cn("flex flex-1 flex-col items-center justify-center", DOODLE_BG_CLASSES)}>
-        <div className="flex h-16 w-16 items-center justify-center rounded-full bg-muted">
-          <MessageSquare className="h-8 w-8 text-muted-foreground" />
+      <div className="flex flex-1 flex-col items-center justify-center bg-background relative overflow-hidden p-6 text-center">
+        {/* Subtle Architectural Orbit Watermark */}
+        <div className="absolute inset-0 pointer-events-none flex items-center justify-center opacity-[0.025] dark:opacity-[0.04]">
+          <svg width="600" height="600" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <circle cx="50" cy="50" r="45" stroke="#1E3A5F" strokeWidth="0.5" strokeDasharray="2 2" />
+            <circle cx="50" cy="50" r="30" stroke="#1E3A5F" strokeWidth="0.5" />
+            <path d="M 12 50 C 26 26, 74 26, 88 50 C 74 74, 26 74, 12 50 Z" stroke="#1E3A5F" strokeWidth="0.75" />
+            <circle cx="50" cy="50" r="12" stroke="#1E3A5F" strokeWidth="0.5" />
+          </svg>
         </div>
-        <h3 className="mt-4 text-sm font-medium text-muted-foreground">
-          {t("selectConversation")}
-        </h3>
-        <p className="mt-1 text-xs text-muted-foreground">
-          {t("selectConversationHint")}
-        </p>
+
+        <div className="relative z-10 max-w-sm space-y-4">
+          <div className="mx-auto flex h-20 w-20 items-center justify-center rounded-3xl bg-[#1E3A5F]/5 dark:bg-primary/10 text-[#1E3A5F] dark:text-primary ring-1 ring-border/60 shadow-xs">
+            <CiclopesSymbol size={44} variant="aegean" />
+          </div>
+          <div className="space-y-1.5">
+            <h3 className="text-lg font-bold font-brand tracking-wide text-foreground">
+              Muitas conversas. Uma visão.
+            </h3>
+            <p className="text-xs text-muted-foreground leading-relaxed">
+              Selecione uma conversa na lista para visualizar o histórico completo, contexto do cliente e próximos movimentos comerciais.
+            </p>
+          </div>
+        </div>
       </div>
     );
   }
@@ -907,7 +914,7 @@ export function MessageThread({
     // clipped and the hover toolbar overlaps the Tags panel. Letting the
     // root shrink lets the bubbles' break-words / max-w caps apply.
     // Issue #257.
-    <div className={cn("flex min-w-0 flex-1 flex-col", DOODLE_BG_CLASSES)}>
+    <div className={cn("flex min-w-0 flex-1 flex-col", THREAD_BG_CLASSES)}>
       {/* Header — solid card surface sits on top of the doodle so the
           name/avatar/dropdowns stay legible. */}
       <div className="flex items-center justify-between gap-2 border-b border-border bg-card px-3 py-3 sm:px-4">

@@ -65,7 +65,7 @@ export function ExecutivePulse({ pulse, loading }: ExecutivePulseProps) {
       value: pulse.active_leads.current,
       delta: formatDelta(pulse.active_leads.delta_pct),
       icon: Users,
-      iconColor: "text-blue-400 bg-blue-500/10 border-blue-500/20",
+      iconColor: "text-[#1E3A5F] bg-[#1E3A5F]/10 border-border dark:text-primary dark:bg-primary/10",
       description: "Contatos com mensagens no período",
     },
     {
@@ -77,31 +77,31 @@ export function ExecutivePulse({ pulse, loading }: ExecutivePulseProps) {
         </span>
       ),
       icon: Flame,
-      iconColor: "text-orange-400 bg-orange-500/10 border-orange-500/20",
+      iconColor: "text-[#D16A3A] bg-[#D16A3A]/10 border-[#D16A3A]/20",
       description: "Score comercial ≥ 70 pontos",
     },
     {
       title: "Follow-ups Atrasados",
       value: pulse.overdue_followups.current,
       delta: (
-        <span className="text-xs text-rose-400/90 font-medium">
+        <span className="text-xs text-rose-500 font-semibold">
           Backlog atual pendente
         </span>
       ),
       icon: ClockAlert,
-      iconColor: "text-rose-400 bg-rose-500/10 border-rose-500/20",
+      iconColor: "text-rose-500 bg-rose-500/10 border-rose-500/20",
       description: "Tarefas vencidas no momento",
     },
     {
       title: "Sem Próxima Ação",
       value: pulse.leads_without_next_action.current,
       delta: (
-        <span className="text-xs text-amber-400/90 font-medium">
+        <span className="text-xs text-amber-600 dark:text-amber-400 font-semibold">
           Ação prioritária de equipe
         </span>
       ),
       icon: AlertCircle,
-      iconColor: "text-amber-400 bg-amber-500/10 border-amber-500/20",
+      iconColor: "text-amber-500 bg-amber-500/10 border-amber-500/20",
       description: "Leads ativos sem tarefa aberta",
     },
     {
@@ -109,8 +109,8 @@ export function ExecutivePulse({ pulse, loading }: ExecutivePulseProps) {
       value: pulse.period_objections.current,
       delta: formatDelta(pulse.period_objections.delta_pct, true),
       icon: ShieldAlert,
-      iconColor: "text-purple-400 bg-purple-500/10 border-purple-500/20",
-      description: "Ocorrências registradas pelo motor",
+      iconColor: "text-[#1E3A5F] bg-[#1E3A5F]/10 border-border dark:text-primary dark:bg-primary/10",
+      description: "Ocorrências identificadas no período",
     },
   ];
 

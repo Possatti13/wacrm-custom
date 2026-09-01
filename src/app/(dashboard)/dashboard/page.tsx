@@ -39,7 +39,7 @@ import Link from 'next/link';
 import { ListTodo, MessageSquare, ShieldAlert, LayoutDashboard, GraduationCap } from 'lucide-react';
 
 export default function DashboardPage() {
-  const { accountId, profile, defaultCurrency, loading: authLoading } = useAuth();
+  const { accountId, profile, defaultCurrency, loading: authLoading, profileLoading } = useAuth();
 
   const [activeTab, setActiveTab] = useState<'overview' | 'coaching'>('overview');
   const [range, setRange] = useState<PeriodRange>('30d');
@@ -95,10 +95,10 @@ export default function DashboardPage() {
   }, [accountId, range, priorityFilter, isManager]);
 
   useEffect(() => {
-    if (!authLoading && accountId) {
+    if (!authLoading && !profileLoading && accountId) {
       loadAll().catch((err) => console.error('Error loading cockpit:', err));
     }
-  }, [authLoading, accountId, loadAll]);
+  }, [authLoading, profileLoading, accountId, loadAll]);
 
   const handlePriorityFilterChange = async (newFilter: 'all' | 'urgent' | 'high' | 'medium') => {
     setPriorityFilter(newFilter);
@@ -118,14 +118,14 @@ export default function DashboardPage() {
 
   const router = useRouter();
 
-  // Redirect agents and viewers directly to inbox
+  // Redirect agents and viewers directly to inbox once profile settles
   useEffect(() => {
-    if (!authLoading && !isManager) {
+    if (!authLoading && !profileLoading && !isManager) {
       router.replace('/inbox');
     }
-  }, [authLoading, isManager, router]);
+  }, [authLoading, profileLoading, isManager, router]);
 
-  if (authLoading || !isManager) {
+  if (authLoading || profileLoading || !isManager) {
     return (
       <div className="container mx-auto p-4 sm:p-6 max-w-7xl space-y-6">
         <div className="h-10 w-48 bg-muted animate-pulse rounded-lg" />
