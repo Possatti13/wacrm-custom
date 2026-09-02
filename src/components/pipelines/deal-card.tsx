@@ -8,6 +8,7 @@ import { useTranslations } from "next-intl";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
+import { getContactDisplayName } from "@/lib/contacts/display";
 
 interface DealCardProps {
   deal: Deal;
@@ -28,8 +29,7 @@ function formatDate(dateStr: string) {
 
 function initials(name?: string, fallback?: string) {
   const source = (name || fallback || "?").trim();
-  if (!source) return "?";
-  return source.charAt(0).toUpperCase();
+  return source.slice(0, 2).toUpperCase();
 }
 
 export function DealCard({
@@ -42,7 +42,7 @@ export function DealCard({
   onDismissSuggestion,
 }: DealCardProps) {
   const t = useTranslations("Pipelines.card");
-  const contactLabel = deal.contact?.name || deal.contact?.phone || "Contato";
+  const contactLabel = getContactDisplayName(deal.contact, "Contato");
   const assigneeLabel = deal.assignee?.full_name || null;
   const leadScore = deal.contact?.lead_score?.score ?? null;
 

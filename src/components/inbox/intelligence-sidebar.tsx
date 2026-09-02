@@ -267,7 +267,8 @@ export function IntelligenceSidebar({
           supabase
             .from("internal_ai_requests")
             .select("completed_at")
-            .eq("conversation_id", conversationId)
+            .eq("target_type", "conversation")
+            .eq("target_id", conversationId)
             .order("created_at", { ascending: false })
             .limit(1)
             .maybeSingle(),
