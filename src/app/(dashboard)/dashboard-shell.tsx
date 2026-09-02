@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { AuthProvider, useAuth } from "@/hooks/use-auth";
 import { Sidebar } from "@/components/layout/sidebar";
 import { Header } from "@/components/layout/header";
@@ -10,7 +10,7 @@ import { CiclopesSymbol } from "@/components/brand/ciclopes-symbol";
 import { Button } from "@/components/ui/button";
 import { createClient } from "@/lib/supabase/client";
 import { LogOut, ShieldAlert } from "lucide-react";
-
+import { cn } from "@/lib/utils";
 import { MobileBottomNav } from "@/components/layout/mobile-bottom-nav";
 
 // Auth-gated dashboard shell. Extracted from the layout so the layout
@@ -20,7 +20,10 @@ import { MobileBottomNav } from "@/components/layout/mobile-bottom-nav";
 function DashboardShellInner({ children }: { children: React.ReactNode }) {
   const { user, profile, accountId, loading, profileLoading } = useAuth();
   const router = useRouter();
+  const pathname = usePathname();
   const [loggingOut, setLoggingOut] = useState(false);
+
+  const isInbox = pathname === "/inbox" || pathname?.startsWith("/inbox");
 
   // Sidebar drawer state — only used on mobile. On lg+ the sidebar is
   // always visible and this stays at `false` (ignored by the component).
@@ -108,15 +111,27 @@ function DashboardShellInner({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <div className="flex h-[100dvh] overflow-hidden bg-background">
+    <div className="flex h-[100dvh] w-full overflow-hidden bg-background">
       {/* Reports this tab's online/away presence once we know a user is
           signed in. Headless — renders nothing. */}
       <PresenceHeartbeat />
       <Sidebar open={sidebarOpen} onClose={closeSidebar} />
-      <div className="flex flex-1 flex-col overflow-hidden min-w-0">
-        <Header onOpenSidebar={() => setSidebarOpen(true)} />
+      <div className="flex flex-1 flex-col overflow-hidden min-w-0 w-full">
+        <Header
+          onOpenSidebar={() => setSidebarOpen(true)}
+          className={isInbox ? "hidden lg:flex" : "flex"}
+        />
         {/* Responsive padding and scroll container */}
-        <main className="flex-1 overflow-y-auto p-3 sm:p-4 lg:p-6 pb-20 lg:pb-6">{children}</main>
+        <main
+          className={cn(
+            "flex-1 min-w-0 w-full",
+            isInbox
+              ? "h-[100dvh] lg:h-[calc(100vh-3.5rem)] overflow-hidden p-0"
+              : "overflow-y-auto p-3 sm:p-4 lg:p-6 pb-20 lg:pb-6"
+          )}
+        >
+          {children}
+        </main>
         <MobileBottomNav />
       </div>
     </div>

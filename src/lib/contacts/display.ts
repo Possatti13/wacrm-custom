@@ -10,9 +10,13 @@ const GENERIC_PLACEHOLDERS = new Set([
   "whatsapp contact",
   "contato whatsapp",
   "contato sem nome",
+  "sem nome",
+  "contato",
   "unknown",
   "customer",
   "cliente",
+  "usuario",
+  "user",
   "[object object]",
   "undefined",
   "null",
@@ -31,29 +35,41 @@ export function isGenericPlaceholderName(name?: string | null): boolean {
 /**
  * 5-tier canonical contact display name resolution:
  * 1. explicitly saved Ciclopes contact name (if not a generic placeholder)
- * 2. WhatsApp/provider chat/contact name
- * 3. provider push/notify name when trustworthy
- * 4. formatted phone number (+55 (11) 99999-8888)
+ * 2. WhatsApp/provider chat/push name when trustworthy
+ * 3. formatted phone number (+55 (11) 99999-8888)
+ * 4. WhatsApp LID fallback ("Contato WhatsApp")
  * 5. fallback ("Contato sem nome")
  */
 export function getContactDisplayName(
-  contact?: Partial<Contact> | null,
-  fallback = "Contato sem nome"
+  contact?: (Partial<Contact> & { whatsapp_name?: string | null; push_name?: string | null }) | null,
+  fallback = "Contato sem nome",
+  providerPushName?: string | null
 ): string {
-  if (!contact) return fallback;
+  if (!contact) {
+    if (providerPushName && !isGenericPlaceholderName(providerPushName)) {
+      return providerPushName.trim();
+    }
+    return fallback;
+  }
 
-  // 1. Explicit name if not a generic placeholder
+  // 1. Explicit saved name if not a generic placeholder
   if (contact.name && !isGenericPlaceholderName(contact.name)) {
     return contact.name.trim();
   }
 
-  // 2. Formatted Phone number
+  // 2. WhatsApp / Provider push name if available on contact or passed directly
+  const waName = contact.whatsapp_name || contact.push_name || providerPushName;
+  if (waName && !isGenericPlaceholderName(waName)) {
+    return waName.trim();
+  }
+
+  // 3. Formatted Phone number
   if (contact.phone) {
     const formatted = formatPhoneNumber(contact.phone);
     if (formatted) return formatted;
   }
 
-  // 3. WhatsApp LID Identity fallback
+  // 4. WhatsApp LID Identity fallback
   if (contact.whatsapp_lid) {
     return "Contato WhatsApp";
   }

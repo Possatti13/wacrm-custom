@@ -18,6 +18,7 @@ import {
   AvatarFallback,
   AvatarImage,
 } from "@/components/ui/avatar";
+import { cn } from "@/lib/utils";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -50,9 +51,10 @@ function getPageTitleKey(pathname: string): string {
 interface HeaderProps {
   /** Wired to the shell's drawer state. Used only on mobile. */
   onOpenSidebar?: () => void;
+  className?: string;
 }
 
-export function Header({ onOpenSidebar }: HeaderProps) {
+export function Header({ onOpenSidebar, className }: HeaderProps) {
   const t = useTranslations("Header");
   const pathname = usePathname();
   const { profile, signOut } = useAuth();
@@ -65,7 +67,7 @@ export function Header({ onOpenSidebar }: HeaderProps) {
     "U";
 
   return (
-    <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-border bg-card/60 backdrop-blur-xs px-4 lg:px-6">
+    <header className={cn("flex h-14 shrink-0 items-center justify-between gap-3 border-b border-border bg-card/60 backdrop-blur-xs px-4 lg:px-6", className)}>
       <div className="flex min-w-0 items-center gap-2">
         {/* Hamburger — mobile only */}
         <button

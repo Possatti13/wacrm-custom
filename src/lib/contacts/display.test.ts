@@ -22,9 +22,13 @@ describe("Contact Identity & Display Resolution (5-Tier Precedence)", () => {
       "whatsapp contact",
       "Contato WhatsApp",
       "Contato sem nome",
+      "sem nome",
+      "contato",
       "Unknown",
       "Customer",
       "Cliente",
+      "usuario",
+      "user",
       "[object Object]",
     ];
 
@@ -36,6 +40,15 @@ describe("Contact Identity & Display Resolution (5-Tier Precedence)", () => {
       };
       expect(getContactDisplayName(contact)).toBe("+55 (11) 99999-8888");
     }
+  });
+
+  it("resolves WhatsApp push name when contact name is missing or generic placeholder", () => {
+    const contact = {
+      name: "WhatsApp Contact",
+      push_name: "Mariana Silva",
+      phone: "5511999998888",
+    };
+    expect(getContactDisplayName(contact)).toBe("Mariana Silva");
   });
 
   it("formats 11-digit Brazilian mobile numbers correctly when name is absent", () => {

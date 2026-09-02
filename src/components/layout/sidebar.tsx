@@ -202,12 +202,12 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
 
       <aside
         className={cn(
-          // Mobile: fixed drawer that slides in from the left.
-          "fixed inset-y-0 left-0 z-40 flex h-full w-[228px] flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground shadow-2xl relative overflow-hidden",
+          // Mobile: fixed drawer that slides in from the left. Takes 0px of flex layout flow.
+          "fixed inset-y-0 left-0 z-40 flex h-full w-[228px] flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground shadow-2xl overflow-hidden",
           "transition-transform duration-200 ease-out will-change-transform",
-          open ? "translate-x-0" : "-translate-x-full",
-          // Desktop: static, always visible
-          "lg:static lg:z-0 lg:w-[228px] lg:translate-x-0 lg:transition-none lg:shadow-none",
+          open ? "translate-x-0 pointer-events-auto" : "-translate-x-full pointer-events-none",
+          // Desktop: static in flex flow, always visible
+          "lg:static lg:z-0 lg:w-[228px] lg:translate-x-0 lg:transition-none lg:shadow-none lg:pointer-events-auto",
         )}
         aria-label="Primary"
       >

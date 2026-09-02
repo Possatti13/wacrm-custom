@@ -566,7 +566,7 @@ export default function InboxPage() {
   const hasActiveConv = !!activeConversation;
 
   return (
-    <div className="-m-3 sm:-m-4 lg:-m-6 flex h-[calc(100dvh-3.5rem)] lg:h-[calc(100vh-3.5rem)] flex-col overflow-hidden">
+    <div className="flex h-full w-full flex-col overflow-hidden">
       {/* WhatsApp connection banner */}
       {whatsappConnected === false && (
         <div className="flex shrink-0 items-center justify-center gap-2 border-b border-amber-500/20 bg-amber-500/10 px-4 py-2">
@@ -577,14 +577,14 @@ export default function InboxPage() {
         </div>
       )}
 
-      <div className="flex flex-1 overflow-hidden min-w-0">
+      <div className="flex flex-1 overflow-hidden min-w-0 w-full">
         {/* Left panel: Conversation list.
-            Hidden on mobile when a conversation is selected so the
-            thread can occupy the full width. Always visible on lg+. */}
+            Takes full width on mobile when no conversation is selected.
+            Fixed width (340px) on lg+. */}
         <div
           className={cn(
-            "flex h-full flex-1 lg:flex-none",
-            hasActiveConv ? "hidden lg:flex" : "flex",
+            "h-full min-w-0",
+            hasActiveConv ? "hidden lg:flex lg:w-[340px] shrink-0" : "flex flex-1 w-full lg:w-[340px] lg:shrink-0",
           )}
         >
           <ConversationList
@@ -597,12 +597,12 @@ export default function InboxPage() {
         </div>
 
         {/* Center panel: Message thread.
-            Hidden on mobile when no conversation is selected so the
-            list can occupy the full width. Always visible on lg+. */}
+            Takes full width on mobile when a conversation is selected.
+            Flex-1 on lg+. */}
         <div
           className={cn(
-            "flex h-full min-w-0 flex-1 lg:flex",
-            hasActiveConv ? "flex" : "hidden lg:flex",
+            "h-full min-w-0 flex-1 w-full",
+            hasActiveConv ? "flex flex-1" : "hidden lg:flex",
           )}
         >
           <MessageThread

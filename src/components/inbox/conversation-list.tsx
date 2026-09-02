@@ -221,7 +221,7 @@ export function ConversationList({
     statusFilter !== "all" || selectedTagIds.length > 0 || selectedCompany !== null;
 
   return (
-    <div className="flex h-full w-full flex-col border-r border-border bg-card lg:w-[340px] shrink-0">
+    <div className="flex h-full w-full min-w-0 flex-col border-r-0 border-border bg-card lg:w-[340px] lg:border-r shrink-0">
       {/* Top Header matching Visual Reference 4 */}
       <div className="p-3.5 pb-2 border-b border-border/60 space-y-3">
         <div className="flex items-center justify-between">
