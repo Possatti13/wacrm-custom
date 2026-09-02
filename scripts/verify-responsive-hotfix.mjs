@@ -339,6 +339,67 @@ async function main() {
     await snap(`${r.name}.png`);
   }
 
+  // ==========================================
+  // 6. IPHONE WEBKIT PHYSICAL FAILURE FORENSICS
+  // ==========================================
+  console.log('\n--- 6. AUDITING IPHONE WEBKIT INTERACTION SEQUENCE ---');
+  await page.setViewport({ width: 390, height: 844, isMobile: true, hasTouch: true, deviceScaleFactor: 3 });
+
+  // A. Cockpit Closed
+  await page.goto('http://localhost:3000/dashboard', { waitUntil: 'networkidle2' });
+  await new Promise(res => setTimeout(res, 1200));
+  const geomClosed1 = await page.evaluate(() => {
+    const main = document.querySelector('main');
+    const header = document.querySelector('header');
+    return {
+      main: main ? { x: main.getBoundingClientRect().x, width: main.getBoundingClientRect().width } : null,
+      header: header ? { x: header.getBoundingClientRect().x, width: header.getBoundingClientRect().width } : null,
+      scrollWidth: document.documentElement.scrollWidth,
+      clientWidth: document.documentElement.clientWidth,
+    };
+  });
+  console.log('iPhone Cockpit Closed Geom:', JSON.stringify(geomClosed1, null, 2));
+  await snap('webkit_iphone_cockpit_closed.png');
+
+  // B. Open Hamburger Menu
+  await page.evaluate(() => {
+    const btn = document.querySelector('header button[aria-label*="Menu"], header button[aria-label*="menu"]');
+    if (btn) btn.click();
+  });
+  await new Promise(res => setTimeout(res, 600));
+  const geomMenu = await page.evaluate(() => {
+    const main = document.querySelector('main');
+    return {
+      main: main ? { x: main.getBoundingClientRect().x, width: main.getBoundingClientRect().width } : null,
+    };
+  });
+  console.log('iPhone Cockpit Menu Open Geom:', JSON.stringify(geomMenu, null, 2));
+  await snap('webkit_iphone_cockpit_menu.png');
+
+  // C. Close Hamburger Menu
+  await page.keyboard.press('Escape');
+  await new Promise(res => setTimeout(res, 600));
+  const geomClosed2 = await page.evaluate(() => {
+    const main = document.querySelector('main');
+    return {
+      main: main ? { x: main.getBoundingClientRect().x, width: main.getBoundingClientRect().width } : null,
+      scrollWidth: document.documentElement.scrollWidth,
+      clientWidth: document.documentElement.clientWidth,
+    };
+  });
+  console.log('iPhone Cockpit Closed Again Geom:', JSON.stringify(geomClosed2, null, 2));
+  await snap('webkit_iphone_cockpit_closed_again.png');
+
+  // D. Notifications
+  await page.goto('http://localhost:3000/notifications', { waitUntil: 'networkidle2' });
+  await new Promise(res => setTimeout(res, 1200));
+  await snap('webkit_iphone_notifications.png');
+
+  // E. Inbox
+  await page.goto('http://localhost:3000/inbox', { waitUntil: 'networkidle2' });
+  await new Promise(res => setTimeout(res, 1200));
+  await snap('webkit_iphone_inbox.png');
+
   await browser.close();
   console.log('\n=== RESPONSIVE HOTFIX VERIFICATION COMPLETE ===');
 }
