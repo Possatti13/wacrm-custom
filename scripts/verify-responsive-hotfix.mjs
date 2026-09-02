@@ -271,19 +271,19 @@ async function main() {
   }
 
   // ==========================================
-  // 7. MOBILE NAVIGATION ACROSS ALL CORE ROUTES (390px)
+  // 7. MOBILE NAVIGATION ACROSS ALL CORE ROUTES (390px & 400px)
   // ==========================================
   console.log('\n--- 3. AUDITING ALL ROUTES AT 390x844 MOBILE ---');
   await page.setViewport({ width: 390, height: 844, deviceScaleFactor: 1 });
 
   const routes = [
-    { path: '/inbox', name: '01_mobile_inbox' },
-    { path: '/tasks', name: '02_mobile_followups' },
-    { path: '/pipelines', name: '03_mobile_pipelines' },
-    { path: '/dashboard', name: '04_mobile_cockpit' },
-    { path: '/contacts', name: '05_mobile_contacts' },
-    { path: '/catalog', name: '06_mobile_catalog' },
-    { path: '/settings', name: '07_mobile_settings' },
+    { path: '/inbox', name: '01_mobile_inbox', h2: 'hotfix02_390_inbox' },
+    { path: '/tasks', name: '02_mobile_followups', h2: 'hotfix02_390_followups' },
+    { path: '/pipelines', name: '03_mobile_pipelines', h2: 'hotfix02_390_pipeline' },
+    { path: '/dashboard', name: '04_mobile_cockpit', h2: 'hotfix02_390_cockpit' },
+    { path: '/contacts', name: '05_mobile_contacts', h2: 'hotfix02_390_contacts' },
+    { path: '/catalog', name: '06_mobile_catalog', h2: 'hotfix02_390_catalog' },
+    { path: '/settings', name: '07_mobile_settings', h2: 'hotfix02_390_settings' },
   ];
 
   const routeResults = [];
@@ -299,9 +299,45 @@ async function main() {
 
     routeResults.push({ path: r.path, ...check });
     await snap(`${r.name}.png`);
+    await snap(`${r.h2}.png`);
   }
 
   console.log('All routes mobile overflow check:', JSON.stringify(routeResults, null, 2));
+
+  // Cockpit 400x841 capture
+  await page.setViewport({ width: 400, height: 841, deviceScaleFactor: 1 });
+  await page.goto('http://localhost:3000/dashboard', { waitUntil: 'networkidle2' });
+  await new Promise(res => setTimeout(res, 1200));
+  await snap('hotfix02_400_cockpit.png');
+  await snap('hotfix02_before_cockpit_400x841.png');
+
+  // Tablet captures (768x1024)
+  console.log('\n--- 4. AUDITING TABLET 768x1024 ---');
+  await page.setViewport({ width: 768, height: 1024, deviceScaleFactor: 1 });
+  for (const r of [
+    { path: '/inbox', name: 'hotfix02_768_inbox' },
+    { path: '/pipelines', name: 'hotfix02_768_pipeline' },
+    { path: '/dashboard', name: 'hotfix02_768_cockpit' },
+    { path: '/settings', name: 'hotfix02_768_settings' },
+  ]) {
+    await page.goto(`http://localhost:3000${r.path}`, { waitUntil: 'networkidle2' });
+    await new Promise(res => setTimeout(res, 1200));
+    await snap(`${r.name}.png`);
+  }
+
+  // Desktop captures (1366x768)
+  console.log('\n--- 5. AUDITING DESKTOP 1366x768 ---');
+  await page.setViewport({ width: 1366, height: 768, deviceScaleFactor: 1 });
+  for (const r of [
+    { path: '/inbox', name: 'hotfix02_1366_inbox' },
+    { path: '/pipelines', name: 'hotfix02_1366_pipeline' },
+    { path: '/dashboard', name: 'hotfix02_1366_cockpit' },
+    { path: '/settings', name: 'hotfix02_1366_settings' },
+  ]) {
+    await page.goto(`http://localhost:3000${r.path}`, { waitUntil: 'networkidle2' });
+    await new Promise(res => setTimeout(res, 1200));
+    await snap(`${r.name}.png`);
+  }
 
   await browser.close();
   console.log('\n=== RESPONSIVE HOTFIX VERIFICATION COMPLETE ===');
