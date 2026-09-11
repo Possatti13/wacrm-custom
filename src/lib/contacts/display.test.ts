@@ -71,11 +71,29 @@ describe("Contact Identity & Display Resolution (5-Tier Precedence)", () => {
     expect(getContactDisplayName({}, "Cliente Desconhecido")).toBe("Cliente Desconhecido");
   });
 
-  it("extracts clean uppercase initials for avatars", () => {
+  it("extracts clean uppercase initials for avatars and never slices digits into 77/48/33/0", () => {
     expect(getContactInitials("Carlos Eduardo")).toBe("CE");
     expect(getContactInitials("Ana")).toBe("AN");
-    expect(getContactInitials("+55 (11) 99999-8888")).toBe("88");
+    // Phone numbers must return neutral "W" (WhatsApp), NEVER sliced digits like "88", "77", "48", "33"
+    expect(getContactInitials("+55 (11) 99999-8888")).toBe("W");
+    expect(getContactInitials("+55 (77) 99999-9977")).toBe("W");
+    expect(getContactInitials("5511999998888")).toBe("W");
     expect(getContactInitials("")).toBe("C");
     expect(getContactInitials(null)).toBe("C");
+    expect(getContactInitials("0")).toBe("C");
+    expect(getContactInitials("+0")).toBe("C");
+    expect(getContactInitials("WhatsApp Contact")).toBe("C");
+    expect(getContactInitials("Agent")).toBe("C");
+  });
+
+  it("never renders '0' or '+0' as display name or phone", () => {
+    const zeroContact = {
+      name: "0",
+      phone: "0",
+      push_name: null,
+    };
+    expect(isGenericPlaceholderName("0")).toBe(true);
+    expect(isGenericPlaceholderName("+0")).toBe(true);
+    expect(getContactDisplayName(zeroContact)).toBe("Contato sem nome");
   });
 });

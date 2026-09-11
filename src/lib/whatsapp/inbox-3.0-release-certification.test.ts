@@ -545,7 +545,7 @@ describe('CICLOPES — INBOX 3.0 RELEASE CERTIFICATION (STAGING VERIFICATION MAT
   describe('Section 14: Avatar Resolution & Secure Fallbacks', () => {
     it('generates uppercase initials fallback when avatar is missing or blocked', () => {
       expect(getContactInitials('Carlos Eduardo')).toBe('CE')
-      expect(getContactInitials('+55 (11) 98765-4321')).toBe('21')
+      expect(getContactInitials('+55 (11) 98765-4321')).toBe('W')
       expect(getContactInitials('')).toBe('C')
     })
   })

@@ -193,6 +193,36 @@ export function evaluateRuleMatch(
 }
 
 // ============================================================
+// Evidence Sufficiency Gating
+// ============================================================
+
+/**
+ * Checks whether a contact has sufficient commercial context / evidence
+ * to evaluate a meaningful Lead Score (distinguishing un-evaluated leads from cold leads).
+ */
+export function hasSufficientScoringEvidence(
+  input: CanonicalLeadScoringInput,
+  matchedContributionsCount = 0
+): boolean {
+  // If rules matched (either positive interest or negative objection/disqualification), evidence exists
+  if (matchedContributionsCount > 0) return true
+
+  // If a concrete commercial intent was identified
+  if (input.profile.current_intent && input.profile.current_intent !== 'none') return true
+
+  // If catalog interests or objections exist
+  if (input.interests.active_item_ids.length > 0) return true
+  if (input.objections.open_keys.length > 0) return true
+  if (input.engagement.active_interests_count > 0 || input.engagement.open_objections_count > 0) return true
+
+  // If explicit commercial attributes exist
+  if (input.profile.attributes && Object.keys(input.profile.attributes).length > 0) return true
+
+  // Otherwise, context is insufficient (only greetings, uncaptioned media, or empty thread)
+  return false
+}
+
+// ============================================================
 // Pure Calculation Engine: calculateLeadScore
 // ============================================================
 
@@ -229,6 +259,8 @@ export function calculateLeadScore(
   // Deterministic Fingerprint
   const inputFingerprint = computeScoringInputFingerprint(revisionId, snapshotHash, input)
 
+  const isSufficient = hasSufficientScoringEvidence(input, contributions.length)
+
   return {
     raw_score: rawScore,
     final_score: finalScore,
@@ -239,8 +271,10 @@ export function calculateLeadScore(
       min_score: snapshot.min_score,
       max_score: snapshot.max_score,
       contributions,
+      is_sufficient: isSufficient,
     },
     matched_rule_keys: matchedRuleKeys,
     input_fingerprint: inputFingerprint,
+    is_sufficient: isSufficient,
   }
 }

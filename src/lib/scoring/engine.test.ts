@@ -189,4 +189,59 @@ describe('Lead Scoring Engine (Pure Function)', () => {
 
     expect(fp1).not.toBe(fp2)
   })
+
+  it('correctly distinguishes truly cold lead from insufficient data', () => {
+    const insufficientInput: CanonicalLeadScoringInput = {
+      profile: {
+        current_intent: null,
+        urgency: null,
+        sentiment: null,
+        next_action: null,
+        attributes: {},
+      },
+      interests: { active_item_ids: [] },
+      objections: { open_keys: [], has_open: false },
+      engagement: { active_interests_count: 0, open_objections_count: 0 },
+    }
+
+    const resInsufficient = calculateLeadScore(baseSnapshot, insufficientInput, 'rev-1', 'hash-1')
+    expect(resInsufficient.is_sufficient).toBe(false)
+    expect(resInsufficient.breakdown.is_sufficient).toBe(false)
+    expect(resInsufficient.matched_rule_keys.length).toBe(0)
+
+    // A truly cold lead where customer expressed refusal/not_interested
+    const coldLeadSnapshot: LeadScoringSnapshot = {
+      ...baseSnapshot,
+      rules: [
+        {
+          rule_key: 'not_interested_rule',
+          label: 'Sem Interesse',
+          signal_type: 'profile_field',
+          field_key: 'current_intent',
+          operator: 'equals',
+          expected_value: 'not_interested',
+          points: -10,
+          sort_order: 1,
+        },
+      ],
+    }
+
+    const coldInput: CanonicalLeadScoringInput = {
+      profile: {
+        current_intent: 'not_interested',
+        urgency: 'low',
+        sentiment: 'negative',
+        next_action: null,
+        attributes: {},
+      },
+      interests: { active_item_ids: [] },
+      objections: { open_keys: [], has_open: false },
+      engagement: { active_interests_count: 0, open_objections_count: 0 },
+    }
+
+    const resCold = calculateLeadScore(coldLeadSnapshot, coldInput, 'rev-1', 'hash-1')
+    expect(resCold.is_sufficient).toBe(true)
+    expect(resCold.breakdown.is_sufficient).toBe(true)
+    expect(resCold.final_score).toBe(0) // 10 base - 10 points = 0
+  })
 })

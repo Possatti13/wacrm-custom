@@ -6,6 +6,8 @@ import {
   phoneVariants,
   phonesMatch,
   sanitizePhoneForMeta,
+  formatPhoneNumber,
+  isValidDisplayPhone,
 } from "./phone-utils";
 
 describe("sanitizePhoneForMeta", () => {
@@ -162,3 +164,27 @@ describe("isRecipientNotAllowedError", () => {
     expect(isRecipientNotAllowedError("")).toBe(false);
   });
 });
+
+describe("isValidDisplayPhone & formatPhoneNumber", () => {
+  it("rejects '0', '+0', all-zero numbers, and short strings", () => {
+    expect(formatPhoneNumber("0")).toBe("");
+    expect(formatPhoneNumber("+0")).toBe("");
+    expect(formatPhoneNumber("00000000")).toBe("");
+    expect(formatPhoneNumber("")).toBe("");
+    expect(formatPhoneNumber(null)).toBe("");
+    expect(formatPhoneNumber(undefined)).toBe("");
+    expect(formatPhoneNumber("12345")).toBe("");
+  });
+
+  it("formats valid Brazilian mobile and landline numbers", () => {
+    expect(formatPhoneNumber("5511999998888")).toBe("+55 (11) 99999-8888");
+    expect(formatPhoneNumber("551133334444")).toBe("+55 (11) 3333-4444");
+    expect(formatPhoneNumber("11999998888")).toBe("(11) 99999-8888");
+    expect(formatPhoneNumber("1133334444")).toBe("(11) 3333-4444");
+  });
+
+  it("formats foreign international numbers", () => {
+    expect(formatPhoneNumber("+14155552671")).toBe("+14155552671");
+  });
+});
+

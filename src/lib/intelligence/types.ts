@@ -139,6 +139,8 @@ export interface ClaimMessageItem {
   id: string
   sender_type: 'customer' | 'agent' | 'system'
   content_text: string | null
+  content_type?: string | null
+  media_url?: string | null
   created_at: string
 }
 

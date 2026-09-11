@@ -123,6 +123,7 @@ export interface LeadScoreBreakdown {
   min_score: number
   max_score: number
   contributions: LeadScoreContribution[]
+  is_sufficient?: boolean
 }
 
 export interface ScoringCalculationResult {
@@ -131,6 +132,7 @@ export interface ScoringCalculationResult {
   breakdown: LeadScoreBreakdown
   matched_rule_keys: string[]
   input_fingerprint: string
+  is_sufficient?: boolean
 }
 
 export interface ContactLeadScore {

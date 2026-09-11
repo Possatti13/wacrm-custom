@@ -40,6 +40,8 @@ import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import { toast } from "sonner";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { getContactDisplayName, getContactInitials } from "@/lib/contacts/display";
+import { formatPhoneNumber, isValidDisplayPhone } from "@/lib/whatsapp/phone-utils";
 
 interface IntelligenceSidebarProps {
   contact: Contact | null;
@@ -53,6 +55,13 @@ interface LeadScoreRecord {
   scoring_revision_number?: number;
   breakdown: {
     base_score?: number;
+    is_sufficient?: boolean;
+    contributions?: Array<{
+      rule_key: string;
+      label?: string;
+      points: number;
+      matched_value?: string | null;
+    }>;
     rule_results?: Array<{
       rule_key: string;
       label?: string;
@@ -354,36 +363,53 @@ export function IntelligenceSidebar({
     );
   }
 
-  const scoreValue = leadScore?.score ?? 0;
-  const isHot = scoreValue >= 70;
-  const isWarm = scoreValue >= 40 && scoreValue < 70;
+  const displayName = getContactDisplayName(contact);
+  const initials = getContactInitials(displayName);
+  const formattedPhone = contact.phone && isValidDisplayPhone(contact.phone) ? formatPhoneNumber(contact.phone) : null;
+
+  // Check if lead score has genuine commercial context / evaluation
+  // Insufficient if:
+  // 1. is_sufficient is explicitly false
+  // 2. Or no matched contributions AND no intent AND no active interests/objections AND base_score equals score
+  const hasMatchedRules = Boolean(
+    (leadScore?.breakdown?.contributions && leadScore.breakdown.contributions.length > 0) ||
+    (leadScore?.breakdown?.rule_results && leadScore.breakdown.rule_results.some(r => r.matched))
+  );
+  const hasCommercialIntent = Boolean(leadProfile?.current_intent && leadProfile.current_intent !== "none");
+  const hasCatalogOrObjections = interests.length > 0 || objections.length > 0 || objectionOccurrences.length > 0;
+
+  const isScoringSufficient = leadScore?.breakdown?.is_sufficient ?? (hasMatchedRules || hasCommercialIntent || hasCatalogOrObjections);
+
+  const scoreValue = leadScore?.score ?? null;
+  const isHot = scoreValue !== null && scoreValue >= 70;
+  const isWarm = scoreValue !== null && scoreValue >= 40 && scoreValue < 70;
 
   return (
     <div className="flex h-full w-full flex-col border-l border-border bg-card text-foreground">
       <ScrollArea className="flex-1">
         <div className="p-4 space-y-4">
-          {/* 1. CONTACT SUMMARY (Clean & Compact) */}
+          {/* 1. QUEM: CONTACT SUMMARY (Clean, Canonical & Hardened) */}
           <div className="rounded-xl border border-border/80 bg-muted/20 p-3.5 space-y-2">
             <div className="flex items-center gap-3">
               <Avatar className="size-10 border border-border">
                 {contact.avatar_url ? (
-                  <AvatarImage src={contact.avatar_url} alt={contact.name || "Contato"} />
+                  <AvatarImage src={contact.avatar_url} alt={displayName} />
                 ) : null}
                 <AvatarFallback className="bg-primary/10 text-primary font-semibold text-xs">
-                  {contact.name?.charAt(0)?.toUpperCase() || "C"}
+                  {initials}
                 </AvatarFallback>
               </Avatar>
               <div className="min-w-0 flex-1">
                 <h3 className="text-sm font-bold text-foreground truncate font-sans">
-                  {contact.name || "Contato sem nome"}
+                  {displayName}
                 </h3>
                 {contact.company && (
                   <p className="text-xs text-muted-foreground truncate">{contact.company}</p>
                 )}
-                {contact.phone && (
+                {formattedPhone && (
                   <div className="flex items-center gap-1.5 mt-0.5">
                     <span className="text-[11px] text-muted-foreground font-mono truncate">
-                      {contact.phone}
+                      {formattedPhone}
                     </span>
                     <button
                       type="button"
@@ -410,7 +436,17 @@ export function IntelligenceSidebar({
             )}
           </div>
 
-          {/* 2. ACTIVE FOLLOW-UP / PRÓXIMA AÇÃO (Prominent Action Card) */}
+          {/* 2. O QUE ESTÁ ACONTECENDO: RESUMO DA SITUAÇÃO (Prominently placed right after Identity) */}
+          <div className="rounded-xl border border-border/80 bg-card p-3.5 space-y-1.5 shadow-xs">
+            <span className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground font-sans">
+              Resumo da Situação
+            </span>
+            <p className="text-xs text-foreground/90 leading-relaxed bg-muted/20 p-2.5 rounded-lg border border-border/40">
+              {leadProfile?.summary || "Ainda não há contexto suficiente para resumir esta conversa."}
+            </p>
+          </div>
+
+          {/* 3. O QUE FAZER: PRÓXIMA AÇÃO (Prominent Action Card) */}
           <div className="rounded-xl border border-border/80 bg-card p-3.5 space-y-2 shadow-xs">
             <div className="flex items-center justify-between">
               <span className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5 font-sans">
@@ -497,7 +533,7 @@ export function IntelligenceSidebar({
               </div>
             ) : (
               <div className="text-center py-2">
-                <p className="text-xs text-muted-foreground">Nenhuma ação pendente no momento.</p>
+                <p className="text-xs text-muted-foreground">Aguardar nova interação do contato.</p>
                 <Button
                   size="sm"
                   variant="outline"
@@ -514,7 +550,7 @@ export function IntelligenceSidebar({
             )}
           </div>
 
-          {/* 3. LEAD SCORE (Clean Gauge & Propensity) */}
+          {/* 4. LEAD SCORE (Gated for Insufficient Context vs Truly Cold) */}
           <div className="rounded-xl border border-border/80 bg-card p-3.5 space-y-2 shadow-xs">
             <div className="flex items-center justify-between">
               <span className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground font-sans">
@@ -523,55 +559,91 @@ export function IntelligenceSidebar({
               <Badge
                 className={cn(
                   "text-[10px] font-bold px-2 py-0.2 uppercase tracking-wide",
-                  isHot
+                  !isScoringSufficient || scoreValue === null
+                    ? "bg-secondary text-muted-foreground border-border"
+                    : isHot
                     ? "bg-[#D16A3A] text-white border-transparent"
                     : isWarm
                     ? "bg-amber-500/20 text-amber-600 dark:text-amber-400 border-amber-500/30"
-                    : "bg-secondary text-muted-foreground border-border"
+                    : "bg-blue-500/10 text-blue-600 dark:text-blue-400 border-blue-500/30"
                 )}
               >
-                {isHot ? "🔥 Lead quente" : isWarm ? "⚡ Lead morno" : "❄️ Lead frio"}
+                {!isScoringSufficient || scoreValue === null
+                  ? "Dados insuficientes"
+                  : isHot
+                  ? "🔥 Lead quente"
+                  : isWarm
+                  ? "⚡ Lead morno"
+                  : "❄️ Lead frio"}
               </Badge>
             </div>
 
-            <div className="flex items-baseline gap-2">
-              <span className="text-3xl font-extrabold font-sans tracking-tight text-foreground">
-                {scoreValue}
-              </span>
-              <span className="text-xs text-muted-foreground">/ 100 pontos</span>
-            </div>
+            {!isScoringSufficient || scoreValue === null ? (
+              <div className="py-1 space-y-1">
+                <div className="flex items-baseline gap-2">
+                  <span className="text-2xl font-bold font-sans tracking-tight text-muted-foreground">
+                    –
+                  </span>
+                  <span className="text-xs text-muted-foreground">Não avaliado</span>
+                </div>
+                <p className="text-[11px] text-muted-foreground leading-relaxed">
+                  Ainda não há sinais comerciais suficientes na conversa para pontuar este contato.
+                </p>
+              </div>
+            ) : (
+              <>
+                <div className="flex items-baseline gap-2">
+                  <span className="text-3xl font-extrabold font-sans tracking-tight text-foreground">
+                    {scoreValue}
+                  </span>
+                  <span className="text-xs text-muted-foreground">/ 100 pontos</span>
+                </div>
 
-            {/* Score calculation disclosure */}
-            {leadScore?.breakdown?.rule_results && leadScore.breakdown.rule_results.length > 0 && (
-              <div className="pt-1">
-                <button
-                  type="button"
-                  onClick={() => setShowScoreBreakdown(!showScoreBreakdown)}
-                  className="text-[11px] text-primary hover:underline flex items-center gap-1 font-medium"
-                >
-                  {showScoreBreakdown ? <ChevronUp className="size-3" /> : <ChevronDown className="size-3" />}
-                  {showScoreBreakdown ? "Ocultar detalhes do cálculo" : "Como este score foi calculado?"}
-                </button>
+                {/* Score calculation disclosure */}
+                {((leadScore?.breakdown?.contributions && leadScore.breakdown.contributions.length > 0) ||
+                  (leadScore?.breakdown?.rule_results && leadScore.breakdown.rule_results.length > 0)) && (
+                  <div className="pt-1">
+                    <button
+                      type="button"
+                      onClick={() => setShowScoreBreakdown(!showScoreBreakdown)}
+                      className="text-[11px] text-primary hover:underline flex items-center gap-1 font-medium"
+                    >
+                      {showScoreBreakdown ? <ChevronUp className="size-3" /> : <ChevronDown className="size-3" />}
+                      {showScoreBreakdown ? "Ocultar detalhes do cálculo" : "Como este score foi calculado?"}
+                    </button>
 
-                {showScoreBreakdown && (
-                  <div className="mt-2 space-y-1.5 bg-muted/40 p-2.5 rounded-lg border border-border/60 text-xs">
-                    {leadScore.breakdown.rule_results.map((r, idx) => (
-                      <div key={idx} className="flex items-center justify-between text-[11px]">
-                        <span className={cn(r.matched ? "text-foreground font-medium" : "text-muted-foreground")}>
-                          {r.label || r.rule_key}
-                        </span>
-                        <span className={cn("font-mono font-semibold", r.points > 0 ? "text-emerald-500" : "text-muted-foreground")}>
-                          {r.points > 0 ? `+${r.points}` : `${r.points}`} pts
-                        </span>
+                    {showScoreBreakdown && (
+                      <div className="mt-2 space-y-1.5 bg-muted/40 p-2.5 rounded-lg border border-border/60 text-xs">
+                        {leadScore.breakdown.contributions && leadScore.breakdown.contributions.length > 0
+                          ? leadScore.breakdown.contributions.map((c, idx) => (
+                              <div key={idx} className="flex items-center justify-between text-[11px]">
+                                <span className="text-foreground font-medium">
+                                  {c.label || c.rule_key}
+                                </span>
+                                <span className={cn("font-mono font-semibold", c.points > 0 ? "text-emerald-500" : "text-muted-foreground")}>
+                                  {c.points > 0 ? `+${c.points}` : `${c.points}`} pts
+                                </span>
+                              </div>
+                            ))
+                          : leadScore.breakdown.rule_results?.map((r, idx) => (
+                              <div key={idx} className="flex items-center justify-between text-[11px]">
+                                <span className={cn(r.matched ? "text-foreground font-medium" : "text-muted-foreground")}>
+                                  {r.label || r.rule_key}
+                                </span>
+                                <span className={cn("font-mono font-semibold", r.points > 0 ? "text-emerald-500" : "text-muted-foreground")}>
+                                  {r.points > 0 ? `+${r.points}` : `${r.points}`} pts
+                                </span>
+                              </div>
+                            ))}
                       </div>
-                    ))}
+                    )}
                   </div>
                 )}
-              </div>
+              </>
             )}
           </div>
 
-          {/* 4. INTENÇÃO & URGÊNCIA */}
+          {/* 5. QUALIFICAÇÃO (Intenção & Urgência) */}
           {leadProfile && (leadProfile.current_intent || leadProfile.urgency) && (
             <div className="rounded-xl border border-border/80 bg-card p-3.5 space-y-2 shadow-xs">
               <span className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground font-sans">
@@ -590,6 +662,8 @@ export function IntelligenceSidebar({
                         ? "Suporte"
                         : leadProfile.current_intent.toLowerCase() === "pricing"
                         ? "Preço / Orçamento"
+                        : leadProfile.current_intent.toLowerCase() === "not_interested"
+                        ? "Sem interesse"
                         : leadProfile.current_intent}
                     </span>
                   </div>
@@ -619,7 +693,7 @@ export function IntelligenceSidebar({
             </div>
           )}
 
-          {/* 5. INTERESSE NO CATÁLOGO */}
+          {/* 6. INTERESSE NO CATÁLOGO */}
           {interests.length > 0 && (
             <div className="rounded-xl border border-border/80 bg-card p-3.5 space-y-2 shadow-xs">
               <span className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5 font-sans">
@@ -648,7 +722,7 @@ export function IntelligenceSidebar({
             </div>
           )}
 
-          {/* 6. OBJEÇÕES DETECTADAS */}
+          {/* 7. OBJEÇÕES IDENTIFICADAS */}
           {objectionOccurrences.length > 0 && (
             <div className="rounded-xl border border-border/80 bg-card p-3.5 space-y-2 shadow-xs">
               <span className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5 font-sans">
@@ -684,18 +758,6 @@ export function IntelligenceSidebar({
                   </div>
                 ))}
               </div>
-            </div>
-          )}
-
-          {/* 7. RESUMO DA CONVERSA */}
-          {leadProfile?.summary && (
-            <div className="rounded-xl border border-border/80 bg-card p-3.5 space-y-1.5 shadow-xs">
-              <span className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground font-sans">
-                Resumo da Situação
-              </span>
-              <p className="text-xs text-foreground/90 leading-relaxed bg-muted/20 p-2.5 rounded-lg border border-border/40">
-                {leadProfile.summary}
-              </p>
             </div>
           )}
 

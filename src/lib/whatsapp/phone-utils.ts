@@ -104,16 +104,36 @@ export function isRecipientNotAllowedError(message: string): boolean {
 }
 
 /**
+ * Validates whether a phone string represents a plausible, genuine phone number
+ * for customer display. Rejects '0', '+0', null, undefined, empty strings,
+ * or strings with fewer than 8 digits or all-zero digits.
+ */
+export function isValidDisplayPhone(phone?: string | null): boolean {
+  if (!phone || typeof phone !== 'string') return false
+  const clean = phone.trim()
+  if (!clean) return false
+
+  const digits = clean.replace(/\D/g, '')
+  if (digits.length < 8) return false
+
+  // Reject all zeros (e.g. "00000000", "0")
+  if (/^0+$/.test(digits)) return false
+
+  return true
+}
+
+/**
  * Formats a phone number for clear, legible human display in Brazilian standard
  * or E.164 format.
+ * Returns empty string if the phone is not valid (e.g. '0', '+0', empty).
  * Examples:
  *  "5511999998888" → "+55 (11) 99999-8888"
  *  "551133334444"  → "+55 (11) 3333-4444"
  *  "11999998888"   → "(11) 99999-8888"
  */
 export function formatPhoneNumber(phone?: string | null): string {
-  if (!phone) return ''
-  const clean = phone.trim()
+  if (!isValidDisplayPhone(phone)) return ''
+  const clean = phone!.trim()
   const digits = clean.replace(/\D/g, '')
 
   if (clean.startsWith('+') && !clean.startsWith('+55')) {
@@ -154,4 +174,5 @@ export function formatPhoneNumber(phone?: string | null): string {
 
   return clean
 }
+
 

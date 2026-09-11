@@ -10,6 +10,46 @@ import { matchQuotedEvidenceSpan } from './evidence-matcher'
 import { computeInsightDedupeKey } from '@/lib/insights/dedupe'
 import { normalizeObjection } from '@/lib/leads/normalization'
 
+const FORBIDDEN_TECHNICAL_WORDS = [
+  'binary',
+  'base64',
+  'encoding',
+  'payload',
+  'corrupted',
+  'corrompida',
+  'corrompido',
+  'provider error',
+  'json',
+  'waha',
+  'webhook',
+  'blob',
+]
+
+/**
+ * Sanitizes commercial text displayed to reps, removing any technical leakages.
+ * If text contains forbidden technical diagnostics, returns a safe commercial fallback.
+ */
+export function sanitizeCommercialText(
+  text: string,
+  kind: 'summary' | 'next_action' | 'general' = 'general'
+): string {
+  if (!text) return ''
+  const lower = text.toLowerCase()
+  const hasTechnicalLeakage = FORBIDDEN_TECHNICAL_WORDS.some((word) => lower.includes(word))
+
+  if (hasTechnicalLeakage) {
+    if (kind === 'summary') {
+      return 'Ainda não há contexto suficiente para resumir esta conversa.'
+    }
+    if (kind === 'next_action') {
+      return 'Aguardar nova interação do contato.'
+    }
+    return ''
+  }
+
+  return text
+}
+
 export interface ResolutionContext {
   configSnapshot: CanonicalConfigSnapshot
   catalogSnapshot: CatalogItemContextSnapshot[]
@@ -228,7 +268,7 @@ export function resolveAndValidateObservation(
           ? ((obs.value as Record<string, unknown>).summary as string) || JSON.stringify(obs.value)
           : ''
     if (!raw || raw.trim().length === 0) return null
-    valueText = raw.trim()
+    valueText = sanitizeCommercialText(raw.trim(), 'summary')
     valueJson = { summary: valueText }
   }
 
@@ -238,7 +278,12 @@ export function resolveAndValidateObservation(
       valueJson = obs.value as Record<string, unknown>
       valueText = null
     } else {
-      valueText = typeof obs.value === 'string' ? obs.value.trim() : String(obs.value)
+      const raw = typeof obs.value === 'string' ? obs.value.trim() : String(obs.value)
+      if (type === 'next_action') {
+        valueText = sanitizeCommercialText(raw, 'next_action')
+      } else {
+        valueText = raw
+      }
     }
   }
 

@@ -232,7 +232,7 @@ describe('CICLOPES INBOX 3.0 — WhatsApp History Sync & Productization Sprint',
     it('generates 1-2 letter uppercase initials for avatar fallbacks', () => {
       expect(getContactInitials('Carlos Eduardo')).toBe('CE')
       expect(getContactInitials('Carlos')).toBe('CA')
-      expect(getContactInitials('+55 (11) 98765-4321')).toBe('21')
+      expect(getContactInitials('+55 (11) 98765-4321')).toBe('W')
       expect(getContactInitials('')).toBe('C')
       expect(getContactInitials(null)).toBe('C')
     })

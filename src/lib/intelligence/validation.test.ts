@@ -216,5 +216,29 @@ describe('Intelligence Observation Validation & Pinned Resolution', () => {
       )
       expect(unverifiedSignal).toBeNull()
     })
+
+    it('sanitizes technical jargon in summary and next_action to safe commercial defaults', () => {
+      const technicalSummary = resolveAndValidateObservation(
+        {
+          type: 'summary',
+          value: 'Cliente enviou binary/image encoding data com payload corrompido',
+          evidence: [{ message_ref: 'M1', quoted_text: 'Gostei muito da moto X13' }],
+        },
+        { configSnapshot, catalogSnapshot, messageRefMap, extractorVersion: 'v1' }
+      )
+      expect(technicalSummary).not.toBeNull()
+      expect(technicalSummary?.value_text).toBe('Ainda não há contexto suficiente para resumir esta conversa.')
+
+      const technicalAction = resolveAndValidateObservation(
+        {
+          type: 'next_action',
+          value: 'Desconsiderar mensagem corrompida e verificar erro de payload WAHA',
+          evidence: [{ message_ref: 'M1', quoted_text: 'Gostei muito da moto X13' }],
+        },
+        { configSnapshot, catalogSnapshot, messageRefMap, extractorVersion: 'v1' }
+      )
+      expect(technicalAction).not.toBeNull()
+      expect(technicalAction?.value_text).toBe('Aguardar nova interação do contato.')
+    })
   })
 })

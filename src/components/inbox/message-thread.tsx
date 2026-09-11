@@ -42,7 +42,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { getContactDisplayName, getContactInitials } from "@/lib/contacts/display";
-import { formatPhoneNumber } from "@/lib/whatsapp/phone-utils";
+import { formatPhoneNumber, isValidDisplayPhone } from "@/lib/whatsapp/phone-utils";
 import { MessageBubble } from "./message-bubble";
 import { MessageActions } from "./message-actions";
 import {
@@ -894,9 +894,9 @@ export function MessageThread({
 
   const displayName = getContactDisplayName(contact);
   const initials = getContactInitials(displayName);
-  const displayPhone = contact.phone
+  const displayPhone = contact?.phone && isValidDisplayPhone(contact.phone)
     ? formatPhoneNumber(contact.phone)
-    : contact.whatsapp_lid
+    : contact?.whatsapp_lid
       ? "Identidade WhatsApp"
       : "";
   const messageGroups = groupMessagesByDate(messages);
