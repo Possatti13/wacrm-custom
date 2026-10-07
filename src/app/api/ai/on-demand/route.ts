@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { getCurrentAccount, toErrorResponse } from '@/lib/auth/account';
 import { executeOnDemandAiAction } from '@/lib/intelligence/on-demand';
 import type { ActionType } from '@/lib/intelligence/types';
+import { IntelligenceActionError } from '@/lib/intelligence/errors';
 
 export async function POST(req: Request) {
   try {
@@ -35,6 +36,10 @@ export async function POST(req: Request) {
 
     return NextResponse.json(result);
   } catch (err) {
+    if (err instanceof IntelligenceActionError) {
+      if (err.status >= 500) console.error('[ai/on-demand] analysis failed:', err);
+      return NextResponse.json({ error: err.message, code: err.code }, { status: err.status });
+    }
     return toErrorResponse(err);
   }
 }

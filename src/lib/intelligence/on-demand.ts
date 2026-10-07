@@ -12,6 +12,7 @@ import { validateUuid } from '../leads/validation';
 import { executeConversationExtraction } from './extractor';
 import { projectContactCommercialState } from '../projector/repository';
 import { LeadScoringService } from '../scoring/service';
+import { IntelligenceActionError } from './errors';
 
 // Pricing per 1,000,000 tokens (USD)
 const MODEL_PRICING: Record<string, { inputPerM: number; outputPerM: number }> = {
@@ -188,6 +189,10 @@ export async function executeOnDemandAiAction(
   });
 
   if (claimError) {
+    if (claimError.code === '55000') {
+      throw new IntelligenceActionError('INTELLIGENCE_DISABLED', 403,
+        'A inteligência comercial está desabilitada nesta conta.');
+    }
     throw new Error(`Falha ao registrar requisição de IA: ${claimError.message}`);
   }
 
@@ -215,32 +220,32 @@ export async function executeOnDemandAiAction(
   const activeTemperature = claimData.temperature ?? 0.1;
   const activeTimeoutMs = claimData.timeout_ms ?? 30000;
 
-  // 6. Instantiate provider
-  let providerInstance: CommercialIntelligenceProvider;
-  if (activeProvider === 'mock') {
-    providerInstance = new MockStructuredExtractor();
-  } else {
-    const cred = await loadIntelligenceCredential(db, accountId, activeProvider);
-    if (!cred || !cred.apiKey) {
-      throw new Error(`Credencial da API para o provedor '${activeProvider}' não configurada.`);
-    }
-
-    if (activeProvider === 'openai') {
-      providerInstance = new OpenAiStructuredExtractor(cred.apiKey);
-    } else if (activeProvider === 'anthropic') {
-      providerInstance = new AnthropicStructuredExtractor(cred.apiKey);
-    } else if (activeProvider === 'xai') {
-      providerInstance = new XAiStructuredExtractor(cred.apiKey);
-    } else if (activeProvider === 'gemini') {
-      providerInstance = new GeminiStructuredExtractor(cred.apiKey);
-    } else {
-      throw new Error(`Provedor desconhecido: ${activeProvider}`);
-    }
-  }
-
   const startTime = Date.now();
 
   try {
+    // 6. Instantiate provider (a failure must also close the claimed request)
+    let providerInstance: CommercialIntelligenceProvider;
+    if (activeProvider === 'mock') {
+      providerInstance = new MockStructuredExtractor();
+    } else {
+      const cred = await loadIntelligenceCredential(db, accountId, activeProvider);
+      if (!cred || !cred.apiKey) {
+        throw new Error(`Credencial da API para o provedor '${activeProvider}' não configurada.`);
+      }
+
+      if (activeProvider === 'openai') {
+        providerInstance = new OpenAiStructuredExtractor(cred.apiKey);
+      } else if (activeProvider === 'anthropic') {
+        providerInstance = new AnthropicStructuredExtractor(cred.apiKey);
+      } else if (activeProvider === 'xai') {
+        providerInstance = new XAiStructuredExtractor(cred.apiKey);
+      } else if (activeProvider === 'gemini') {
+        providerInstance = new GeminiStructuredExtractor(cred.apiKey);
+      } else {
+        throw new Error(`Provedor desconhecido: ${activeProvider}`);
+      }
+    }
+
     let resultJson: Record<string, unknown> = {};
     let resultText: string | null = null;
     let inputTokens = 0;
@@ -251,35 +256,49 @@ export async function executeOnDemandAiAction(
     if (params.actionType === 'analyze_conversation' && targetId) {
       // Full entity extraction + state projection + lead scoring
       const extractionRes = await executeConversationExtraction({
-        db,
+        db: workerDb,
         accountId,
         conversationId: targetId,
         provider: providerInstance,
+        model: activeModel,
       });
+
+      if (!extractionRes.processed && extractionRes.reason === 'failed') {
+        throw new IntelligenceActionError('ANALYSIS_FAILED', 502,
+          'Não foi possível concluir a análise comercial.', { cause: new Error(extractionRes.error || 'Extraction failed') });
+      }
+      if (!extractionRes.processed && extractionRes.reason === 'budget_blocked') {
+        throw new IntelligenceActionError('AI_BUDGET_EXCEEDED', 429,
+          'O limite de uso de inteligência desta conta foi atingido.');
+      }
+      if (!extractionRes.processed && extractionRes.reason === 'already_processing') {
+        throw new IntelligenceActionError('ANALYSIS_IN_PROGRESS', 409,
+          'Esta conversa já está sendo analisada. Aguarde a conclusão.');
+      }
 
       resultJson = extractionRes as unknown as Record<string, unknown>;
       resultText = `Análise concluída (${extractionRes.insightsCount || 0} insights extraídos).`;
 
       // Get contact ID for projection
-      const { data: convData } = await db
+      const { data: convData } = await workerDb
         .from('conversations')
         .select('contact_id')
         .eq('id', targetId)
         .maybeSingle();
 
       if (convData?.contact_id) {
-        await projectContactCommercialState(db, {
+        await projectContactCommercialState(workerDb, {
           accountId,
           contactId: convData.contact_id,
           triggerSource: 'on_demand',
-        }).catch(() => null);
+        });
 
-        const scoringService = new LeadScoringService(db);
+        const scoringService = new LeadScoringService(workerDb);
         await scoringService.scoreContact(
           accountId,
           convData.contact_id,
           'on_demand'
-        ).catch(() => null);
+        );
       }
 
       inputTokens = 250;
