@@ -61,10 +61,11 @@ async function main() {
     if (state.probes.length) throw new Error('Probes already exist');
     for (const tenant of [accountId, operationalAccount]) {
       const owner = await checked(db.from('profiles').select('user_id').eq('account_id', tenant).eq('account_role', 'owner').limit(1).single());
-      const probe = { accountId: tenant, contactId: crypto.randomUUID(), conversationId: crypto.randomUUID(), messageIds: [] };
+      const probe = { accountId: tenant, contactId: crypto.randomUUID(), conversationId: crypto.randomUUID(),
+        phone: '+55119' + crypto.randomInt(10000000, 100000000), messageIds: [] };
       state.probes.push(probe); save();
       await checked(db.from('contacts').insert({ id: probe.contactId, account_id: tenant, user_id: owner.user_id,
-        name: 'Certificação temporária — Reanálise', phone: '+5511955500099' }));
+        name: 'Certificação temporária — Reanálise', phone: probe.phone }));
       await checked(db.from('conversations').insert({ id: probe.conversationId, account_id: tenant, user_id: owner.user_id,
         contact_id: probe.contactId, status: 'open', commercial_state_dirty: false }));
       const messageId = crypto.randomUUID(); probe.messageIds.push(messageId); save();
