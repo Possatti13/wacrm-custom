@@ -42,6 +42,7 @@ import { toast } from "sonner";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { getContactDisplayName, getContactInitials } from "@/lib/contacts/display";
 import { formatPhoneNumber, isValidDisplayPhone } from "@/lib/whatsapp/phone-utils";
+import { getScoreExplanation, type ScoreRevisionBounds } from "./score-explanation";
 
 interface IntelligenceSidebarProps {
   contact: Contact | null;
@@ -52,9 +53,14 @@ interface IntelligenceSidebarProps {
 
 interface LeadScoreRecord {
   score: number;
+  scoring_revision_id?: string;
   scoring_revision_number?: number;
   breakdown: {
     base_score?: number;
+    raw_score?: number;
+    final_score?: number;
+    min_score?: number;
+    max_score?: number;
     is_sufficient?: boolean;
     contributions?: Array<{
       rule_key: string;
@@ -97,6 +103,7 @@ export function IntelligenceSidebar({
   // Commercial Intelligence Data
   const [leadProfile, setLeadProfile] = useState<ContactLeadProfile | null>(null);
   const [leadScore, setLeadScore] = useState<LeadScoreRecord | null>(null);
+  const [scoreRevisionBounds, setScoreRevisionBounds] = useState<ScoreRevisionBounds | null>(null);
   const [interests, setInterests] = useState<ContactCatalogInterestWithItem[]>([]);
   const [objections, setObjections] = useState<ContactObjection[]>([]);
   const [objectionOccurrences, setObjectionOccurrences] = useState<ConversationObjectionOccurrence[]>([]);
@@ -220,6 +227,7 @@ export function IntelligenceSidebar({
   const fetchIntelligenceData = useCallback(async () => {
     if (!contact || !accountId) return;
     setLoadingIntel(true);
+    setScoreRevisionBounds(null);
     const supabase = createClient();
 
     try {
@@ -254,6 +262,19 @@ export function IntelligenceSidebar({
 
       if (scoreRes.data) setLeadScore(scoreRes.data as LeadScoreRecord);
       else setLeadScore(null);
+
+      // Older records can omit calculation metadata. Read only the immutable
+      // revision attached to this score; never substitute today's configuration.
+      const scoreRecord = scoreRes.data as LeadScoreRecord | null;
+      if (scoreRecord?.scoring_revision_id &&
+        (scoreRecord.breakdown?.raw_score === undefined || scoreRecord.breakdown?.min_score === undefined)) {
+        const { data: revision } = await supabase.from("lead_scoring_revisions")
+          .select("snapshot")
+          .eq("account_id", accountId)
+          .eq("id", scoreRecord.scoring_revision_id)
+          .maybeSingle();
+        if (revision?.snapshot) setScoreRevisionBounds(revision.snapshot as ScoreRevisionBounds);
+      }
 
       if (interestsRes.data) setInterests(interestsRes.data as unknown as ContactCatalogInterestWithItem[]);
       else setInterests([]);
@@ -381,6 +402,9 @@ export function IntelligenceSidebar({
   const isScoringSufficient = leadScore?.breakdown?.is_sufficient ?? (hasMatchedRules || hasCommercialIntent || hasCatalogOrObjections);
 
   const scoreValue = leadScore?.score ?? null;
+  const scoreExplanation = scoreValue !== null && leadScore?.breakdown
+    ? getScoreExplanation(scoreValue, leadScore.breakdown, scoreRevisionBounds)
+    : null;
   const isHot = scoreValue !== null && scoreValue >= 70;
   const isWarm = scoreValue !== null && scoreValue >= 40 && scoreValue < 70;
 
@@ -606,35 +630,59 @@ export function IntelligenceSidebar({
                     <button
                       type="button"
                       onClick={() => setShowScoreBreakdown(!showScoreBreakdown)}
-                      className="text-[11px] text-primary hover:underline flex items-center gap-1 font-medium"
+                      aria-expanded={showScoreBreakdown}
+                      aria-controls={`score-breakdown-${contact.id}`}
+                      className={cn(
+                        "flex min-h-9 w-full items-center justify-between gap-2 rounded-md border px-2.5 py-2 text-left text-xs font-semibold text-primary transition-colors hover:bg-primary/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+                        showScoreBreakdown ? "border-primary/25 bg-primary/5" : "border-border/70 bg-muted/30",
+                      )}
                     >
-                      {showScoreBreakdown ? <ChevronUp className="size-3" /> : <ChevronDown className="size-3" />}
-                      {showScoreBreakdown ? "Ocultar detalhes do cálculo" : "Como este score foi calculado?"}
+                      <span>{showScoreBreakdown ? "Ocultar detalhes do cálculo" : "Como este score foi calculado?"}</span>
+                      <ChevronDown aria-hidden="true" className={cn("size-3.5 shrink-0", showScoreBreakdown && "rotate-180")} />
                     </button>
 
                     {showScoreBreakdown && (
-                      <div className="mt-2 space-y-1.5 bg-muted/40 p-2.5 rounded-lg border border-border/60 text-xs">
+                      <div id={`score-breakdown-${contact.id}`} className="mt-2 space-y-1.5 bg-muted/40 p-2.5 rounded-lg border border-border/60 text-xs">
+                        {scoreExplanation?.base !== null && scoreExplanation?.base !== undefined && scoreExplanation.base !== 0 && (
+                          <div className="flex items-center justify-between gap-2 text-[11px]">
+                            <span className="text-foreground font-medium">Pontuação base da revisão</span>
+                            <span className="shrink-0 tabular-nums font-semibold">{scoreExplanation.base} pts</span>
+                          </div>
+                        )}
                         {leadScore.breakdown.contributions && leadScore.breakdown.contributions.length > 0
                           ? leadScore.breakdown.contributions.map((c, idx) => (
-                              <div key={idx} className="flex items-center justify-between text-[11px]">
+                              <div key={idx} className="flex items-center justify-between gap-2 text-[11px]">
                                 <span className="text-foreground font-medium">
                                   {c.label || c.rule_key}
                                 </span>
-                                <span className={cn("font-mono font-semibold", c.points > 0 ? "text-emerald-500" : "text-muted-foreground")}>
+                                <span className={cn("shrink-0 tabular-nums font-mono font-semibold", c.points > 0 ? "text-emerald-500" : "text-muted-foreground")}>
                                   {c.points > 0 ? `+${c.points}` : `${c.points}`} pts
                                 </span>
                               </div>
                             ))
                           : leadScore.breakdown.rule_results?.map((r, idx) => (
-                              <div key={idx} className="flex items-center justify-between text-[11px]">
+                              <div key={idx} className="flex items-center justify-between gap-2 text-[11px]">
                                 <span className={cn(r.matched ? "text-foreground font-medium" : "text-muted-foreground")}>
                                   {r.label || r.rule_key}
                                 </span>
-                                <span className={cn("font-mono font-semibold", r.points > 0 ? "text-emerald-500" : "text-muted-foreground")}>
+                                <span className={cn("shrink-0 tabular-nums font-mono font-semibold", r.points > 0 ? "text-emerald-500" : "text-muted-foreground")}>
                                   {r.points > 0 ? `+${r.points}` : `${r.points}`} pts
                                 </span>
                               </div>
                             ))}
+                        <div className="border-t border-border/70 pt-2 space-y-1">
+                          <div className="flex items-center justify-between gap-2 font-semibold text-foreground">
+                            <span>{scoreExplanation?.clamped ? "Pontuação calculada" : "Score final"}</span>
+                            <span className="shrink-0 tabular-nums">
+                              {scoreExplanation?.clamped ? `${scoreExplanation.raw} → ${scoreValue}` : scoreValue} pts
+                            </span>
+                          </div>
+                          {scoreExplanation && scoreExplanation.raw <= scoreExplanation.minimum && (
+                            <p className="text-[11px] leading-relaxed text-muted-foreground">
+                              O score mínimo é {scoreExplanation.minimum} pontos.
+                            </p>
+                          )}
+                        </div>
                       </div>
                     )}
                   </div>
