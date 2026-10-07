@@ -5,7 +5,7 @@ import crypto from 'node:crypto';
 import { createClient } from '@supabase/supabase-js';
 
 const [mode, envFile, accessFile, stateFile] = process.argv.slice(2);
-if (!['snapshot', 'configure', 'create', 'inspect', 'append', 'cleanup'].includes(mode) || !stateFile) {
+if (!['snapshot', 'configure', 'create', 'inspect', 'append', 'duplicate', 'cleanup'].includes(mode) || !stateFile) {
   throw new Error('Usage: script MODE staging-env operator-manifest probe-state');
 }
 const env = Object.fromEntries(fs.readFileSync(envFile, 'utf8').split(/\r?\n/)
@@ -101,17 +101,54 @@ async function main() {
     }
     console.log(JSON.stringify(result, null, 2));
   }
+  if (mode === 'duplicate') {
+    // Separate RPC stress probe; never presented as an LLM/provider result.
+    const probe = state.probes.find(p => p.accountId === accountId);
+    if (!probe) throw new Error('No isolated persistence probe');
+    const id = crypto.randomUUID(), createdAt = new Date().toISOString();
+    probe.messageIds.push(id); save();
+    await checked(db.from('messages').insert({ id, conversation_id: probe.conversationId, sender_type: 'customer',
+      content_type: 'text', status: 'delivered', content_text: 'quero comprar', created_at: createdAt }));
+    const claim = await checked(db.rpc('claim_conversation_analysis_run', { p_account_id: accountId, p_conversation_id: probe.conversationId,
+      p_extractor_version: 'v1', p_prompt_version: 'v1', p_provider: 'gemini', p_model: 'gemini-3.5-flash-lite', p_batch_limit: 25, p_lease_seconds: 300 }));
+    if (claim.status !== 'claimed') throw new Error('Persistence probe was not claimed');
+    const dedupeKey = 'certification-duplicate-' + id;
+    const observation = { insight_type: 'intent', value_text: 'purchase', value_json: {}, confidence: 0.8,
+      source: 'intelligence', dedupe_key: dedupeKey, observed_at: createdAt,
+      evidence: [{ message_id: id, start_offset: 0, end_offset: 13, snippet: 'quero comprar' }] };
+    const persisted = await checked(db.rpc('persist_conversation_analysis_batch', { p_account_id: accountId,
+      p_conversation_id: probe.conversationId, p_run_id: claim.run_id, p_extractor_version: 'v1',
+      p_insights: [observation, { ...observation, confidence: 0.9 }], p_analyzed_message_ids: [id],
+      p_last_message_id: id, p_last_message_created_at: createdAt, p_input_tokens: 0, p_output_tokens: 0, p_total_tokens: 0, p_latency_ms: 0 }));
+    const facts = await checked(db.from('conversation_insights').select('confidence,analysis_run_id').eq('account_id', accountId).eq('conversation_id', probe.conversationId).eq('dedupe_key', dedupeKey));
+    if (persisted.status !== 'completed' || facts.length !== 1 || Number(facts[0].confidence) !== 0.8 || facts[0].analysis_run_id !== claim.run_id) throw new Error('Duplicate mutated facts');
+    console.log(JSON.stringify({ duplicatePersistence: 'PASS', uniqueFacts: facts.length, confidencePreserved: true, provenancePreserved: true, runId: claim.run_id }));
+  }
   if (mode === 'cleanup') {
     const errors = [];
+    const retainedAuditContacts = [];
     for (const probe of state.probes) {
+      // Analyzed-message references intentionally restrict message deletion.
+      // Remove only our disposable probe markers before deleting its chat.
+      const markers = await db.from('conversation_analysis_messages').delete().eq('account_id', probe.accountId).eq('conversation_id', probe.conversationId);
+      if (markers.error) errors.push({ table: 'conversation_analysis_messages', error: markers.error.message });
+      const evidence = await db.from('conversation_insight_evidence').delete().eq('account_id', probe.accountId).eq('conversation_id', probe.conversationId);
+      if (evidence.error) errors.push({ table: 'conversation_insight_evidence', error: evidence.error.message });
+      const history = await db.from('contact_lead_score_history').select('id', { count: 'exact', head: true }).eq('account_id', probe.accountId).eq('contact_id', probe.contactId);
+      if (history.error) throw new Error(history.error.message);
       for (const [table, key, value] of [['conversations', 'id', probe.conversationId], ['contacts', 'id', probe.contactId]]) {
+        if (table === 'contacts' && history.count > 0) {
+          // Preserve the immutable scoring ledger and its parent contact.
+          retainedAuditContacts.push({ accountId: probe.accountId, contactId: probe.contactId, reason: 'immutable_scoring_history' });
+          continue;
+        }
         const { error } = await db.from(table).delete().eq('account_id', probe.accountId).eq(key, value);
         if (error) errors.push({ table, error: error.message });
       }
     }
-    const after = await protectedRows(); state.protectedAfter = after; state.cleanupErrors = errors; save();
+    const after = await protectedRows(); state.protectedAfter = after; state.cleanupErrors = errors; state.retainedAuditContacts = retainedAuditContacts; save();
     if (errors.length || state.protectedBefore.hash !== after.hash) throw new Error(JSON.stringify({ errors, protectedDataChanged: state.protectedBefore.hash !== after.hash }));
-    console.log(JSON.stringify({ cleanup: 'PASS', protectedBefore: state.protectedBefore.hash, protectedAfter: after.hash }));
+    console.log(JSON.stringify({ cleanup: 'PASS', retainedAuditContacts, protectedBefore: state.protectedBefore.hash, protectedAfter: after.hash }));
   }
 }
 main().catch(error => { console.error(error.message); process.exitCode = 1; });

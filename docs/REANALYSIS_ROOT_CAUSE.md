@@ -30,4 +30,16 @@ Evidências anteriores a qualquer mudança de configuração: `artifacts/reanaly
 
 Arquivos: `src/lib/intelligence/on-demand.ts` (cliente de worker correto e propagação de falhas); `src/lib/intelligence/errors.ts` (erros seguros de domínio); `src/app/api/ai/on-demand/route.ts` (status explícito); testes focados do serviço/rota; script de certificação staging isolado e relatório.
 
-Não alterar Auth, grants/RLS, migrations/schema, scoring, UI aprovada ou produção. Completar configuração de IA do tenant de staging pelo RPC vigente, usando credencial já existente exclusivamente no projeto staging e modo manual. Preparar uma conversa temporária para análise real, com cleanup confiável, preservando os cinco registros aprovados. Configuração comercial/scoring de certificação deve usar contratos existentes e não forjar scores/perfis.
+Não alterar Auth, grants/RLS, scoring, UI aprovada ou produção. Completar configuração de IA do tenant de staging pelo RPC vigente, usando credencial já existente exclusivamente no projeto staging e modo manual. Preparar uma conversa temporária para análise real, com cleanup confiável, preservando os cinco registros aprovados. Configuração comercial/scoring de certificação deve usar contratos existentes e não forjar scores/perfis.
+
+## Complemento após reprodução real e inspeção SQL
+
+Após configurar o tenant pelo RPC vigente, o candidate anterior retornou novamente HTTP 500: `claimAnalysisRun failed: permission denied for function claim_conversation_analysis_run`. Isso confirma o segundo problema por chamada real no endereço público, não somente inspeção de código.
+
+O patch do servidor permitiu quatro chamadas reais de análise (duas etapas, dois tenants), com persistência de resumo, próxima ação, intenção e urgência. O scoring do tenant operacional existente também persistiu resultado real. Não foi criada ou alterada configuração de scoring no tenant dos cinco fixtures: nesse tenant, scoring operacional não está configurado; os cinco scores históricos foram preservados.
+
+A auditoria adicional comprovou um terceiro defeito limitado à persistência de observações duplicadas. A função vigente de migration 075 faz `ON CONFLICT ... DO UPDATE` de campos factuais/proveniência, enquanto o trigger de migration 047 proíbe essa alteração. Definição real de staging antes: hash `8b79c1a47485a91f5e8998bc798edfcb`, ACL `{postgres=X/postgres,service_role=X/postgres}`. Um teste PostgreSQL local usando os corpos reais reproduziu SQLSTATE 23514 com duas observações de mesma identidade/evidência.
+
+Correção adicional comprovadamente necessária: migration **095**, idempotente e com precondição, muda somente esse upsert para atualizar `updated_at`, preservando fatos originais, evidências, checkpoints, projeção, dirty-state e ACL. Não altera tabelas, schema estrutural, triggers, RLS ou grants. Aplicada **somente no projeto staging** pelo painel `crm-whatsapp-staging`, ref `pxpnkaakurjwpfuezpob`. Definição após: hash `90612e3e4e8e2a5e554d0f779bd914db`, mesma ACL. Produção permanece com sua configuração/função anterior, sem aplicação de SQL.
+
+O cleanup de probes analisados respeita as referências de evidência e os ledgers imutáveis: remove apenas marcadores/evidências/conversas descartáveis de certificação; mantém o contato de auditoria quando existe histórico de scoring imutável. Nenhum trigger/ledger é desabilitado ou apagado para viabilizar cleanup. O hash A–E permanece igual antes/depois.
