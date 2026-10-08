@@ -28,7 +28,7 @@ it('deduplicates factual observations without mutating provenance or weakening i
     CREATE FUNCTION project_contact_commercial_state(uuid,uuid,text) RETURNS jsonb LANGUAGE sql AS $$SELECT '{}'::jsonb$$;
   `);
   const migrations = path.join(process.cwd(), 'supabase/migrations');
-  const triggerSql = fs.readFileSync(path.join(migrations, '047_conversation_insights_and_evidence.sql'), 'utf8')
+  const triggerSql = fs.readFileSync(path.join(migrations, '056_security_search_path_and_privilege_hardening.sql'), 'utf8')
     .match(/CREATE OR REPLACE FUNCTION public\.trg_protect_conversation_insights_immutability\(\)[\s\S]*?\$\$;/)![0];
   await db.exec(triggerSql);
   await db.exec('CREATE TRIGGER protect BEFORE UPDATE ON conversation_insights FOR EACH ROW EXECUTE FUNCTION trg_protect_conversation_insights_immutability();');

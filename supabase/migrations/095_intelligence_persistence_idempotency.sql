@@ -1,7 +1,7 @@
 -- Preserve the factual immutability contract on duplicate observations.
 -- Migration 075's upsert overwrites protected provenance/fields on conflict;
 -- repeated observations can therefore fail the entire analysis transaction.
--- Change only that upsert back to metadata touch, preserving evidence append,
+-- Reuse the original fact without UPDATE (including metadata), preserving evidence append,
 -- checkpoints, projection, dirty-state handling, and existing execute ACLs.
 DO $patch$
 DECLARE
@@ -10,17 +10,17 @@ DECLARE
   v_patched text;
   v_acl aclitem[];
   v_acl_after aclitem[];
-  v_pattern text := 'DO UPDATE SET\s+value_text = EXCLUDED\.value_text,\s+value_json = EXCLUDED\.value_json,\s+confidence = EXCLUDED\.confidence,\s+catalog_item_id = EXCLUDED\.catalog_item_id,\s+analysis_run_id = EXCLUDED\.analysis_run_id,\s+observed_at = EXCLUDED\.observed_at,\s+updated_at = v_now\s+RETURNING id INTO v_new_insight_id;';
+  v_pattern text := 'DO UPDATE SET\s+(value_text = EXCLUDED\.value_text,\s+value_json = EXCLUDED\.value_json,\s+confidence = EXCLUDED\.confidence,\s+catalog_item_id = EXCLUDED\.catalog_item_id,\s+analysis_run_id = EXCLUDED\.analysis_run_id,\s+observed_at = EXCLUDED\.observed_at,\s+)?updated_at = v_now\s+RETURNING id INTO v_new_insight_id;';
 BEGIN
   SELECT pg_get_functiondef(v_oid), proacl INTO v_definition, v_acl FROM pg_proc WHERE oid = v_oid;
   IF v_definition !~ v_pattern THEN
-    IF v_definition ~ 'DO UPDATE SET\s+updated_at = v_now\s+RETURNING id INTO v_new_insight_id;' THEN
+    IF v_definition ~ 'DO NOTHING\s+RETURNING id INTO v_new_insight_id;\s+-- Reuse immutable factual observation' THEN
       RETURN; -- Already applied; safe to repeat.
     END IF;
     RAISE EXCEPTION 'Persistence patch precondition failed: unexpected function definition';
   END IF;
   v_patched := regexp_replace(v_definition, v_pattern,
-    E'DO UPDATE SET updated_at = v_now\n      RETURNING id INTO v_new_insight_id;');
+    E'DO NOTHING\n      RETURNING id INTO v_new_insight_id;\n      -- Reuse immutable factual observation and append evidence below.\n      IF v_new_insight_id IS NULL THEN\n        SELECT id INTO v_new_insight_id\n        FROM public.conversation_insights\n        WHERE account_id = p_account_id\n          AND conversation_id = p_conversation_id\n          AND dedupe_key = v_insight_elem->>''dedupe_key''\n          AND status = ''active'';\n      END IF;');
   EXECUTE v_patched;
   SELECT proacl INTO v_acl_after FROM pg_proc WHERE oid = v_oid;
   IF v_acl_after IS DISTINCT FROM v_acl THEN
