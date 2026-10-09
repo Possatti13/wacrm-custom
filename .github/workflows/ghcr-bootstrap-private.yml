@@ -118,7 +118,15 @@ jobs:
                   raise RuntimeError('Blob upload initialization failed')
               location = urllib.parse.urljoin(registry + '/', headers['Location'])
               parsed = urllib.parse.urlsplit(location)
-              if parsed.scheme != 'https' or parsed.netloc != 'ghcr.io' or not parsed.path.startswith('/v2/possatti13/ciclopes/blobs/uploads/'):
+              # OCI Location is opaque: GHCR may use a different upload route.
+              # Keep authentication confined to HTTPS on this exact registry/repository.
+              print(json.dumps({
+                  'uploadLocationHttps': parsed.scheme == 'https',
+                  'uploadLocationSameHost': parsed.netloc == 'ghcr.io',
+                  'uploadLocationSameRepository': parsed.path.startswith('/v2/possatti13/ciclopes/'),
+                  'uploadLocationUsesPluralRoute': parsed.path.startswith('/v2/possatti13/ciclopes/blobs/uploads/'),
+              }))
+              if parsed.scheme != 'https' or parsed.netloc != 'ghcr.io' or not parsed.path.startswith('/v2/possatti13/ciclopes/'):
                   raise RuntimeError('Unexpected blob upload destination')
               query = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
               query.append(('digest', config_digest))
