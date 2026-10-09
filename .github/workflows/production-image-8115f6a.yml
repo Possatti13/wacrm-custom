@@ -1,0 +1,151 @@
+name: Ciclopes production image 8115f6a
+
+# Preparing/pushing the infrastructure branch cannot start a build.
+# Create this distinct execution ref only after the registry/pull gates are approved.
+on:
+  push:
+    branches: [codex/run-production-image-8115f6a]
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: ciclopes-production-image-8115f6a
+  cancel-in-progress: false
+
+jobs:
+  production-image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CANDIDATE_SHA: 8115f6a8dc84ef850a19fe9e24f5fcbfb1523f2e
+      IMAGE: ghcr.io/possatti13/ciclopes:8115f6a-prod
+    steps:
+      - name: Require completed registry and pull preparation
+        env:
+          PRIVATE_ACCESS_CONFIRMED: ${{ vars.CICLOPES_GHCR_PRIVATE_ACCESS_CONFIRMED }}
+          VPS_PULL_READY: ${{ vars.CICLOPES_VPS_PULL_READY }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$PRIVATE_ACCESS_CONFIRMED" = true
+          test "$VPS_PULL_READY" = true
+          test "$(gh api users/Possatti13/packages/container/ciclopes --jq '.visibility')" = private
+
+      - name: Checkout builder infrastructure
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          path: builder
+          persist-credentials: false
+
+      - name: Checkout the exact approved candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: 8115f6a8dc84ef850a19fe9e24f5fcbfb1523f2e
+          path: candidate
+          persist-credentials: false
+
+      - name: Verify source and prepare a clean build context
+        run: |
+          set -euo pipefail
+          test "$(git -C candidate rev-parse HEAD)" = "$CANDIDATE_SHA"
+          test -z "$(git -C candidate status --porcelain)"
+          echo 'a8c7e71f94e084d5803c99543540d2f5defadb6c59acc0aa7f4945212f85551b  builder/deploy/builder/Dockerfile' | sha256sum --check
+          mkdir "$RUNNER_TEMP/ciclopes-context"
+          git -C candidate archive --format=tar --output="$RUNNER_TEMP/candidate.tar" "$CANDIDATE_SHA"
+          tar -xf "$RUNNER_TEMP/candidate.tar" -C "$RUNNER_TEMP/ciclopes-context"
+          cp builder/deploy/builder/context.dockerignore "$RUNNER_TEMP/ciclopes-context/.dockerignore"
+          test ! -d "$RUNNER_TEMP/ciclopes-context/.git"
+          test -z "$(find "$RUNNER_TEMP/ciclopes-context" -type f -name '.env*' ! -name '*.example' -print -quit)"
+          printf 'Candidate checkout: `%s`\n' "$CANDIDATE_SHA" >> "$GITHUB_STEP_SUMMARY"
+          sha256sum "$RUNNER_TEMP/candidate.tar" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Authenticate only to GHCR
+        env:
+          GHCR_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          # Tags are never overwritten. Non-404 errors must fail closed.
+          set +e
+          docker manifest inspect "$IMAGE" > "$RUNNER_TEMP/existing-manifest.json" 2> "$RUNNER_TEMP/manifest-check.log"
+          status=$?
+          set -e
+          if [ "$status" -eq 0 ]; then
+            echo 'The approved image tag already exists; refusing to overwrite it.' >&2
+            exit 1
+          fi
+          grep -Eq 'manifest unknown|no such manifest|not found' "$RUNNER_TEMP/manifest-check.log"
+
+      - name: Build using production public settings only
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ vars.CICLOPES_PROD_NEXT_PUBLIC_SUPABASE_URL }}
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ vars.CICLOPES_PROD_NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+          NEXT_PUBLIC_SITE_URL: ${{ vars.CICLOPES_PROD_NEXT_PUBLIC_SITE_URL }}
+          NEXT_PUBLIC_APP_LOCALE: ${{ vars.CICLOPES_PROD_NEXT_PUBLIC_APP_LOCALE }}
+        run: |
+          set -euo pipefail
+          test "$NEXT_PUBLIC_SUPABASE_URL" = https://vutyeaytyksciiykddyh.supabase.co
+          test "$NEXT_PUBLIC_SITE_URL" = https://app.ciclopes.com.br
+          test -n "$NEXT_PUBLIC_SUPABASE_ANON_KEY"
+          test -n "$NEXT_PUBLIC_APP_LOCALE"
+          python3 - <<'PY'
+          import base64, hashlib, json, os
+          key = os.environ['NEXT_PUBLIC_SUPABASE_ANON_KEY']
+          if key.startswith('eyJ'):
+              payload = key.split('.')[1]
+              claims = json.loads(base64.urlsafe_b64decode(payload + '=' * (-len(payload) % 4)))
+              assert claims.get('role') == 'anon'
+              assert claims.get('ref') == 'vutyeaytyksciiykddyh'
+          else:
+              assert key.startswith('sb_publishable_')
+          keys = ['NEXT_PUBLIC_SUPABASE_URL', 'NEXT_PUBLIC_SUPABASE_ANON_KEY', 'NEXT_PUBLIC_SITE_URL', 'NEXT_PUBLIC_APP_LOCALE']
+          with open(os.environ['RUNNER_TEMP'] + '/public-build-args.json', 'w') as out:
+              json.dump({k: {'sha256': hashlib.sha256(os.environ[k].encode()).hexdigest()} for k in keys}, out, indent=2)
+          PY
+          docker build --platform linux/amd64 \
+            --file builder/deploy/builder/Dockerfile --tag "$IMAGE" \
+            --build-arg NEXT_PUBLIC_SUPABASE_URL \
+            --build-arg NEXT_PUBLIC_SUPABASE_ANON_KEY \
+            --build-arg NEXT_PUBLIC_SITE_URL \
+            --build-arg NEXT_PUBLIC_APP_LOCALE \
+            "$RUNNER_TEMP/ciclopes-context"
+
+      - name: Verify image and record BUILD_ID before publication
+        run: |
+          set -euo pipefail
+          docker image inspect "$IMAGE" > "$RUNNER_TEMP/image-inspect.json"
+          python3 - <<'PY'
+          import json, os
+          with open(os.environ['RUNNER_TEMP'] + '/image-inspect.json') as src:
+              image = json.load(src)[0]
+          keys = {item.split('=', 1)[0] for item in image['Config'].get('Env', [])}
+          assert keys <= {'PATH', 'NODE_VERSION', 'YARN_VERSION', 'NODE_ENV', 'NEXT_TELEMETRY_DISABLED', 'PORT', 'HOSTNAME'}
+          assert image['Config']['User'] == 'nextjs'
+          assert image['Architecture'] == 'amd64'
+          PY
+          container_id=$(docker create --network none "$IMAGE")
+          trap 'docker rm "$container_id" >/dev/null' EXIT
+          docker cp "$container_id:/app/.next/BUILD_ID" "$RUNNER_TEMP/BUILD_ID"
+          test -s "$RUNNER_TEMP/BUILD_ID"
+          printf '\nBuild: PASS\nImage tag: `%s`\nBUILD_ID: `%s`\n' "$IMAGE" "$(cat "$RUNNER_TEMP/BUILD_ID")" >> "$GITHUB_STEP_SUMMARY"
+          printf 'Runtime production secrets were not supplied to this runner or build.\n' >> "$GITHUB_STEP_SUMMARY"
+          cat "$RUNNER_TEMP/public-build-args.json" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish and verify private package and digest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$(gh api users/Possatti13/packages/container/ciclopes --jq '.visibility')" = private
+          docker push "$IMAGE"
+          digest=$(docker image inspect "$IMAGE" --format '{{index .RepoDigests 0}}')
+          [[ "$digest" =~ ^ghcr\.io/possatti13/ciclopes@sha256:[a-f0-9]{64}$ ]]
+          test "$(gh api users/Possatti13/packages/container/ciclopes --jq '.visibility')" = private
+          printf '\nCertified registry digest: `%s`\nPackage visibility: private\n' "$digest" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Remove ephemeral registry login
+        if: always()
+        run: docker logout ghcr.io
