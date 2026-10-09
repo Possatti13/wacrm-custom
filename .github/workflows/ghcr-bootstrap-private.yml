@@ -57,6 +57,8 @@ jobs:
                   with opener.open(req, timeout=30) as response:
                       return response.status, response.headers, response.read()
               except urllib.error.HTTPError as error:
+                  # Status and fixed registry error codes only; never print body/message/URL.
+                  print(json.dumps({'operation': stage, 'method': method, 'httpStatus': error.code}))
                   return error.code, error.headers, error.read()
 
           def require_private():
@@ -158,8 +160,17 @@ jobs:
               print(json.dumps(evidence, indent=2))
               with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
                   summary.write('## GHCR bootstrap PASS\n\n```json\n' + json.dumps(evidence, indent=2) + '\n```\n')
-          except Exception:
+          except Exception as error:
               # Never log response bodies, auth headers, upload URLs, tokens or exception messages.
-              print(json.dumps({'bootstrap': 'FAIL', 'stage': stage, 'credentialsLogged': False}), file=sys.stderr)
+              safe_reasons = {
+                  'Package preflight failed', 'Existing package is not private',
+                  'GITHUB_TOKEN cannot publish to GHCR', 'Refusing to overwrite different bootstrap artifact',
+                  'Bootstrap tag preflight failed', 'Blob upload initialization failed',
+                  'Unexpected blob upload destination', 'Empty config upload failed',
+                  'Bootstrap publication failed', 'Private package verification failed',
+                  'Publication access was not retained', 'Unexpected registry redirect',
+              }
+              reason = str(error) if str(error) in safe_reasons else type(error).__name__
+              print(json.dumps({'bootstrap': 'FAIL', 'stage': stage, 'httpStatus': status, 'safeReason': reason, 'credentialsLogged': False}), file=sys.stderr)
               sys.exit(1)
           PY
