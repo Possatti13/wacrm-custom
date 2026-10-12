@@ -29,6 +29,8 @@ import {
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { getContactDisplayName, getContactInitials } from "@/lib/contacts/display";
+import { getMessagePresentation } from "@/lib/messages/presentation";
+import { sortConversationsForDisplay } from "@/lib/inbox/presentation";
 
 interface ConversationListProps {
   activeConversationId: string | null;
@@ -198,7 +200,7 @@ export function ConversationList({
       });
     }
 
-    return result;
+    return sortConversationsForDisplay(result, mainSegment);
   }, [
     conversations,
     mainSegment,
@@ -443,7 +445,7 @@ export function ConversationList({
 
                     <div className="flex items-center justify-between gap-2 mt-1">
                       <p className="truncate text-xs text-muted-foreground leading-tight">
-                        {conv.last_message_text || "Sem mensagens recentes"}
+                        {getMessagePresentation({ content_text: conv.last_message_text }).text || "Sem mensagens recentes"}
                       </p>
 
                       {conv.unread_count > 0 ? (

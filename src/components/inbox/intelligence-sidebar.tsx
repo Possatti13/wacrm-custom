@@ -43,6 +43,8 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { getContactDisplayName, getContactInitials } from "@/lib/contacts/display";
 import { formatPhoneNumber, isValidDisplayPhone } from "@/lib/whatsapp/phone-utils";
 import { getScoreExplanation, type ScoreRevisionBounds } from "./score-explanation";
+import { getInsightPresentation } from "@/lib/intelligence/presentation";
+import { InsightEvidenceText, InsightValueText } from "./insight-presentation";
 
 interface IntelligenceSidebarProps {
   contact: Contact | null;
@@ -810,14 +812,19 @@ export function IntelligenceSidebar({
           )}
 
           {/* 8. SINAIS FATUAIS & EVIDÊNCIAS (Inline Disclosure) */}
-          {insights.length > 0 && (
-            <div className="rounded-xl border border-border/80 bg-card p-3.5 space-y-2 shadow-xs">
+          {[
+            { title: "Sinais Fatuais da Conversa", available: true },
+            { title: "Registros históricos", available: false },
+          ].map(group => {
+            const records = insights.filter(ins => getInsightPresentation(ins).available === group.available);
+            return records.length > 0 && (
+            <div key={group.title} className="rounded-xl border border-border/80 bg-card p-3.5 space-y-2 shadow-xs">
               <span className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5 font-sans">
                 <FileText className="size-3 text-primary" />
-                Sinais Fatuais da Conversa
+                {group.title}
               </span>
               <div className="space-y-2">
-                {insights.map((ins) => {
+                {records.map((ins) => {
                   const isExpanded = expandedEvidenceIds[ins.id];
                   const hasEvidence = ins.evidence && ins.evidence.length > 0;
 
@@ -827,15 +834,19 @@ export function IntelligenceSidebar({
                       className="p-2.5 rounded-lg bg-muted/20 border border-border/40 text-xs space-y-1.5"
                     >
                       <div className="flex items-start justify-between gap-2">
-                        <span className="font-semibold text-foreground text-xs leading-snug">
-                          {ins.value_text || ins.insight_type}
-                        </span>
-                        {ins.confidence && (
+                        <InsightValueText insight={ins} />
+                        {group.available && ins.confidence && (
                           <span className="text-[10px] font-mono text-muted-foreground shrink-0">
                             {Math.round(ins.confidence * 100)}%
                           </span>
                         )}
                       </div>
+
+                      {!group.available && (
+                        <p className="text-[10px] text-muted-foreground">
+                          {format(new Date(ins.created_at), "dd/MM 'às' HH:mm", { locale: ptBR })}
+                        </p>
+                      )}
 
                       {hasEvidence && (
                         <div>
@@ -845,14 +856,14 @@ export function IntelligenceSidebar({
                             className="text-[10px] text-primary hover:underline flex items-center gap-1 font-medium mt-0.5"
                           >
                             {isExpanded ? <ChevronUp className="size-3" /> : <ChevronDown className="size-3" />}
-                            {isExpanded ? "Ocultar evidência" : "Por que? ▼"}
+                            {isExpanded ? "Ocultar evidência" : group.available ? "Por que? ▼" : "Ver registro"}
                           </button>
 
                           {isExpanded && (
                             <div className="mt-1.5 p-2 rounded bg-muted/60 border border-border/60 text-[11px] text-foreground/80 space-y-1">
                               {ins.evidence.map((ev, evIdx) => (
                                 <div key={evIdx} className="space-y-0.5">
-                                  <p className="italic">&ldquo;{ev.snippet}&rdquo;</p>
+                                  <InsightEvidenceText snippet={ev.snippet} />
                                   {ev.created_at && (
                                     <p className="text-[9px] text-muted-foreground">
                                       {format(new Date(ev.created_at), "dd/MM 'às' HH:mm", { locale: ptBR })}
@@ -869,7 +880,8 @@ export function IntelligenceSidebar({
                 })}
               </div>
             </div>
-          )}
+          );
+          })}
 
           {/* 9. CRM CONTEXT: DEALS, NOTES & TAGS */}
           <div className="rounded-xl border border-border/80 bg-card p-3.5 space-y-3 shadow-xs">

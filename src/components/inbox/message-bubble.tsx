@@ -20,6 +20,7 @@ import { ReplyQuote } from "./reply-quote";
 import { MessageReactions } from "./message-reactions";
 import { InteractivePreview } from "@/components/interactive/interactive-preview";
 import { useTranslations } from "next-intl";
+import { getMessagePresentation } from "@/lib/messages/presentation";
 
 interface MessageBubbleProps {
   message: Message;
@@ -48,11 +49,11 @@ function StatusIcon({ status }: { status: Message["status"] }) {
   }
 }
 
-function MediaUnavailable({ label, t }: { label: string, t: ReturnType<typeof useTranslations> }) {
+function MediaUnavailable({ label }: { label: string }) {
   return (
     <div className="flex items-center gap-2 rounded-lg bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
       <ImageOff className="h-4 w-4 shrink-0 text-muted-foreground" />
-      <span>{t("unavailable", { label })}</span>
+      <span>{label}</span>
     </div>
   );
 }
@@ -121,11 +122,14 @@ function MediaImage({ url, alt }: { url: string; alt: string }) {
 }
 
 function MessageContent({ message, t }: { message: Message, t: ReturnType<typeof useTranslations> }) {
+  const presentation = getMessagePresentation(message);
+  const text = presentation.text;
+  const caption = presentation.caption;
   switch (message.content_type) {
     case "text":
       return (
         <p className="whitespace-pre-wrap break-words text-sm">
-          {message.content_text}
+          {text}
         </p>
       );
 
@@ -135,11 +139,11 @@ function MessageContent({ message, t }: { message: Message, t: ReturnType<typeof
           {message.media_url ? (
             <MediaImage url={message.media_url} alt="Shared image" />
           ) : (
-            <MediaUnavailable label={t("photo")} t={t} />
+            <MediaUnavailable label={presentation.mediaLabel || t("photo")} />
           )}
-          {message.content_text && (
+          {caption && (
             <p className="mt-1 whitespace-pre-wrap break-words text-sm">
-              {message.content_text}
+              {caption}
             </p>
           )}
         </div>
@@ -155,11 +159,11 @@ function MessageContent({ message, t }: { message: Message, t: ReturnType<typeof
               className="max-h-64 max-w-60 rounded-lg"
             />
           ) : (
-            <MediaUnavailable label={t("video")} t={t} />
+            <MediaUnavailable label={presentation.mediaLabel || t("video")} />
           )}
-          {message.content_text && (
+          {caption && (
             <p className="mt-1 whitespace-pre-wrap break-words text-sm">
-              {message.content_text}
+              {caption}
             </p>
           )}
         </div>
@@ -171,14 +175,15 @@ function MessageContent({ message, t }: { message: Message, t: ReturnType<typeof
           {message.media_url ? (
             <audio src={message.media_url} controls className="max-w-60" />
           ) : (
-            <MediaUnavailable label={t("audio")} t={t} />
+            <MediaUnavailable label={presentation.mediaLabel || t("audio")} />
           )}
+          {caption && <p className="mt-1 whitespace-pre-wrap break-words text-sm">{caption}</p>}
         </div>
       );
 
     case "document":
       if (!message.media_url) {
-        return <MediaUnavailable label={message.content_text || t("document")} t={t} />;
+        return <MediaUnavailable label={text || t("document")} />;
       }
       return (
         <a
@@ -189,7 +194,7 @@ function MessageContent({ message, t }: { message: Message, t: ReturnType<typeof
         >
           <FileText className="h-5 w-5 shrink-0 text-muted-foreground" />
           <span className="truncate">
-            {message.content_text || t("document")}
+            {caption || presentation.mediaLabel || t("document")}
           </span>
         </a>
       );
@@ -201,9 +206,9 @@ function MessageContent({ message, t }: { message: Message, t: ReturnType<typeof
             <LayoutTemplate className="h-3 w-3" />
             {t("template")}
           </span>
-          {message.content_text && (
+          {text && (
             <p className="mt-1 whitespace-pre-wrap break-words text-sm">
-              {message.content_text}
+              {text}
             </p>
           )}
         </div>
@@ -213,7 +218,7 @@ function MessageContent({ message, t }: { message: Message, t: ReturnType<typeof
       return (
         <div className="flex items-center gap-2 text-sm">
           <MapPin className="h-4 w-4 shrink-0 text-muted-foreground" />
-          <span>{message.content_text || t("locationShared")}</span>
+          <span>{text || t("locationShared")}</span>
         </div>
       );
 
@@ -238,14 +243,14 @@ function MessageContent({ message, t }: { message: Message, t: ReturnType<typeof
               {t("buttonReply")}
             </span>
             <p className="whitespace-pre-wrap break-words text-sm">
-              {message.content_text || t("interactiveReply")}
+              {text || t("interactiveReply")}
             </p>
           </div>
         );
       }
       return (
         <p className="whitespace-pre-wrap break-words text-sm">
-          {message.content_text || t("interactiveReply")}
+          {text || t("interactiveReply")}
         </p>
       );
     }
@@ -253,7 +258,7 @@ function MessageContent({ message, t }: { message: Message, t: ReturnType<typeof
     default:
       return (
         <p className="whitespace-pre-wrap break-words text-sm">
-          {message.content_text || t("unsupported")}
+          {text || t("unsupported")}
         </p>
       );
   }
@@ -292,7 +297,7 @@ export function MessageBubble({
         {reply && (
           <ReplyQuote
             authorLabel={reply.authorLabel}
-            preview={reply.preview}
+            preview={getMessagePresentation({ content_text: reply.preview }).text}
             onPrimary={isAgent}
           />
         )}
