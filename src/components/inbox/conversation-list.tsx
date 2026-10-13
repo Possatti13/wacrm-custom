@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { getMessagePresentation } from "@/lib/messages/presentation";
 import { sortConversationsForDisplay } from "@/lib/inbox/presentation";
 import { createClient } from "@/lib/supabase/client";
 import {
@@ -454,7 +455,7 @@ export function ConversationList({
 
                     <div className="flex items-center justify-between gap-2 mt-1">
                       <p className="truncate text-xs text-muted-foreground leading-tight">
-                        {conv.last_message_text || "Sem mensagens recentes"}
+                        {getMessagePresentation({ content_text: conv.last_message_text }).text || "Sem mensagens recentes"}
                       </p>
 
                       {conv.unread_count > 0 ? (

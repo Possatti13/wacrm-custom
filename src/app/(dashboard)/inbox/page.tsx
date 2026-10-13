@@ -1,14 +1,14 @@
 "use client";
 
 import { useState, useCallback, useEffect, useRef, useSyncExternalStore } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { createClient } from "@/lib/supabase/client";
 import {
   CONVERSATION_SELECT,
   normalizeConversation,
 } from "@/lib/inbox/conversations";
-import type { Conversation, Message, Contact, ConversationStatus } from "@/types";
+import type { Conversation, Message, ConversationStatus } from "@/types";
 import { useRealtime } from "@/hooks/use-realtime";
 import { mergeIncomingMessage, reconcileSentMessage, mergeMessageSnapshot } from "@/lib/inbox/message-state";
 import { ConversationList } from "@/components/inbox/conversation-list";
@@ -35,7 +35,6 @@ const serverWidth = () => false;
 
 export default function InboxPage() {
   const t = useTranslations("Inbox.page");
-  const router = useRouter();
   const searchParams = useSearchParams();
   /**
    * `?c=<id>` deep-link support. Used when landing here from the
@@ -45,9 +44,13 @@ export default function InboxPage() {
   const deepLinkConvId = searchParams.get("c");
 
   const [conversations, setConversations] = useState<Conversation[]>([]);
-  const [activeConversation, setActiveConversation] =
-    useState<Conversation | null>(null);
-  const [activeContact, setActiveContact] = useState<Contact | null>(null);
+  // The URL owns selection. Keep the selected row as a local snapshot for
+  // optimistic unread/status updates, never as a second selected ID.
+  const [selectedConversation, setActiveConversation] = useState<Conversation | null>(null);
+  const activeConversation = selectedConversation?.id === deepLinkConvId
+    ? selectedConversation
+    : conversations.find(conversation => conversation.id === deepLinkConvId) ?? null;
+  const activeContact = activeConversation?.contact ?? null;
   const [messageCache, setMessageCache] = useState<Record<string, Message[]>>({});
   const messages = messageCache[activeConversation?.id ?? ""] ?? [];
   const [whatsappConnected, setWhatsappConnected] = useState<boolean | null>(
@@ -99,12 +102,6 @@ export default function InboxPage() {
       return next;
     });
   }, []);
-
-  // Fire the deep-link auto-select exactly once per URL — subsequent
-  // list refreshes (realtime, manual refetch) must not snap the user
-  // back to the deep-linked conversation if they've already clicked
-  // elsewhere.
-  const autoSelectedForDeepLinkRef = useRef<string | null>(null);
 
   // Tracks conversations whose hydrate fetch is currently in flight. The
   // conv-INSERT and the first-message-INSERT events both call into
@@ -424,83 +421,33 @@ export default function InboxPage() {
     setResyncToken((n) => n + 1);
   }, []);
 
-  const handleConversationsLoaded = useCallback(
-    (loaded: Conversation[]) => {
-      setConversations(loaded);
-      // Resolve a pending deep-link here rather than in an effect — this
-      // is an event handler, so the setState calls below are allowed by
-      // react-hooks/set-state-in-effect. Runs once per ?c=<id> URL value
-      // via the ref, so realtime refreshes of the list can't snap the
-      // user back to the deep-linked thread after they've navigated.
-      if (
-        deepLinkConvId &&
-        autoSelectedForDeepLinkRef.current !== deepLinkConvId &&
-        loaded.length > 0
-      ) {
-        autoSelectedForDeepLinkRef.current = deepLinkConvId;
-        // If the deep-linked conversation is already the active one
-        // (e.g. because the user clicked it in the list and we
-        // router.replace()'d the URL, which made the ConversationList
-        // refetch and land us back here), do NOT re-apply it. Doing so
-        // would setMessages([]) on a thread whose messages have
-        // already been loaded by MessageThread — and because
-        // conversationId didn't change, MessageThread wouldn't
-        // refetch. The thread would read "No messages yet" until a
-        // full page reload rehydrated state from scratch.
-        if (activeConversation?.id === deepLinkConvId) return;
-        const match = loaded.find((c) => c.id === deepLinkConvId);
-        if (match) {
-          setActiveConversation(match);
-          setActiveContact(match.contact ?? null);
-          // Mirror the optimistic unread reset that handleSelectConversation
-          // does — the user just deep-linked into this conv, treat that the
-          // same as a click. Leaves activeConversation.unread_count alone so
-          // the MessageThread reset effect still fires the server UPDATE.
-          if (match.unread_count > 0) {
-            setConversations((prev) =>
-              prev.map((c) =>
-                c.id === match.id ? { ...c, unread_count: 0 } : c,
-              ),
-            );
-          }
-        }
-      }
-    },
-    [deepLinkConvId, activeConversation?.id]
-  );
+  const handleConversationsLoaded = useCallback((loaded: Conversation[]) => {
+    const selected = loaded.find(conversation => conversation.id === deepLinkConvId) ?? null;
+    // Preserve the raw unread count on the active row so MessageThread still
+    // persists its read receipt; the list may clear its badge optimistically.
+    setActiveConversation(selected);
+    setConversations(loaded.map(conversation => conversation.id === selected?.id && conversation.unread_count > 0
+      ? { ...conversation, unread_count: 0 } : conversation));
+  }, [deepLinkConvId]);
 
-  const handleSelectConversation = useCallback(
-    (conv: Conversation) => {
-      // Re-clicking the already-active conversation would clear the
-      // messages array, but the fetch effect in MessageThread only re-runs
-      // when conversationId changes — so messages would stay empty until
-      // the user navigated away and back. Bail out early instead.
-      if (activeConversation?.id === conv.id) return;
-      setActiveConversation(conv);
-      setActiveContact(conv.contact ?? null);
-      // Optimistically clear the unread badge for this conv.
-      setConversations((prev) =>
-        prev.map((c) =>
-          c.id === conv.id && c.unread_count > 0
-            ? { ...c, unread_count: 0 }
-            : c,
-        ),
-      );
-      autoSelectedForDeepLinkRef.current = conv.id;
-      router.replace(`/inbox?c=${conv.id}`, { scroll: false });
-    },
-    [activeConversation?.id, router]
-  );
+  const handleSelectConversation = useCallback((conv: Conversation) => {
+    if (new URLSearchParams(window.location.search).get("c") === conv.id) return;
+    // Next 16.2's optimized same-path navigation can reuse a stale canonical
+    // query from its route cache. This client-only selection uses Next's
+    // documented History API bridge, which also updates useSearchParams.
+    // No timeout, server navigation, or private router state manipulation.
+    window.history.replaceState(null, "", `/inbox?c=${encodeURIComponent(conv.id)}`);
+    setActiveConversation(conv);
+    setConversations(previous => previous.map(conversation =>
+      conversation.id === conv.id && conversation.unread_count > 0
+        ? { ...conversation, unread_count: 0 } : conversation));
+  }, []);
 
-  // Mobile "back" — deselect the conversation so the list pane comes
-  // back. Also clears the ?c= param so a refresh lands on the list
-  // instead of re-opening the thread the user just backed out of.
+  // Replace, rather than push: choosing a row does not add browser history.
   const handleCloseConversation = useCallback(() => {
+    window.history.replaceState(null, "", "/inbox");
     setActiveConversation(null);
-    setActiveContact(null);
-    autoSelectedForDeepLinkRef.current = null;
-    router.replace("/inbox", { scroll: false });
-  }, [router]);
+  }, []);
 
   const handleMessagesLoaded = useCallback((loaded: Message[], conversationId: string, before: Message[]) => {
     setMessageCache(previous => ({ ...previous,
