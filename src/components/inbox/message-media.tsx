@@ -78,8 +78,8 @@ function ImageAttempt({ url }: { url: string }) {
 
   if (failed) return <MediaUnavailable label="Imagem indisponível" retry={retry} />;
   return <Dialog open={open} onOpenChange={value => { setOpen(value); if (value) setExpandedFailed(false); }}>
-    <div className="relative w-72 max-w-full overflow-hidden rounded-lg bg-muted/30">
-      <DialogTrigger ref={trigger} disabled={!loaded} aria-label="Ampliar imagem" className="block w-full cursor-zoom-in rounded-lg focus-visible:outline-2 focus-visible:outline-offset-2 disabled:cursor-default">
+    <div className="relative w-72 max-w-full rounded-lg bg-muted/30">
+      <DialogTrigger ref={trigger} disabled={!loaded} aria-label="Ampliar imagem" className="block w-full cursor-zoom-in overflow-hidden rounded-lg focus-visible:outline-2 focus-visible:outline-offset-2 disabled:cursor-default">
         {/* Native image events reflect decoding; proxy fetch completion alone is not readiness. */}
         {src && <img ref={image} key={attempt} src={src} alt="Imagem da conversa" onLoad={() => setLoaded(true)} onError={() => setFailed(true)} className={`block max-h-72 w-full object-contain ${loaded ? '' : 'absolute inset-0 invisible'}`} />}
         {!loaded && <div className="h-44"><MediaLoading label="Carregando imagem" /></div>}
