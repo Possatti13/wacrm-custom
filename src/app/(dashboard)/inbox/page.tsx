@@ -528,11 +528,11 @@ export default function InboxPage() {
       <div className="flex flex-1 min-h-0 overflow-hidden min-w-0 w-full">
         {/* Left panel: Conversation list.
             Takes full width on mobile when no conversation is selected.
-            Fixed width (280–300px) on lg+. */}
+            Fixed width (320px) on lg+. */}
         <div
           className={cn(
             "h-full min-h-0 min-w-0",
-            hasActiveConv ? "hidden lg:flex lg:w-[280px] xl:w-[300px] shrink-0" : "flex w-full lg:w-[280px] xl:w-[300px] lg:shrink-0",
+            hasActiveConv ? "hidden lg:flex lg:w-[320px] shrink-0" : "flex w-full lg:w-[320px] lg:shrink-0",
           )}
         >
           <ConversationList
@@ -572,7 +572,7 @@ export default function InboxPage() {
 
         {/* Right panel: Continuous Intelligence & Context Sidebar (Desktop >= 1440px) */}
         {contactPanelOpen && (
-          <div className="hidden min-[1440px]:block w-[340px] shrink-0 h-full min-h-0 border-l border-border bg-card">
+          <div className="hidden min-[1440px]:block w-[360px] shrink-0 h-full min-h-0 border-l border-border bg-card">
             <IntelligenceSidebar
               contact={activeContact}
               conversationId={activeConversation?.id}

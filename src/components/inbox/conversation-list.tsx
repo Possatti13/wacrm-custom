@@ -236,8 +236,9 @@ export function ConversationList({
       {/* Top Header matching Visual Reference 4 */}
       <div className="p-3.5 pb-2 border-b border-border/60 space-y-3">
         <div className="flex items-center justify-between">
-          <h2 className="text-base font-bold tracking-tight text-foreground font-sans">
-            Conversas
+          <h2 className="text-base font-bold tracking-tight text-foreground font-sans lg:text-sm lg:font-semibold">
+            <span className="lg:hidden">Conversas</span>
+            <span className="hidden lg:inline">Caixa de entrada</span>
           </h2>
 
           {/* Advanced Filter Popover */}

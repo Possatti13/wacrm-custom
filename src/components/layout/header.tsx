@@ -49,12 +49,14 @@ function getPageTitleKey(pathname: string): string {
 }
 
 interface HeaderProps {
-  /** Wired to the shell's drawer state. Used only on mobile. */
+  /** Opens the existing navigation without reserving workspace width. */
   onOpenSidebar?: () => void;
+  sidebarOpen?: boolean;
+  sidebarTriggerRef?: React.Ref<HTMLButtonElement>;
   className?: string;
 }
 
-export function Header({ onOpenSidebar, className }: HeaderProps) {
+export function Header({ onOpenSidebar, sidebarOpen = false, sidebarTriggerRef, className }: HeaderProps) {
   const t = useTranslations("Header");
   const pathname = usePathname();
   const { profile, signOut } = useAuth();
@@ -69,12 +71,15 @@ export function Header({ onOpenSidebar, className }: HeaderProps) {
   return (
     <header className={cn("flex h-14 shrink-0 items-center justify-between gap-3 border-b border-border bg-card/60 backdrop-blur-xs px-4 lg:px-6", className)}>
       <div className="flex min-w-0 items-center gap-2">
-        {/* Hamburger — mobile only */}
+        {/* Workspace navigation */}
         <button
+          ref={sidebarTriggerRef}
           type="button"
           onClick={onOpenSidebar}
           aria-label={t("openMenu")}
-          className="flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground lg:hidden"
+          aria-expanded={sidebarOpen}
+          aria-haspopup="dialog"
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
           <Menu className="h-5 w-5" />
         </button>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { AuthProvider, useAuth } from "@/hooks/use-auth";
 import { Sidebar } from "@/components/layout/sidebar";
@@ -25,9 +25,9 @@ function DashboardShellInner({ children }: { children: React.ReactNode }) {
 
   const isInbox = pathname === "/inbox" || pathname?.startsWith("/inbox");
 
-  // Sidebar drawer state — only used on mobile. On lg+ the sidebar is
-  // always visible and this stays at `false` (ignored by the component).
+  // Navigation overlays the workspace; its opening control owns return focus.
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const sidebarTriggerRef = useRef<HTMLButtonElement>(null);
   const closeSidebar = useCallback(() => setSidebarOpen(false), []);
 
   useEffect(() => {
@@ -115,10 +115,12 @@ function DashboardShellInner({ children }: { children: React.ReactNode }) {
       {/* Reports this tab's online/away presence once we know a user is
           signed in. Headless — renders nothing. */}
       <PresenceHeartbeat />
-      <Sidebar open={sidebarOpen} onClose={closeSidebar} />
+      <Sidebar open={sidebarOpen} onClose={closeSidebar} triggerRef={sidebarTriggerRef} />
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden min-w-0 w-full">
         <Header
-          onOpenSidebar={() => setSidebarOpen(true)}
+          onOpenSidebar={() => setSidebarOpen(open => !open)}
+          sidebarOpen={sidebarOpen}
+          sidebarTriggerRef={sidebarTriggerRef}
           className={isInbox ? "hidden lg:flex" : "flex"}
         />
         {/* Responsive padding and scroll container */}

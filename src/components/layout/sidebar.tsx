@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useSyncExternalStore } from "react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/hooks/use-auth";
 import { useTotalUnread } from "@/hooks/use-total-unread";
@@ -40,6 +40,16 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useTranslations } from "next-intl";
+import { Sheet, SheetClose, SheetContent } from "@/components/ui/sheet";
+
+const desktopQuery = "(min-width: 1024px)";
+const subscribeDesktop = (listener: () => void) => {
+  const query = window.matchMedia(desktopQuery);
+  query.addEventListener("change", listener);
+  return () => query.removeEventListener("change", listener);
+};
+const readDesktop = () => window.matchMedia(desktopQuery).matches;
+const serverDesktop = () => false;
 
 const ROLE_CHIP: Record<
   AccountRole,
@@ -80,17 +90,19 @@ interface NavSection {
 }
 
 interface SidebarProps {
-  /** Controlled on mobile by the Header's hamburger button. Ignored on lg+. */
+  /** Controlled by the Header on every viewport. */
   open?: boolean;
   onClose?: () => void;
+  triggerRef?: React.RefObject<HTMLButtonElement | null>;
 }
 
-export function Sidebar({ open = false, onClose }: SidebarProps) {
+export function Sidebar({ open = false, onClose, triggerRef }: SidebarProps) {
   const t = useTranslations("Sidebar");
   const pathname = usePathname();
   const { profile, profileLoading, account, accountRole, signOut } = useAuth();
   const totalUnread = useTotalUnread();
   const unreadNotifications = useUnreadNotifications();
+  const desktopViewport = useSyncExternalStore(subscribeDesktop, readDesktop, serverDesktop);
 
   const isManager = accountRole === "owner" || accountRole === "admin";
   const isAgent = accountRole === "agent";
@@ -169,10 +181,10 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
 
   useEffect(() => {
     onClose?.();
-  }, [pathname]);
+  }, [pathname, onClose]);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open || desktopViewport) return;
     const prev = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     const onKey = (e: KeyboardEvent) => {
@@ -183,7 +195,7 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
       document.body.style.overflow = prev;
       window.removeEventListener("keydown", onKey);
     };
-  }, [open, onClose]);
+  }, [open, onClose, desktopViewport]);
 
   const renderSidebarContent = (isMobile: boolean) => (
     <>
@@ -197,7 +209,7 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
 
       {/* Brand Header */}
       <div className="flex h-[72px] shrink-0 items-center justify-between gap-2 border-b border-sidebar-border px-4 py-3">
-        <Link href={isManager ? "/dashboard" : "/inbox"} className="flex flex-col group py-1">
+        <Link href={isManager ? "/dashboard" : "/inbox"} onClick={onClose} className="flex flex-col group py-1">
           <div className="flex items-center gap-2">
             <CiclopesLogo
               layout="horizontal"
@@ -211,7 +223,7 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
             MUITAS CONVERSAS. UMA VISÃO.
           </span>
         </Link>
-        {isMobile && (
+        {isMobile ? (
           <button
             type="button"
             onClick={onClose}
@@ -220,6 +232,13 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
           >
             <X className="h-4 w-4" />
           </button>
+        ) : (
+          <SheetClose
+            aria-label={t("closeMenu")}
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring"
+          >
+            <X className="h-4 w-4" />
+          </SheetClose>
         )}
       </div>
 
@@ -249,7 +268,8 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
                   <li key={item.href}>
                     <Link
                       href={item.href}
-                      onClick={isMobile ? onClose : undefined}
+                      onClick={onClose}
+                      aria-current={isActive ? "page" : undefined}
                       className={cn(
                         "group relative flex items-center gap-2.5 rounded-md px-3 py-2 text-xs font-medium transition-all",
                         isActive
@@ -319,7 +339,8 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
                 <li key={item.href}>
                   <Link
                     href={item.href}
-                    onClick={isMobile ? onClose : undefined}
+                    onClick={onClose}
+                    aria-current={isActive ? "page" : undefined}
                     className={cn(
                       "group relative flex items-center gap-2.5 rounded-md px-3 py-2 text-xs font-medium transition-all",
                       isActive
@@ -462,17 +483,25 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
     </>
   );
 
+  if (desktopViewport) {
+    return (
+      <Sheet open={open} onOpenChange={nextOpen => { if (!nextOpen) onClose?.(); }}>
+        <SheetContent
+          side="left"
+          aria-label="Navegação principal"
+          showCloseButton={false}
+          finalFocus={triggerRef}
+          className="data-[side=left]:w-[280px] data-[side=left]:sm:max-w-[280px] gap-0 p-0 border-sidebar-border bg-sidebar text-sidebar-foreground overflow-hidden shadow-2xl"
+        >
+          {renderSidebarContent(false)}
+        </SheetContent>
+      </Sheet>
+    );
+  }
+
   return (
     <>
-      {/* 1. Desktop In-Flow Sidebar (Strictly hidden on <lg to guarantee 0px in flex layout on WebKit) */}
-      <aside
-        className="hidden lg:flex lg:h-full lg:w-[228px] lg:shrink-0 lg:flex-col lg:border-r lg:border-sidebar-border lg:bg-sidebar lg:text-sidebar-foreground lg:overflow-hidden relative"
-        aria-label="Primary"
-      >
-        {renderSidebarContent(false)}
-      </aside>
-
-      {/* 2. Mobile Full-Screen Overlay Drawer (Fixed overlay outside flex layout) */}
+      {/* Existing mobile drawer; MobileBottomNav remains unchanged. */}
       <div
         className={cn(
           "fixed inset-0 z-50 lg:hidden transition-all duration-200",
