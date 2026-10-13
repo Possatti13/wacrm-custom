@@ -78,8 +78,13 @@ export interface OpaqueLeadEntity {
   lead_token: string; // "LEAD_1", "LEAD_2"
   contact_id: string;
   contact_name: string;
+  conversation_id?: string | null;
   phone?: string | null;
   score?: number | null;
+  score_tier?: string | null;
+  status?: string | null;
+  responsible_user_name?: string | null;
+  signal_text?: string | null;
   reasons?: string[];
 }
 

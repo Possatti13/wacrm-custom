@@ -32,6 +32,9 @@ import { TeamOperatingTable } from '@/components/cockpit/team-operating-table';
 import { SignalsAndPipeline } from '@/components/cockpit/signals-and-pipeline';
 import { OperationalHealthFooter } from '@/components/cockpit/operational-health-footer';
 import { AskCiclopesPanel } from '@/components/cockpit/ask-ciclopes-panel';
+import { ObjectionDrilldownDrawer } from '@/components/cockpit/objection-drilldown-drawer';
+import type { DrilldownAction } from '@/lib/analytics/ask-ciclopes/types';
+import type { AskSection } from '@/lib/analytics/ask-ciclopes/actionability';
 import { CoachingView } from '@/components/cockpit/coaching-view';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -45,6 +48,8 @@ export default function DashboardPage() {
   const [range, setRange] = useState<PeriodRange>('30d');
   const [priorityFilter, setPriorityFilter] = useState<'all' | 'urgent' | 'high' | 'medium'>('all');
   const [isAskCiclopesOpen, setIsAskCiclopesOpen] = useState(false);
+  const [askSection, setAskSection] = useState<AskSection | null>(null);
+  const [askObjection, setAskObjection] = useState<{ code: string; name: string } | null>(null);
 
   const [summary, setSummary] = useState<ManagerCockpitSummary | null>(null);
   const [attention, setAttention] = useState<AttentionQueueResponse | null>(null);
@@ -118,6 +123,27 @@ export default function DashboardPage() {
 
   const router = useRouter();
 
+  const handleAskDrilldown = (action: DrilldownAction) => {
+    // The panel supplies only a ref matched to the current deterministic facts.
+    const ref = action.drilldown_ref;
+    if (!['attention', 'objections', 'products', 'team', 'coaching'].includes(ref.type)) return;
+    setIsAskCiclopesOpen(false);
+    setActiveTab(ref.type === 'coaching' ? 'coaching' : 'overview');
+    if (ref.type === 'objections' && ref.taxonomy_code) {
+      setAskObjection({ code: ref.taxonomy_code, name: ref.title || ref.taxonomy_code });
+    } else {
+      setAskSection(ref.type as AskSection);
+    }
+  };
+
+  useEffect(() => {
+    if (!askSection || isAskCiclopesOpen) return;
+    const section = document.getElementById(`cockpit-${askSection}`);
+    section?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    section?.focus({ preventScroll: true });
+    setAskSection(null);
+  }, [askSection, isAskCiclopesOpen, activeTab]);
+
   // Redirect agents and viewers directly to inbox once profile settles
   useEffect(() => {
     if (!authLoading && !profileLoading && !isManager) {
@@ -188,11 +214,11 @@ export default function DashboardPage() {
       </div>
 
       {activeTab === 'coaching' && accountId ? (
-        <CoachingView
+        <div id="cockpit-coaching" tabIndex={-1} className="scroll-mt-20 focus-visible:outline-2 focus-visible:outline-ring"><CoachingView
           accountId={accountId}
           range={range}
           onOpenAskCiclopes={() => setIsAskCiclopesOpen(true)}
-        />
+        /></div>
       ) : (
         <>
           {/* 2. Executive Pulse (Top 5 KPIs with deltas) */}
@@ -210,7 +236,7 @@ export default function DashboardPage() {
 
           {/* 4. Attention Queue (Triage & Actions) */}
           {attention && (
-            <AttentionQueue
+            <div id="cockpit-attention" tabIndex={-1} className="scroll-mt-20 focus-visible:outline-2 focus-visible:outline-ring"><AttentionQueue
               items={attention.items}
               totalCount={attention.total_count}
               urgentCount={attention.urgent_count}
@@ -219,34 +245,34 @@ export default function DashboardPage() {
               priorityFilter={priorityFilter}
               onPriorityFilterChange={handlePriorityFilterChange}
               loading={attentionLoading || loading}
-            />
+            /></div>
           )}
 
           {/* 5. Objections & Product Friction Grid */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             {objections && accountId && (
-              <ObjectionIntelligence
+              <div id="cockpit-objections" tabIndex={-1} className="min-w-0 scroll-mt-20 focus-visible:outline-2 focus-visible:outline-ring"><ObjectionIntelligence
                 analytics={objections}
                 accountId={accountId}
                 range={range}
                 loading={loading}
-              />
+              /></div>
             )}
 
             {products && (
-              <ProductFrictionMatrix
+              <div id="cockpit-products" tabIndex={-1} className="min-w-0 scroll-mt-20 focus-visible:outline-2 focus-visible:outline-ring"><ProductFrictionMatrix
                 data={products}
                 loading={loading}
-              />
+              /></div>
             )}
           </div>
 
           {/* 6. Team Operational Performance */}
           {team && (
-            <TeamOperatingTable
+            <div id="cockpit-team" tabIndex={-1} className="scroll-mt-20 focus-visible:outline-2 focus-visible:outline-ring"><TeamOperatingTable
               data={team}
               loading={loading}
-            />
+            /></div>
           )}
 
           {/* 7. Signals & Pipeline Snapshot */}
@@ -272,7 +298,9 @@ export default function DashboardPage() {
       <AskCiclopesPanel
         isOpen={isAskCiclopesOpen}
         onClose={() => setIsAskCiclopesOpen(false)}
+        onDrilldown={handleAskDrilldown}
       />
+      {accountId && <ObjectionDrilldownDrawer open={!!askObjection} onOpenChange={open => { if (!open) setAskObjection(null); }} accountId={accountId} taxonomyCode={askObjection?.code ?? null} taxonomyName={askObjection?.name ?? null} range={range} />}
     </div>
   );
 }

@@ -254,7 +254,6 @@ export function buildFactPacket(params: {
   // 5. Process manager.attention (with PII minimization: LEAD_1, LEAD_2)
   if (toolOutputs['manager.attention']) {
     const attRes = toolOutputs['manager.attention'] as AttentionQueueResponse;
-    let leadIndex = 1;
 
     for (const item of ((attRes.items || []) as AttentionQueueItem[]).slice(0, 15)) {
       const leadToken = `LEAD_${leadIndex++}`;
@@ -264,8 +263,12 @@ export function buildFactPacket(params: {
         lead_token: leadToken,
         contact_id: item.contact_id,
         contact_name: item.contact_name,
+        conversation_id: item.conversation_id,
         phone: item.contact_phone ?? undefined,
         score: item.score,
+        score_tier: item.score_tier,
+        responsible_user_name: item.responsible_user_name,
+        signal_text: item.signal_text,
         reasons: item.reason_code ? [item.reason_label] : [],
       };
 
@@ -417,8 +420,11 @@ export function buildFactPacket(params: {
         lead_token: leadToken,
         contact_id: opp.contact_id,
         contact_name: opp.contact_name,
+        conversation_id: opp.conversation_id,
         phone: opp.contact_phone ?? undefined,
         score: opp.lead_score,
+        status: opp.status,
+        responsible_user_name: opp.current_assigned_user_name ?? opp.responsible_user_name,
         reasons: [opp.primary_reason, ...(opp.secondary_signals || [])],
       };
 
