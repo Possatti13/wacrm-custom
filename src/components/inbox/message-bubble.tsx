@@ -1,6 +1,5 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
 import { cn } from "@/lib/utils";
 import type { Message, MessageReaction } from "@/types";
 import {
@@ -8,10 +7,8 @@ import {
   Check,
   CheckCheck,
   XCircle,
-  FileText,
   MapPin,
   LayoutTemplate,
-  ImageOff,
   CornerDownLeft,
   Sparkles,
 } from "lucide-react";
@@ -21,6 +18,8 @@ import { MessageReactions } from "./message-reactions";
 import { InteractivePreview } from "@/components/interactive/interactive-preview";
 import { useTranslations } from "next-intl";
 import { getMessagePresentation } from "@/lib/messages/presentation";
+import { MediaImage, MediaPlayer, MediaDocument, MediaUnavailable } from "./message-media";
+import { MessageText } from "./message-text";
 
 interface MessageBubbleProps {
   message: Message;
@@ -49,78 +48,6 @@ function StatusIcon({ status }: { status: Message["status"] }) {
   }
 }
 
-function MediaUnavailable({ label }: { label: string }) {
-  return (
-    <div className="flex items-center gap-2 rounded-lg bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
-      <ImageOff className="h-4 w-4 shrink-0 text-muted-foreground" />
-      <span>{label}</span>
-    </div>
-  );
-}
-
-function MediaImage({ url, alt }: { url: string; alt: string }) {
-  const [src, setSrc] = useState<string | null>(null);
-  const [error, setError] = useState(false);
-  const [loading, setLoading] = useState(true);
-
-  const loadImage = useCallback(async () => {
-    if (!url) return;
-
-    // Proxy URLs need auth fetch to create blob URL
-    if (url.startsWith("/api/whatsapp/media/")) {
-      try {
-        const res = await fetch(url);
-        if (!res.ok) throw new Error("Failed to load media");
-        const blob = await res.blob();
-        const blobUrl = URL.createObjectURL(blob);
-        setSrc(blobUrl);
-      } catch {
-        setError(true);
-      } finally {
-        setLoading(false);
-      }
-    } else {
-      setSrc(url);
-      setLoading(false);
-    }
-  }, [url]);
-
-  useEffect(() => {
-    loadImage();
-    return () => {
-      if (src?.startsWith("blob:")) {
-        URL.revokeObjectURL(src);
-      }
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loadImage]);
-
-  if (error) {
-    return (
-      <div className="flex h-40 w-60 items-center justify-center rounded-lg bg-muted">
-        <ImageOff className="h-8 w-8 text-muted-foreground" />
-      </div>
-    );
-  }
-
-  if (loading) {
-    return (
-      <div className="flex h-40 w-60 items-center justify-center rounded-lg bg-muted">
-        <div className="h-5 w-5 animate-spin rounded-full border-2 border-primary border-t-transparent" />
-      </div>
-    );
-  }
-
-  return (
-    <img
-      src={src ?? ""}
-      alt={alt}
-      className="max-h-64 max-w-60 rounded-lg object-cover"
-      onError={() => setError(true)}
-    />
-  );
-}
-
 function MessageContent({ message, t }: { message: Message, t: ReturnType<typeof useTranslations> }) {
   const presentation = getMessagePresentation(message);
   const text = presentation.text;
@@ -129,7 +56,7 @@ function MessageContent({ message, t }: { message: Message, t: ReturnType<typeof
     case "text":
       return (
         <p className="whitespace-pre-wrap break-words text-sm">
-          {text}
+          <MessageText text={text} />
         </p>
       );
 
@@ -137,13 +64,13 @@ function MessageContent({ message, t }: { message: Message, t: ReturnType<typeof
       return (
         <div>
           {message.media_url ? (
-            <MediaImage url={message.media_url} alt="Shared image" />
+            <MediaImage url={message.media_url} />
           ) : (
             <MediaUnavailable label={presentation.mediaLabel || t("photo")} />
           )}
           {caption && (
             <p className="mt-1 whitespace-pre-wrap break-words text-sm">
-              {caption}
+              <MessageText text={caption} />
             </p>
           )}
         </div>
@@ -153,17 +80,13 @@ function MessageContent({ message, t }: { message: Message, t: ReturnType<typeof
       return (
         <div>
           {message.media_url ? (
-            <video
-              src={message.media_url}
-              controls
-              className="max-h-64 max-w-60 rounded-lg"
-            />
+            <MediaPlayer kind="video" url={message.media_url} />
           ) : (
             <MediaUnavailable label={presentation.mediaLabel || t("video")} />
           )}
           {caption && (
             <p className="mt-1 whitespace-pre-wrap break-words text-sm">
-              {caption}
+              <MessageText text={caption} />
             </p>
           )}
         </div>
@@ -173,31 +96,16 @@ function MessageContent({ message, t }: { message: Message, t: ReturnType<typeof
       return (
         <div>
           {message.media_url ? (
-            <audio src={message.media_url} controls className="max-w-60" />
+            <MediaPlayer kind="audio" url={message.media_url} />
           ) : (
             <MediaUnavailable label={presentation.mediaLabel || t("audio")} />
           )}
-          {caption && <p className="mt-1 whitespace-pre-wrap break-words text-sm">{caption}</p>}
+          {caption && <p className="mt-1 whitespace-pre-wrap break-words text-sm"><MessageText text={caption} /></p>}
         </div>
       );
 
     case "document":
-      if (!message.media_url) {
-        return <MediaUnavailable label={text || t("document")} />;
-      }
-      return (
-        <a
-          href={message.media_url}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="flex items-center gap-2 rounded-lg bg-muted/50 px-3 py-2 text-sm hover:bg-muted"
-        >
-          <FileText className="h-5 w-5 shrink-0 text-muted-foreground" />
-          <span className="truncate">
-            {caption || presentation.mediaLabel || t("document")}
-          </span>
-        </a>
-      );
+      return <MediaDocument url={message.media_url} caption={caption} />;
 
     case "template":
       return (
@@ -208,7 +116,7 @@ function MessageContent({ message, t }: { message: Message, t: ReturnType<typeof
           </span>
           {text && (
             <p className="mt-1 whitespace-pre-wrap break-words text-sm">
-              {text}
+              <MessageText text={text} />
             </p>
           )}
         </div>
@@ -282,13 +190,14 @@ export function MessageBubble({
   return (
     <div
       className={cn(
-        "flex flex-col",
+        "flex min-w-0 flex-col",
         isAgent ? "items-end" : "items-start",
       )}
     >
       <div
         className={cn(
-          "relative rounded-2xl px-3.5 py-2.5 shadow-xs max-w-[85%] sm:max-w-[78%]",
+          "relative min-w-0 rounded-2xl px-3.5 py-2.5 shadow-xs",
+          ["image", "video", "audio", "document"].includes(message.content_type) ? "w-80 max-w-full" : "max-w-[85%] sm:max-w-[78%]",
           isAgent
             ? "rounded-br-xs bg-[#1E3A5F] text-[#F7F3EC] dark:bg-primary dark:text-primary-foreground"
             : "rounded-bl-xs bg-card border border-border/70 text-foreground",
