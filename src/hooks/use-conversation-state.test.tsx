@@ -1,0 +1,62 @@
+// @vitest-environment jsdom
+import { act, cleanup, renderHook } from '@testing-library/react';
+import { afterEach, describe, expect, it } from 'vitest';
+import { useConversationState } from './use-conversation-state';
+import { useThreadScroll } from './use-thread-scroll';
+import { useRequestIdentity } from './use-request-identity';
+import type { Message } from '@/types';
+afterEach(cleanup);
+describe('conversation isolation and scroll', () => {
+  it('rejects stale requests after A → B → A, newer requests and unmount', () => {
+    const { result, rerender, unmount } = renderHook(({ id }) => useRequestIdentity(id), { initialProps: { id: 'A' } });
+    const first = result.current();
+    const startFromA = result.current;
+    expect(first()).toBe(true);
+    rerender({ id: 'B' });
+    const currentB = result.current();
+    expect(startFromA()()).toBe(false);
+    expect(currentB()).toBe(true);
+    rerender({ id: 'A' });
+    expect(first()).toBe(false);
+    const second = result.current();
+    const third = result.current();
+    expect(second()).toBe(false);
+    expect(third()).toBe(true);
+    unmount();
+    expect(third()).toBe(false);
+  });
+  it('keeps drafts when switching and binds late completions to A even after A → B → A', () => {
+    const { result, rerender } = renderHook(({ id }) => useConversationState(id, ''), { initialProps: { id: 'A' } });
+    const completeA = result.current[1];
+    act(() => completeA('Draft A'));
+    rerender({ id: 'B' });
+    expect(result.current[0]).toBe('');
+    act(() => result.current[1]('Draft B'));
+    act(() => completeA('Recovered A'));
+    expect(result.current[0]).toBe('Draft B');
+    rerender({ id: 'A' });
+    expect(result.current[0]).toBe('Recovered A');
+  });
+  it('does not scroll status updates/refetch while reading history; follows new messages near bottom', () => {
+    const msg = (id: string) => ({ id } as Message);
+    const { result, rerender } = renderHook(({ id, messages }) => useThreadScroll(id, messages), { initialProps: { id: 'A', messages: [] as Message[] } });
+    const el = document.createElement('div');
+    Object.defineProperties(el, { scrollHeight: { value: 2000 }, clientHeight: { value: 500 } });
+    result.current.scrollRef.current = el;
+    rerender({ id: 'A', messages: [msg('1')] });
+    expect(el.scrollTop).toBe(2000);
+    el.scrollTop = 200;
+    act(() => result.current.onScroll());
+    rerender({ id: 'A', messages: [msg('1')] });
+    expect(el.scrollTop).toBe(200);
+    rerender({ id: 'A', messages: [msg('1'), msg('2')] });
+    expect(el.scrollTop).toBe(200);
+    el.scrollTop = 1480;
+    act(() => result.current.onScroll());
+    rerender({ id: 'A', messages: [msg('1'), msg('2'), msg('3')] });
+    expect(el.scrollTop).toBe(2000);
+    el.scrollTop = 200;
+    rerender({ id: 'B', messages: [msg('4')] });
+    expect(el.scrollTop).toBe(2000);
+  });
+});

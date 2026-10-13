@@ -116,7 +116,7 @@ function DashboardShellInner({ children }: { children: React.ReactNode }) {
           signed in. Headless — renders nothing. */}
       <PresenceHeartbeat />
       <Sidebar open={sidebarOpen} onClose={closeSidebar} />
-      <div className="flex flex-1 flex-col overflow-hidden min-w-0 w-full">
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden min-w-0 w-full">
         <Header
           onOpenSidebar={() => setSidebarOpen(true)}
           className={isInbox ? "hidden lg:flex" : "flex"}
@@ -124,9 +124,9 @@ function DashboardShellInner({ children }: { children: React.ReactNode }) {
         {/* Responsive padding and scroll container */}
         <main
           className={cn(
-            "flex-1 min-w-0 w-full",
+            "flex-1 min-h-0 min-w-0 w-full",
             isInbox
-              ? "h-[100dvh] lg:h-[calc(100vh-3.5rem)] overflow-hidden p-0"
+              ? "overflow-hidden p-0"
               : "overflow-y-auto p-3 sm:p-4 lg:p-6 pb-20 lg:pb-6"
           )}
         >

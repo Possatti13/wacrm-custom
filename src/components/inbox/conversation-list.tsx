@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { sortConversationsForDisplay } from "@/lib/inbox/presentation";
 import { createClient } from "@/lib/supabase/client";
 import {
   CONVERSATION_SELECT,
@@ -56,6 +57,8 @@ export function ConversationList({
   const [members, setMembers] = useState<AccountMember[]>([]);
   const [sellerVisibility, setSellerVisibility] = useState<"all" | "assigned_and_unassigned" | "assigned_only">("all");
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
+  const [retryToken, setRetryToken] = useState(0);
   const [tags, setTags] = useState<Tag[]>([]);
   const [selectedTagIds, setSelectedTagIds] = useState<string[]>([]);
   const [selectedCompany, setSelectedCompany] = useState<string | null>(null);
@@ -100,31 +103,38 @@ export function ConversationList({
     let cancelled = false;
 
     (async () => {
-      const { data, error } = await supabase
-        .from("conversations")
-        .select(CONVERSATION_SELECT)
-        .order("last_message_at", { ascending: false });
+      setLoading(true);
+      setLoadError(false);
+      try {
+        const { data, error } = await supabase
+          .from("conversations")
+          .select(CONVERSATION_SELECT)
+          .order("last_message_at", { ascending: false });
 
-      if (cancelled) return;
+        if (cancelled) return;
 
-      if (error) {
-        console.error("Failed to fetch conversations:", {
-          message: error.message,
-          details: error.details,
-          code: error.code,
-        });
-        setLoading(false);
-        return;
+        if (error) {
+          console.error("Failed to fetch conversations:", {
+            message: error.message,
+            details: error.details,
+            code: error.code,
+          });
+          setLoadError(true);
+          return;
+        }
+
+        onConversationsLoadedRef.current(normalizeConversations(data ?? []));
+      } catch {
+        if (!cancelled) setLoadError(true);
+      } finally {
+        if (!cancelled) setLoading(false);
       }
-
-      onConversationsLoadedRef.current(normalizeConversations(data ?? []));
-      setLoading(false);
     })();
 
     return () => {
       cancelled = true;
     };
-  }, [resyncToken]);
+  }, [resyncToken, retryToken]);
 
   useEffect(() => {
     const supabase = createClient();
@@ -198,7 +208,7 @@ export function ConversationList({
       });
     }
 
-    return result;
+    return sortConversationsForDisplay(result, mainSegment);
   }, [
     conversations,
     mainSegment,
@@ -221,7 +231,7 @@ export function ConversationList({
     statusFilter !== "all" || selectedTagIds.length > 0 || selectedCompany !== null;
 
   return (
-    <div className="flex h-full w-full min-w-0 flex-col border-r-0 border-border bg-card lg:w-[340px] lg:border-r shrink-0">
+    <div className="flex h-full min-h-0 w-full min-w-0 flex-col border-r-0 border-border bg-card lg:border-r shrink-0">
       {/* Top Header matching Visual Reference 4 */}
       <div className="p-3.5 pb-2 border-b border-border/60 space-y-3">
         <div className="flex items-center justify-between">
@@ -373,8 +383,9 @@ export function ConversationList({
       </div>
 
       {/* Conversation rows */}
-      <ScrollArea className="flex-1">
-        {loading ? (
+      <ScrollArea className="flex-1 min-h-0" aria-label="Lista de conversas">
+        {loadError && <div role="alert" className="p-4 text-xs">Não foi possível atualizar as conversas. <button type="button" className="font-semibold underline" onClick={() => setRetryToken(n => n + 1)}>Tentar novamente</button></div>}
+        {loading && conversations.length === 0 ? (
           <div className="p-3 space-y-2">
             {[1, 2, 3, 4, 5].map((i) => (
               <div key={i} className="h-16 bg-muted/40 animate-pulse rounded-lg border border-border/40" />

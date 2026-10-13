@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useConversationState } from "@/hooks/use-conversation-state";
+import { useRequestIdentity } from "@/hooks/use-request-identity";
 import {
   Sparkles,
   Send,
@@ -47,23 +48,15 @@ export function CopilotSheet({
   contextSummary,
   onInsertText,
 }: CopilotSheetProps) {
-  const [loading, setLoading] = useState(false);
-  const [activeAction, setActiveAction] = useState<CopilotActionType>("suggest_reply");
-  const [customPrompt, setCustomPrompt] = useState("");
-  const [result, setResult] = useState<CopilotResponse | null>(null);
-  const [isEditing, setIsEditing] = useState(false);
-  const [editedText, setEditedText] = useState("");
-  const [copied, setCopied] = useState(false);
-  const [feedback, setFeedback] = useState<"up" | "down" | null>(null);
-
-  // Reset Copilot output whenever conversation changes to avoid stale/cross-conversation leaks
-  useEffect(() => {
-    setResult(null);
-    setIsEditing(false);
-    setEditedText("");
-    setCustomPrompt("");
-    setFeedback(null);
-  }, [conversationId]);
+  const beginRequest = useRequestIdentity(conversationId);
+  const [loading, setLoading] = useConversationState(conversationId, false);
+  const [activeAction, setActiveAction] = useConversationState<CopilotActionType>(conversationId, "suggest_reply");
+  const [customPrompt, setCustomPrompt] = useConversationState(conversationId, "");
+  const [result, setResult] = useConversationState<CopilotResponse | null>(conversationId, null);
+  const [isEditing, setIsEditing] = useConversationState(conversationId, false);
+  const [editedText, setEditedText] = useConversationState(conversationId, "");
+  const [copied, setCopied] = useConversationState(conversationId, false);
+  const [feedback, setFeedback] = useConversationState<"up" | "down" | null>(conversationId, null);
 
   const handleRunCopilot = async (action: CopilotActionType, promptOverride?: string) => {
     if (!conversationId) {
@@ -71,6 +64,7 @@ export function CopilotSheet({
       return;
     }
 
+    const isCurrent = beginRequest();
     const effectivePrompt = (promptOverride ?? customPrompt).trim();
     setActiveAction(action);
     setLoading(true);
@@ -95,11 +89,12 @@ export function CopilotSheet({
       }
 
       const data = (await res.json()) as CopilotResponse;
+      if (!isCurrent()) return;
       setResult(data);
       setEditedText(data.suggestedReply || data.content);
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Erro desconhecido";
-      toast.error(`Erro no Copiloto: ${msg}`);
+      if (isCurrent()) toast.error(`Erro no Copiloto: ${msg}`);
     } finally {
       setLoading(false);
     }
@@ -158,7 +153,7 @@ export function CopilotSheet({
           </button>
         </div>
 
-        <ScrollArea className="flex-1 px-4 py-3">
+        <ScrollArea className="min-h-0 flex-1 px-4 py-3">
           <div className="space-y-4">
             {/* Contextual Summary Box */}
             <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-xs leading-relaxed text-foreground">

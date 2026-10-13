@@ -47,10 +47,10 @@ import { MessageBubble } from "./message-bubble";
 import { MessageActions } from "./message-actions";
 import {
   MessageComposer,
-  CHAT_MEDIA_BUCKET,
   type SendMediaPayload,
 } from "./message-composer";
-import { deleteAccountMedia } from "@/lib/storage/upload-media";
+import { useConversationState } from "@/hooks/use-conversation-state";
+import { useThreadScroll } from "@/hooks/use-thread-scroll";
 import { TemplatePicker } from "./template-picker";
 import { AiThreadBanner } from "./ai-thread-banner";
 import { CopilotSheet } from "./copilot-sheet";
@@ -74,7 +74,7 @@ interface MessageThreadProps {
   conversation: Conversation | null;
   contact: Contact | null;
   messages: Message[];
-  onMessagesLoaded: (messages: Message[]) => void;
+  onMessagesLoaded: (messages: Message[], conversationId: string, before: Message[]) => void;
   onNewMessage: (message: Message) => void;
   onUpdateMessage: (id: string, updates: Partial<Message>) => void;
   onStatusChange: (conversationId: string, status: ConversationStatus) => void;
@@ -167,17 +167,22 @@ export function MessageThread({
   contactPanelOpen,
   onToggleContactPanel,
 }: MessageThreadProps) {
+  const conversationId = conversation?.id;
   const t = useTranslations("Inbox.messageThread");
   const tTimer = useTranslations("Inbox.sessionTimer");
   const tQuote = useTranslations("Inbox.replyQuote");
 
   const { user } = useAuth();
   const { getPresence, getRow, now } = usePresence();
-  const [loading, setLoading] = useState(false);
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const [templateModalOpen, setTemplateModalOpen] = useState(false);
+  const [loading, setLoading] = useConversationState(conversationId, true);
+  const { scrollRef, onScroll } = useThreadScroll(conversationId, messages);
+  const [loadError, setLoadError] = useConversationState(conversationId, false);
+  const [retryToken, setRetryToken] = useState(0);
+  const messagesRef = useRef(messages);
+  useEffect(() => { messagesRef.current = messages; }, [messages]);
+  const [templateModalOpen, setTemplateModalOpen] = useConversationState(conversationId, false);
   const [profiles, setProfiles] = useState<Profile[]>([]);
-  const [reactions, setReactions] = useState<MessageReaction[]>([]);
+  const [reactions, setReactions] = useConversationState<MessageReaction[]>(conversationId, []);
   // Purely visual spin state for the manual-refresh button. The actual
   // refetch is fire-and-forget through `onRefresh` (which bumps the
   // parent's resyncToken); the 700ms spin is just feedback so the click
@@ -200,9 +205,9 @@ export function MessageThread({
       refreshTimerRef.current = null;
     }, 700);
   }, [isRefreshing, onRefresh]);
-  const [replyTo, setReplyTo] = useState<ReplyDraft | null>(null);
-  const [copilotOpen, setCopilotOpen] = useState(false);
-  const [prefilledText, setPrefilledText] = useState<string>("");
+  const [replyTo, setReplyTo] = useConversationState<ReplyDraft | null>(conversationId, null);
+  const [copilotOpen, setCopilotOpen] = useConversationState(conversationId, false);
+  const [prefilledText, setPrefilledText] = useConversationState<string>(conversationId, "");
 
   // Profiles are bounded by RLS to rows the current user is allowed to
   // see — today that's just the current user, but the dropdown keeps the
@@ -266,7 +271,6 @@ export function MessageThread({
     onMessagesLoadedRef.current = onMessagesLoaded;
   });
 
-  const conversationId = conversation?.id;
   const hasUnread = (conversation?.unread_count ?? 0) > 0;
 
   // Fetch messages whenever the selected conversation changes. Kept
@@ -278,25 +282,32 @@ export function MessageThread({
 
     const supabase = createClient();
     let cancelled = false;
+    const before = messagesRef.current;
 
     (async () => {
       setLoading(true);
+      setLoadError(false);
+      try {
 
-      const { data, error } = await supabase
-        .from("messages")
-        .select("*")
-        .eq("conversation_id", conversationId)
-        .order("created_at", { ascending: true });
+        const { data, error } = await supabase
+          .from("messages")
+          .select("*")
+          .eq("conversation_id", conversationId)
+          .order("created_at", { ascending: true });
 
-      if (cancelled) return;
+        if (cancelled) return;
 
-      if (error) {
-        console.error("Failed to fetch messages:", error);
-      } else {
-        onMessagesLoadedRef.current(data ?? []);
+        if (error) {
+          setLoadError(true);
+        } else {
+          onMessagesLoadedRef.current(data ?? [], conversationId, before);
+        }
+
+      } catch {
+        if (!cancelled) setLoadError(true);
+      } finally {
+        if (!cancelled) setLoading(false);
       }
-
-      if (!cancelled) setLoading(false);
     })();
 
     return () => {
@@ -306,7 +317,7 @@ export function MessageThread({
     // the realtime channel reconnects or the tab regains focus —
     // realtime is best-effort and any message events sent while the WS
     // was disconnected or throttled are otherwise lost.
-  }, [conversationId, resyncToken]);
+  }, [conversationId, resyncToken, retryToken, setLoading, setLoadError]);
 
   // Reactions fetch — pulls the current state from the DB. Kept separate
   // from the channel subscription below so a `resyncToken` bump just
@@ -336,7 +347,7 @@ export function MessageThread({
     return () => {
       cancelled = true;
     };
-  }, [conversationId, resyncToken]);
+  }, [conversationId, resyncToken, setReactions]);
 
   // Reactions realtime subscription per conversation. Subscribing here
   // (not at the page level) keeps the channel scoped to the visible
@@ -409,13 +420,7 @@ export function MessageThread({
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [conversationId]);
-
-  // Clear any in-progress reply draft when the active conversation changes —
-  // a quote pulled from conversation A shouldn't bleed into conversation B.
-  useEffect(() => {
-    setReplyTo(null);
-  }, [conversationId]);
+  }, [conversationId, setReactions]);
 
   // Reset the server-side unread_count to 0 whenever an unread count
   // surfaces on the active conversation — covers both (a) opening a
@@ -438,19 +443,11 @@ export function MessageThread({
       });
   }, [conversationId, hasUnread]);
 
-  // Auto-scroll to bottom on new messages
-  useEffect(() => {
-    if (scrollRef.current) {
-      const el = scrollRef.current;
-      el.scrollTop = el.scrollHeight;
-    }
-  }, [messages]);
-
   const handleSend = useCallback(
     async (text: string, replyToId?: string) => {
       if (!conversation) return;
 
-      const tempId = `temp-${Date.now()}`;
+      const tempId = `temp-${crypto.randomUUID()}`;
 
       // Optimistic update — shows the message immediately with "sending" status
       const optimisticMsg: Message = {
@@ -464,7 +461,6 @@ export function MessageThread({
         reply_to_message_id: replyToId,
       };
       onNewMessage(optimisticMsg);
-      setReplyTo(null);
 
       try {
         const res = await fetch("/api/whatsapp/send", {
@@ -480,27 +476,20 @@ export function MessageThread({
 
         const payload = await res.json().catch(() => ({}));
 
-        if (!res.ok) {
-          const reason = payload?.error || `HTTP ${res.status}`;
-          console.error("Failed to send message:", reason);
-          toast.error(`Failed to send: ${reason}`);
-          // Mark the optimistic bubble as failed so the user sees what happened
-          onUpdateMessage(tempId, { status: "failed" });
-          return;
-        }
+        if (!res.ok) throw new Error(payload.error || `HTTP ${res.status}`);
 
-        // Success — the realtime INSERT event will replace the temp bubble
-        // with the real DB row. If realtime hasn't arrived yet, at least
-        // flip status to 'sent' so the UI stops showing "sending".
-        onUpdateMessage(tempId, { status: "sent" });
+        if (typeof payload.message_id !== "string") throw new Error("Confirmação sem identificador da mensagem. Atualize a conversa antes de reenviar.");
+        onUpdateMessage(tempId, { id: payload.message_id, message_id: payload.whatsapp_message_id, status: "sent" });
+        setReplyTo(null);
       } catch (err) {
         console.error("Failed to send message:", err);
         const reason = err instanceof Error ? err.message : "network error";
         toast.error(`Failed to send: ${reason}`);
         onUpdateMessage(tempId, { status: "failed" });
+        throw err;
       }
     },
-    [conversation, onNewMessage, onUpdateMessage]
+    [conversation, onNewMessage, onUpdateMessage, setReplyTo]
   );
 
   const handleSendMedia = useCallback(
@@ -515,7 +504,7 @@ export function MessageThread({
           ? payload.caption || payload.filename || "Document"
           : payload.caption;
 
-      const tempId = `temp-${Date.now()}`;
+      const tempId = `temp-${crypto.randomUUID()}`;
       const optimisticMsg: Message = {
         id: tempId,
         conversation_id: conversation.id,
@@ -528,7 +517,6 @@ export function MessageThread({
         reply_to_message_id: payload.replyToId,
       };
       onNewMessage(optimisticMsg);
-      setReplyTo(null);
 
       try {
         const res = await fetch("/api/whatsapp/send", {
@@ -546,34 +534,27 @@ export function MessageThread({
 
         const data = await res.json().catch(() => ({}));
 
-        if (!res.ok) {
-          const reason = data?.error || `HTTP ${res.status}`;
-          console.error("Failed to send media:", reason);
-          toast.error(`Failed to send: ${reason}`);
-          onUpdateMessage(tempId, { status: "failed" });
-          // The upload never reached the recipient — GC the orphaned
-          // object rather than leaving it in the public bucket forever.
-          void deleteAccountMedia(CHAT_MEDIA_BUCKET, payload.path).catch(() => {});
-          return;
-        }
+        if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
 
-        onUpdateMessage(tempId, { status: "sent" });
+        if (typeof data.message_id !== "string") throw new Error("Confirmação sem identificador da mensagem. Atualize a conversa antes de reenviar.");
+        onUpdateMessage(tempId, { id: data.message_id, message_id: data.whatsapp_message_id, status: "sent" });
+        setReplyTo(null);
       } catch (err) {
         console.error("Failed to send media:", err);
         const reason = err instanceof Error ? err.message : "network error";
         toast.error(`Failed to send: ${reason}`);
         onUpdateMessage(tempId, { status: "failed" });
-        void deleteAccountMedia(CHAT_MEDIA_BUCKET, payload.path).catch(() => {});
+        throw err;
       }
     },
-    [conversation, onNewMessage, onUpdateMessage],
+    [conversation, onNewMessage, onUpdateMessage, setReplyTo],
   );
 
   const handleSendInteractive = useCallback(
     async (payload: InteractiveMessagePayload, replyToId?: string) => {
       if (!conversation) return;
 
-      const tempId = `temp-${Date.now()}`;
+      const tempId = `temp-${crypto.randomUUID()}`;
       // Optimistic bubble — renders the buttons/list immediately via the
       // interactive_payload, same as the persisted row will.
       const optimisticMsg: Message = {
@@ -603,23 +584,20 @@ export function MessageThread({
 
         const data = await res.json().catch(() => ({}));
 
-        if (!res.ok) {
-          const reason = data?.error || `HTTP ${res.status}`;
-          console.error("Failed to send interactive message:", reason);
-          toast.error(`Failed to send: ${reason}`);
-          onUpdateMessage(tempId, { status: "failed" });
-          return;
-        }
+        if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
 
-        onUpdateMessage(tempId, { status: "sent" });
+        if (typeof data.message_id !== "string") throw new Error("Confirmação sem identificador da mensagem. Atualize a conversa antes de reenviar.");
+        onUpdateMessage(tempId, { id: data.message_id, message_id: data.whatsapp_message_id, status: "sent" });
+        setReplyTo(null);
       } catch (err) {
         console.error("Failed to send interactive message:", err);
         const reason = err instanceof Error ? err.message : "network error";
         toast.error(`Failed to send: ${reason}`);
         onUpdateMessage(tempId, { status: "failed" });
+        throw err;
       }
     },
-    [conversation, onNewMessage, onUpdateMessage],
+    [conversation, onNewMessage, onUpdateMessage, setReplyTo],
   );
 
   const handleStatusChange = useCallback(
@@ -639,7 +617,7 @@ export function MessageThread({
 
   const handleOpenTemplates = useCallback(() => {
     setTemplateModalOpen(true);
-  }, []);
+  }, [setTemplateModalOpen]);
 
   const handleSendTemplate = useCallback(
     async (
@@ -653,7 +631,7 @@ export function MessageThread({
       if (!conversation) return;
 
       const renderedBody = renderTemplateBody(template.body_text, values.body);
-      const tempId = `temp-${Date.now()}`;
+      const tempId = `temp-${crypto.randomUUID()}`;
 
       const optimisticMsg: Message = {
         id: tempId,
@@ -692,23 +670,20 @@ export function MessageThread({
 
         const payload = await res.json().catch(() => ({}));
 
-        if (!res.ok) {
-          const reason = payload?.error || `HTTP ${res.status}`;
-          console.error("Failed to send template:", reason);
-          toast.error(`Failed to send template: ${reason}`);
-          onUpdateMessage(tempId, { status: "failed" });
-          return;
-        }
+        if (!res.ok) throw new Error(payload.error || `HTTP ${res.status}`);
 
-        onUpdateMessage(tempId, { status: "sent" });
+        if (typeof payload.message_id !== "string") throw new Error("Confirmação sem identificador da mensagem. Atualize a conversa antes de reenviar.");
+        onUpdateMessage(tempId, { id: payload.message_id, message_id: payload.whatsapp_message_id, status: "sent" });
+        setReplyTo(null);
       } catch (err) {
         console.error("Failed to send template:", err);
         const reason = err instanceof Error ? err.message : "network error";
         toast.error(`Failed to send template: ${reason}`);
         onUpdateMessage(tempId, { status: "failed" });
+        throw err;
       }
     },
-    [conversation, onNewMessage, onUpdateMessage],
+    [conversation, onNewMessage, onUpdateMessage, setReplyTo],
   );
 
   // Build a quick id → Message map so reply quotes can be rendered without
@@ -751,7 +726,7 @@ export function MessageThread({
         preview: buildReplyPreview(msg, tQuote),
       });
     },
-    [authorLabelFor],
+    [authorLabelFor, setReplyTo, tQuote],
   );
 
   // Single reaction-set primitive. emoji === "" removes; otherwise adds/swaps.
@@ -815,7 +790,7 @@ export function MessageThread({
         setReactions(snapshot);
       }
     },
-    [conversation, user?.id],
+    [conversation, setReactions, user?.id],
   );
 
   const handleAssignChange = useCallback(
@@ -918,10 +893,10 @@ export function MessageThread({
     // clipped and the hover toolbar overlaps the Tags panel. Letting the
     // root shrink lets the bubbles' break-words / max-w caps apply.
     // Issue #257.
-    <div className={cn("flex min-w-0 flex-1 flex-col", THREAD_BG_CLASSES)}>
+    <div className={cn("flex min-h-0 min-w-0 flex-1 flex-col", THREAD_BG_CLASSES)}>
       {/* Header — solid card surface sits on top of the doodle so the
           name/avatar/dropdowns stay legible. */}
-      <div className="flex items-center justify-between gap-2 border-b border-border bg-card px-3 py-3 sm:px-4">
+      <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-border bg-card px-3 py-3 sm:px-4">
         <div className="flex min-w-0 items-center gap-2 sm:gap-3">
           {/* Back-to-list button — mobile only. Hidden on lg+ where the
               conversation list is always visible next to the thread. */}
@@ -1114,12 +1089,13 @@ export function MessageThread({
       </div>
 
       {/* Messages Area */}
-      <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-4">
-        {loading ? (
-          <div className="flex items-center justify-center py-12">
+      <div ref={scrollRef} onScroll={onScroll} aria-label="Mensagens da conversa" className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-4 py-4">
+        {loadError && <div role="alert" className="mb-3 rounded-lg border border-destructive/30 bg-card p-3 text-sm">Não foi possível carregar as mensagens. <button type="button" onClick={() => setRetryToken(n => n + 1)} className="font-semibold underline">Tentar novamente</button></div>}
+        {loading && messages.length === 0 ? (
+          <div role="status" aria-label="Carregando mensagens" className="flex items-center justify-center py-12">
             <div className="h-5 w-5 animate-spin rounded-full border-2 border-primary border-t-transparent" />
           </div>
-        ) : messages.length === 0 ? (
+        ) : messages.length === 0 && !loadError ? (
           <div className="flex flex-col items-center justify-center py-12">
             <p className="text-sm text-muted-foreground">{t("noMessagesYet")}</p>
             <p className="text-xs text-muted-foreground">
@@ -1168,6 +1144,7 @@ export function MessageThread({
 
                     return (
                       <div id={`msg-${msg.id}`} key={msg.id} className="scroll-mt-6 transition-all duration-300">
+                        {msg.status === "failed" && <p className="mb-1 text-right text-xs text-destructive" role="status">Envio sem confirmação — confira antes de reenviar.</p>}
                         <MessageActions
                           message={msg}
                           onReply={() => handleStartReply(msg)}
@@ -1226,7 +1203,7 @@ export function MessageThread({
       <TemplatePicker
         open={templateModalOpen}
         onOpenChange={setTemplateModalOpen}
-        onSelect={handleSendTemplate}
+        onSelect={(...args) => { void handleSendTemplate(...args).catch(() => {}); }}
       />
 
       <CopilotSheet

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useEffect, useRef, useSyncExternalStore } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { createClient } from "@/lib/supabase/client";
@@ -10,6 +10,7 @@ import {
 } from "@/lib/inbox/conversations";
 import type { Conversation, Message, Contact, ConversationStatus } from "@/types";
 import { useRealtime } from "@/hooks/use-realtime";
+import { mergeIncomingMessage, reconcileSentMessage, mergeMessageSnapshot } from "@/lib/inbox/message-state";
 import { ConversationList } from "@/components/inbox/conversation-list";
 import { MessageThread } from "@/components/inbox/message-thread";
 import { IntelligenceSidebar } from "@/components/inbox/intelligence-sidebar";
@@ -22,6 +23,15 @@ import { Sheet, SheetContent } from "@/components/ui/sheet";
 // Remembers the agent's show/hide choice for the desktop contact panel
 // across reloads and sessions (device-scoped, like the theme prefs).
 const CONTACT_PANEL_STORAGE_KEY = "wacrm:inbox:contact-panel-open";
+
+const wideQuery = "(min-width: 1440px)";
+const subscribeWidth = (listener: () => void) => {
+  const query = window.matchMedia(wideQuery);
+  query.addEventListener("change", listener);
+  return () => query.removeEventListener("change", listener);
+};
+const readWidth = () => window.matchMedia(wideQuery).matches;
+const serverWidth = () => false;
 
 export default function InboxPage() {
   const t = useTranslations("Inbox.page");
@@ -38,11 +48,14 @@ export default function InboxPage() {
   const [activeConversation, setActiveConversation] =
     useState<Conversation | null>(null);
   const [activeContact, setActiveContact] = useState<Contact | null>(null);
-  const [messages, setMessages] = useState<Message[]>([]);
+  const [messageCache, setMessageCache] = useState<Record<string, Message[]>>({});
+  const messages = messageCache[activeConversation?.id ?? ""] ?? [];
   const [whatsappConnected, setWhatsappConnected] = useState<boolean | null>(
     null
   );
   const [mobileContextOpen, setMobileContextOpen] = useState(false);
+  const wideViewport = useSyncExternalStore(subscribeWidth, readWidth, serverWidth);
+  useEffect(() => { if (wideViewport) setMobileContextOpen(false); }, [wideViewport]);
   /**
    * Bumped whenever we want children (ConversationList, MessageThread)
    * to refetch from the DB — used as a safety net against missed
@@ -71,7 +84,7 @@ export default function InboxPage() {
   }, []);
 
   const handleToggleContactPanel = useCallback(() => {
-    if (typeof window !== "undefined" && window.innerWidth < 1024) {
+    if (typeof window !== "undefined" && window.innerWidth < 1440) {
       setMobileContextOpen((prev) => !prev);
       return;
     }
@@ -240,15 +253,9 @@ export default function InboxPage() {
           activeConversation &&
           newMsg.conversation_id === activeConversation.id
         ) {
-          setMessages((prev) => {
-            // Avoid duplicates
-            if (prev.some((m) => m.id === newMsg.id)) return prev;
-            // Replace optimistic message if it exists
-            const withoutOptimistic = prev.filter(
-              (m) => !m.id.startsWith("temp-")
-            );
-            return [...withoutOptimistic, newMsg];
-          });
+          setMessageCache(previous => ({ ...previous,
+            [newMsg.conversation_id]: mergeIncomingMessage(previous[newMsg.conversation_id] ?? [], newMsg),
+          }));
         }
 
         // Update conversation list preview. We need to know *synchronously*
@@ -284,9 +291,9 @@ export default function InboxPage() {
 
       if (event.eventType === "UPDATE") {
         // Update message status
-        setMessages((prev) =>
-          prev.map((m) => (m.id === newMsg.id ? { ...m, ...newMsg } : m))
-        );
+        setMessageCache(previous => ({ ...previous,
+          [newMsg.conversation_id]: (previous[newMsg.conversation_id] ?? []).map(m => m.id === newMsg.id ? { ...m, ...newMsg } : m),
+        }));
       }
     },
     [activeConversation, hydrateConversation]
@@ -445,7 +452,6 @@ export default function InboxPage() {
         if (match) {
           setActiveConversation(match);
           setActiveContact(match.contact ?? null);
-          setMessages([]);
           // Mirror the optimistic unread reset that handleSelectConversation
           // does — the user just deep-linked into this conv, treat that the
           // same as a click. Leaves activeConversation.unread_count alone so
@@ -472,7 +478,6 @@ export default function InboxPage() {
       if (activeConversation?.id === conv.id) return;
       setActiveConversation(conv);
       setActiveContact(conv.contact ?? null);
-      setMessages([]);
       // Optimistically clear the unread badge for this conv.
       setConversations((prev) =>
         prev.map((c) =>
@@ -493,30 +498,26 @@ export default function InboxPage() {
   const handleCloseConversation = useCallback(() => {
     setActiveConversation(null);
     setActiveContact(null);
-    setMessages([]);
     autoSelectedForDeepLinkRef.current = null;
     router.replace("/inbox", { scroll: false });
   }, [router]);
 
-  const handleMessagesLoaded = useCallback((loaded: Message[]) => {
-    setMessages(loaded);
+  const handleMessagesLoaded = useCallback((loaded: Message[], conversationId: string, before: Message[]) => {
+    setMessageCache(previous => ({ ...previous,
+      [conversationId]: mergeMessageSnapshot(previous[conversationId] ?? [], loaded, before),
+    }));
   }, []);
 
   const handleNewMessage = useCallback((msg: Message) => {
-    setMessages((prev) => {
-      if (prev.some((m) => m.id === msg.id)) return prev;
-      return [...prev, msg];
-    });
+    setMessageCache(previous => ({ ...previous,
+      [msg.conversation_id]: mergeIncomingMessage(previous[msg.conversation_id] ?? [], msg),
+    }));
   }, []);
 
-  const handleUpdateMessage = useCallback(
-    (id: string, updates: Partial<Message>) => {
-      setMessages((prev) =>
-        prev.map((m) => (m.id === id ? { ...m, ...updates } : m))
-      );
-    },
-    []
-  );
+  const handleUpdateMessage = useCallback((id: string, updates: Partial<Message>) => {
+    setMessageCache(previous => Object.fromEntries(Object.entries(previous).map(([key, rows]) =>
+      [key, reconcileSentMessage(rows, id, updates)])));
+  }, []);
 
   const handleStatusChange = useCallback(
     (conversationId: string, status: ConversationStatus) => {
@@ -524,7 +525,7 @@ export default function InboxPage() {
         prev.map((c) => (c.id === conversationId ? { ...c, status } : c))
       );
       if (activeConversation?.id === conversationId) {
-        setActiveConversation((prev) => (prev ? { ...prev, status } : prev));
+        setActiveConversation((prev) => (prev?.id === conversationId ? { ...prev, status } : prev));
       }
     },
     [activeConversation]
@@ -541,7 +542,7 @@ export default function InboxPage() {
       );
       if (activeConversation?.id === conversationId) {
         setActiveConversation((prev) =>
-          prev
+          prev?.id === conversationId
             ? { ...prev, assigned_agent_id: assignedAgentId ?? undefined }
             : prev
         );
@@ -566,7 +567,7 @@ export default function InboxPage() {
   const hasActiveConv = !!activeConversation;
 
   return (
-    <div className="flex h-full w-full flex-col overflow-hidden">
+    <div className={cn("flex h-full min-h-0 w-full flex-col overflow-hidden", !hasActiveConv && "pb-16 lg:pb-0")}>
       {/* WhatsApp connection banner */}
       {whatsappConnected === false && (
         <div className="flex shrink-0 items-center justify-center gap-2 border-b border-amber-500/20 bg-amber-500/10 px-4 py-2">
@@ -577,14 +578,14 @@ export default function InboxPage() {
         </div>
       )}
 
-      <div className="flex flex-1 overflow-hidden min-w-0 w-full">
+      <div className="flex flex-1 min-h-0 overflow-hidden min-w-0 w-full">
         {/* Left panel: Conversation list.
             Takes full width on mobile when no conversation is selected.
-            Fixed width (340px) on lg+. */}
+            Fixed width (280–300px) on lg+. */}
         <div
           className={cn(
-            "h-full min-w-0",
-            hasActiveConv ? "hidden lg:flex lg:w-[340px] shrink-0" : "flex flex-1 w-full lg:w-[340px] lg:shrink-0",
+            "h-full min-h-0 min-w-0",
+            hasActiveConv ? "hidden lg:flex lg:w-[280px] xl:w-[300px] shrink-0" : "flex w-full lg:w-[280px] xl:w-[300px] lg:shrink-0",
           )}
         >
           <ConversationList
@@ -601,7 +602,7 @@ export default function InboxPage() {
             Flex-1 on lg+. */}
         <div
           className={cn(
-            "h-full min-w-0 flex-1 w-full",
+            "h-full min-h-0 min-w-0 flex-1 w-full",
             hasActiveConv ? "flex flex-1" : "hidden lg:flex",
           )}
         >
@@ -617,14 +618,14 @@ export default function InboxPage() {
             onBack={handleCloseConversation}
             resyncToken={resyncToken}
             onRefresh={handleManualRefresh}
-            contactPanelOpen={contactPanelOpen}
+            contactPanelOpen={wideViewport ? contactPanelOpen : mobileContextOpen}
             onToggleContactPanel={handleToggleContactPanel}
           />
         </div>
 
-        {/* Right panel: Continuous Intelligence & Context Sidebar (Desktop >= 1024px) */}
+        {/* Right panel: Continuous Intelligence & Context Sidebar (Desktop >= 1440px) */}
         {contactPanelOpen && (
-          <div className="hidden lg:block w-[340px] xl:w-[360px] shrink-0 h-full border-l border-border bg-card">
+          <div className="hidden min-[1440px]:block w-[340px] shrink-0 h-full min-h-0 border-l border-border bg-card">
             <IntelligenceSidebar
               contact={activeContact}
               conversationId={activeConversation?.id}
@@ -633,13 +634,14 @@ export default function InboxPage() {
           </div>
         )}
 
-        {/* Mobile / Tablet Slide-Over Sheet for Commercial Context (< 1024px) */}
+        {/* Mobile / Tablet Slide-Over Sheet for Commercial Context (< 1440px) */}
         <Sheet open={mobileContextOpen} onOpenChange={setMobileContextOpen}>
           <SheetContent
             side="right"
-            className="w-full sm:max-w-[380px] p-0 border-l border-border bg-card text-foreground"
+            aria-label="Contexto comercial"
+            className="min-[1440px]:hidden data-[side=right]:w-full sm:data-[side=right]:max-w-[380px] p-0 border-l border-border bg-card text-foreground"
           >
-            <div className="h-full flex flex-col">
+            <div className="h-full min-h-0 flex flex-col">
               <IntelligenceSidebar
                 contact={activeContact}
                 conversationId={activeConversation?.id}

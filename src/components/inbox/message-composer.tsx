@@ -1,7 +1,6 @@
 "use client";
 
 import {
-  useState,
   useRef,
   useCallback,
   useEffect,
@@ -23,6 +22,8 @@ import {
   MessageSquareDashed,
   Zap,
 } from "lucide-react";
+import { useConversationState } from "@/hooks/use-conversation-state";
+import { useRequestIdentity } from "@/hooks/use-request-identity";
 import { Button } from "@/components/ui/button";
 import { GatedButton } from "@/components/ui/gated-button";
 import {
@@ -145,50 +146,55 @@ export function MessageComposer({
 }: MessageComposerProps) {
   const t = useTranslations("Inbox.composer");
 
-  const [text, setText] = useState("");
-  const [sending, setSending] = useState(false);
-  const [drafting, setDrafting] = useState(false);
+  const [text, setText] = useConversationState(conversationId, "");
+  const [sending, setSending] = useConversationState(conversationId, false);
+  const [drafting, setDrafting] = useConversationState(conversationId, false);
+  const [sendError, setSendError] = useConversationState(conversationId, "");
+  const captureIdentity = useRequestIdentity(conversationId);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
+  const appliedPrefills = useRef<Record<string, string>>({});
   useEffect(() => {
-    if (prefilledText) {
+    if (prefilledText && appliedPrefills.current[conversationId] !== prefilledText) {
+      appliedPrefills.current[conversationId] = prefilledText;
       setText(prefilledText);
       textareaRef.current?.focus();
     }
-  }, [prefilledText]);
+  }, [prefilledText, setText, conversationId]);
 
   // Interactive-message builder dialog + quick-reply picker.
-  const [interactiveOpen, setInteractiveOpen] = useState(false);
+  const [interactiveOpen, setInteractiveOpen] = useConversationState(conversationId, false);
   const [interactivePayload, setInteractivePayload] =
-    useState<InteractiveMessagePayload>(blankButtonsPayload);
-  const [savingQuickReply, setSavingQuickReply] = useState(false);
-  const [quickReplyOpen, setQuickReplyOpen] = useState(false);
+    useConversationState<InteractiveMessagePayload>(conversationId, blankButtonsPayload);
+  const [savingQuickReply, setSavingQuickReply] = useConversationState(conversationId, false);
+  const [quickReplyOpen, setQuickReplyOpen] = useConversationState(conversationId, false);
 
   // Media attachment state. `draft` holds an uploaded-but-not-yet-sent
   // attachment; `busy` covers the upload/transcode window.
-  const [draft, setDraft] = useState<MediaDraft | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [draft, setDraft] = useConversationState<MediaDraft | null>(conversationId, null);
+  const [busy, setBusy] = useConversationState(conversationId, false);
   const imageInputRef = useRef<HTMLInputElement>(null);
   const videoInputRef = useRef<HTMLInputElement>(null);
   const documentInputRef = useRef<HTMLInputElement>(null);
   // Mirror of `draft` for the unmount cleanup, which can't read render
   // state. Kept in sync below so navigating away with a staged-but-unsent
   // attachment GCs the orphaned object.
-  const draftRef = useRef<MediaDraft | null>(null);
+  const draftsRef = useRef<Record<string, MediaDraft | null>>({});
+  const attemptedPaths = useRef(new Set<string>());
   useEffect(() => {
-    draftRef.current = draft;
-  }, [draft]);
+    draftsRef.current[conversationId] = draft;
+  }, [draft, conversationId]);
 
   // Best-effort GC of a staged object the user never sent. Fire-and-forget.
   const removeStaged = useCallback((path: string | undefined) => {
-    if (!path) return;
+    if (!path || attemptedPaths.current.has(path)) return;
     void deleteAccountMedia(CHAT_MEDIA_BUCKET, path).catch(() => {});
   }, []);
 
   // Voice recording state. The recorder encodes Ogg/Opus in-browser
   // (opus-recorder) so there's no server-side transcode.
-  const [recording, setRecording] = useState(false);
-  const [recordSeconds, setRecordSeconds] = useState(0);
+  const [recording, setRecording] = useConversationState(conversationId, false);
+  const [recordSeconds, setRecordSeconds] = useConversationState(conversationId, 0);
   const recorderRef = useRef<import("opus-recorder").default | null>(null);
   const cancelledRef = useRef(false);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -212,14 +218,22 @@ export function MessageComposer({
   // navigation doesn't leak the mic, and GC a staged-but-unsent
   // attachment so it doesn't orphan in the bucket.
   useEffect(() => {
+    const drafts = draftsRef.current;
     return () => {
       clearTimer();
       cancelledRef.current = true;
       // stop() releases the mic stream + audio context inside opus-recorder.
       void recorderRef.current?.stop().catch(() => {});
-      removeStaged(draftRef.current?.path);
+      Object.values(drafts).forEach(value => removeStaged(value?.path));
     };
   }, [clearTimer, removeStaged]);
+
+  useEffect(() => () => {
+    cancelledRef.current = true;
+    clearTimer();
+    void recorderRef.current?.stop().catch(() => {});
+    setRecording(false);
+  }, [conversationId, clearTimer, setRecording]);
 
   const adjustHeight = useCallback(() => {
     const el = textareaRef.current;
@@ -234,6 +248,7 @@ export function MessageComposer({
     if (!trimmed || sending || sessionExpired) return;
 
     setSending(true);
+    setSendError("");
     const textToSend = trimmed;
     setText("");
     if (textareaRef.current) {
@@ -242,14 +257,14 @@ export function MessageComposer({
 
     try {
       await onSend(textToSend, replyTo?.id);
-    } catch (err) {
-      console.error("Composer send failed:", err);
-      // Restore draft if failed
-      setText(textToSend);
+      onClearReply?.();
+    } catch {
+      setSendError("Envio sem confirmação. O rascunho foi preservado. Atualize a conversa e confira se a mensagem chegou antes de tentar novamente.");
+      setText(current => current ? `${textToSend}\n${current}` : textToSend);
     } finally {
       setSending(false);
     }
-  }, [text, sending, sessionExpired, onSend, replyTo?.id]);
+  }, [text, sending, sessionExpired, onSend, replyTo?.id, onClearReply, setText, setSending, setSendError]);
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -268,7 +283,7 @@ export function MessageComposer({
       setText(e.target.value);
       adjustHeight();
     },
-    [adjustHeight]
+    [adjustHeight, setText]
   );
 
   // Ask the AI assistant for a suggested reply and drop it into the
@@ -276,6 +291,7 @@ export function MessageComposer({
   // nothing is sent until the agent hits Send.
   const handleDraft = useCallback(async () => {
     if (drafting) return;
+    const isCurrent = captureIdentity();
     setDrafting(true);
     try {
       const res = await fetch("/api/ai/draft", {
@@ -292,6 +308,7 @@ export function MessageComposer({
         }
         return;
       }
+      if (!isCurrent()) return;
       const draftText = typeof data.draft === "string" ? data.draft.trim() : "";
       if (!draftText) {
         toast.error("The assistant didn't return a reply.");
@@ -301,6 +318,7 @@ export function MessageComposer({
       // Let the textarea grow to fit and drop the cursor at the end so
       // the agent can tweak immediately.
       requestAnimationFrame(() => {
+        if (!isCurrent()) return;
         adjustHeight();
         const el = textareaRef.current;
         if (el) {
@@ -309,11 +327,11 @@ export function MessageComposer({
         }
       });
     } catch {
-      toast.error("Couldn't reach the AI assistant.");
+      if (isCurrent()) toast.error("Couldn't reach the AI assistant.");
     } finally {
       setDrafting(false);
     }
-  }, [drafting, conversationId, adjustHeight]);
+  }, [drafting, conversationId, adjustHeight, captureIdentity, setDrafting, setText]);
 
   // ---- Interactive message + quick replies --------------------------
 
@@ -322,7 +340,7 @@ export function MessageComposer({
       setInteractivePayload(seed ?? blankButtonsPayload());
       setInteractiveOpen(true);
     },
-    [],
+    [setInteractiveOpen, setInteractivePayload],
   );
 
   const sendInteractive = useCallback(async () => {
@@ -336,11 +354,14 @@ export function MessageComposer({
     try {
       await onSendInteractive(interactivePayload, replyTo?.id);
       setInteractiveOpen(false);
+      setSendError("");
       onClearReply?.();
+    } catch {
+      setSendError("Envio sem confirmação. O conteúdo foi preservado. Confira a conversa antes de reenviar.");
     } finally {
       setSending(false);
     }
-  }, [interactivePayload, sending, onSendInteractive, replyTo?.id, onClearReply]);
+  }, [interactivePayload, sending, setSending, onSendInteractive, replyTo?.id, setInteractiveOpen, setSendError, onClearReply]);
 
   // Persist the current builder payload as a reusable interactive snippet.
   const saveAsQuickReply = useCallback(async () => {
@@ -375,7 +396,7 @@ export function MessageComposer({
     } finally {
       setSavingQuickReply(false);
     }
-  }, [interactivePayload, t]);
+  }, [interactivePayload, setSavingQuickReply, t]);
 
   // A picked quick reply: text fills the composer; interactive opens the
   // builder pre-filled so the agent can tweak before sending.
@@ -401,7 +422,7 @@ export function MessageComposer({
         }
       });
     },
-    [openInteractiveBuilder, adjustHeight],
+    [setQuickReplyOpen, setText, openInteractiveBuilder, adjustHeight],
   );
 
   // Upload a captured file to chat-media and stage it as a draft.
@@ -423,7 +444,7 @@ export function MessageComposer({
       try {
         const { publicUrl, path } = await uploadAccountMedia(CHAT_MEDIA_BUCKET, file);
         // Replacing an existing draft? GC the previous object first.
-        removeStaged(draftRef.current?.path);
+        removeStaged(draftsRef.current[conversationId]?.path);
         setDraft({ kind, mediaUrl: publicUrl, path, filename: file.name, caption: "" });
       } catch (err) {
         toast.error(err instanceof Error ? err.message : "Upload failed.");
@@ -431,7 +452,7 @@ export function MessageComposer({
         setBusy(false);
       }
     },
-    [removeStaged],
+    [removeStaged, conversationId, setDraft, setBusy],
   );
 
   const handlePicked = useCallback(
@@ -460,7 +481,7 @@ export function MessageComposer({
       setBusy(true);
       try {
         const { publicUrl, path } = await uploadAccountMedia(CHAT_MEDIA_BUCKET, file);
-        removeStaged(draftRef.current?.path);
+        removeStaged(draftsRef.current[conversationId]?.path);
         setDraft({ kind: "audio", mediaUrl: publicUrl, path, filename: file.name, caption: "" });
       } catch (err) {
         toast.error(err instanceof Error ? err.message : "Upload failed.");
@@ -468,7 +489,7 @@ export function MessageComposer({
         setBusy(false);
       }
     },
-    [removeStaged],
+    [removeStaged, conversationId, setDraft, setBusy],
   );
 
   const startRecording = useCallback(async () => {
@@ -477,10 +498,12 @@ export function MessageComposer({
       toast.error("Voice recording isn't supported in this browser.");
       return;
     }
+    const isCurrent = captureIdentity();
     try {
       // Lazy-load the encoder (≈400 KB worker) only when the user records,
       // keeping it out of the main bundle.
       const { default: Recorder } = await import("opus-recorder");
+      if (!isCurrent()) return;
       const recorder = new Recorder({
         encoderPath: OPUS_ENCODER_PATH,
         numberOfChannels: 1,
@@ -490,11 +513,12 @@ export function MessageComposer({
       });
       cancelledRef.current = false;
       recorder.ondataavailable = (bytes) => {
-        if (cancelledRef.current) return;
+        if (cancelledRef.current || !isCurrent()) return;
         void finalizeRecording(bytes);
       };
       recorderRef.current = recorder;
       await recorder.start();
+      if (!isCurrent()) { void recorder.stop().catch(() => {}); return; }
       setRecording(true);
       setRecordSeconds(0);
       timerRef.current = setInterval(() => setRecordSeconds((s) => s + 1), 1000);
@@ -503,20 +527,20 @@ export function MessageComposer({
       recorderRef.current = null;
       toast.error("Microphone access denied or unavailable.");
     }
-  }, [inputsDisabled, busy, recording, finalizeRecording]);
+  }, [inputsDisabled, busy, recording, captureIdentity, setRecording, setRecordSeconds, finalizeRecording]);
 
   const stopRecording = useCallback(() => {
     clearTimer();
     setRecording(false);
     void recorderRef.current?.stop().catch(() => {});
-  }, [clearTimer]);
+  }, [clearTimer, setRecording]);
 
   const cancelRecording = useCallback(() => {
     cancelledRef.current = true;
     clearTimer();
     setRecording(false);
     void recorderRef.current?.stop().catch(() => {});
-  }, [clearTimer]);
+  }, [clearTimer, setRecording]);
 
   // Auto-stop at the cap so a forgotten recording can't blow the
   // upload size limit.
@@ -531,6 +555,7 @@ export function MessageComposer({
   const sendDraft = useCallback(async () => {
     if (!draft || busy) return;
     setBusy(true);
+    attemptedPaths.current.add(draft.path);
     try {
       await onSendMedia({
         kind: draft.kind,
@@ -545,26 +570,30 @@ export function MessageComposer({
       });
       // The object is now owned by the sent message — clear without GC.
       setDraft(null);
+      setSendError("");
       onClearReply?.();
+    } catch {
+      setSendError("Envio sem confirmação. O anexo foi preservado. Confira a conversa antes de reenviar.");
     } finally {
       setBusy(false);
     }
-  }, [draft, busy, onSendMedia, replyTo?.id, onClearReply]);
+  }, [draft, busy, setBusy, onSendMedia, replyTo?.id, setDraft, setSendError, onClearReply]);
 
   // Discard GCs the staged object — it was uploaded but never sent.
   const discardDraft = useCallback(() => {
     removeStaged(draft?.path);
     setDraft(null);
-  }, [draft?.path, removeStaged]);
+  }, [draft?.path, removeStaged, setDraft]);
 
   const setCaption = useCallback((caption: string) => {
     setDraft((d) => (d ? { ...d, caption } : d));
-  }, []);
+  }, [setDraft]);
 
   // ---- Render --------------------------------------------------------
 
   return (
-    <div className="border-t border-border bg-card p-3">
+    <div className="shrink-0 min-w-0 border-t border-border bg-card p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
+      {sendError && <p role="alert" className="mb-2 text-xs text-destructive">{sendError}</p>}
       {replyTo && (
         <div className="mb-2">
           <ReplyQuote
@@ -727,6 +756,7 @@ export function MessageComposer({
             size="sm"
             canAct={!readOnly}
             gateReason="send messages"
+            aria-label={t("send")}
             disabled={!text.trim() || sessionExpired || sending}
             onClick={handleSend}
             className="h-9 w-9 shrink-0 bg-primary p-0 hover:bg-primary/90 disabled:opacity-40"
@@ -830,6 +860,7 @@ function MediaDraftPreview({
         <button
           type="button"
           onClick={onDiscard}
+          disabled={busy}
           aria-label={t("removeAttachment")}
           className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
         >
@@ -841,6 +872,7 @@ function MediaDraftPreview({
         {draft.kind !== "audio" && (
           <input
             value={draft.caption}
+            disabled={busy}
             maxLength={MEDIA_CAPTION_MAX}
             onChange={(e) => onCaptionChange(e.target.value)}
             onKeyDown={(e) => {
@@ -857,6 +889,7 @@ function MediaDraftPreview({
           size="sm"
           canAct={!readOnly}
           gateReason="send messages"
+          aria-label={t("send")}
           disabled={busy}
           onClick={onSend}
           className={cn(

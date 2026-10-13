@@ -1,6 +1,8 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useEffect, useCallback } from "react";
+import { useConversationState } from "@/hooks/use-conversation-state";
+import { useRequestIdentity } from "@/hooks/use-request-identity";
 import { createClient } from "@/lib/supabase/client";
 import { useAuth } from "@/hooks/use-auth";
 import { cn } from "@/lib/utils";
@@ -90,46 +92,50 @@ export function IntelligenceSidebar({
   onCreateTaskFromAction,
 }: IntelligenceSidebarProps) {
   const { accountId, user } = useAuth();
-  const [copied, setCopied] = useState(false);
+  const scope = `${accountId}:${contact?.id}:${conversationId}`;
+  const beginCrmRequest = useRequestIdentity(scope);
+  const beginIntelRequest = useRequestIdentity(scope);
+  const [copied, setCopied] = useConversationState(scope, false);
 
   // CRM Data
-  const [deals, setDeals] = useState<Deal[]>([]);
-  const [notes, setNotes] = useState<EnrichedNote[]>([]);
-  const [tags, setTags] = useState<(Tag & { contact_tag_id: string })[]>([]);
-  const [newNote, setNewNote] = useState("");
-  const [addingNote, setAddingNote] = useState(false);
-  const [showNoteInput, setShowNoteInput] = useState(false);
+  const [deals, setDeals] = useConversationState<Deal[]>(scope, []);
+  const [notes, setNotes] = useConversationState<EnrichedNote[]>(scope, []);
+  const [tags, setTags] = useConversationState<(Tag & { contact_tag_id: string })[]>(scope, []);
+  const [newNote, setNewNote] = useConversationState(scope, "");
+  const [addingNote, setAddingNote] = useConversationState(scope, false);
+  const [showNoteInput, setShowNoteInput] = useConversationState(scope, false);
 
   // Commercial Intelligence Data
-  const [leadProfile, setLeadProfile] = useState<ContactLeadProfile | null>(null);
-  const [leadScore, setLeadScore] = useState<LeadScoreRecord | null>(null);
-  const [scoreRevisionBounds, setScoreRevisionBounds] = useState<ScoreRevisionBounds | null>(null);
-  const [interests, setInterests] = useState<ContactCatalogInterestWithItem[]>([]);
-  const [objections, setObjections] = useState<ContactObjection[]>([]);
-  const [objectionOccurrences, setObjectionOccurrences] = useState<ConversationObjectionOccurrence[]>([]);
-  const [insights, setInsights] = useState<ConversationInsightWithEvidence[]>([]);
-  const [loadingIntel, setLoadingIntel] = useState(false);
+  const [leadProfile, setLeadProfile] = useConversationState<ContactLeadProfile | null>(scope, null);
+  const [leadScore, setLeadScore] = useConversationState<LeadScoreRecord | null>(scope, null);
+  const [scoreRevisionBounds, setScoreRevisionBounds] = useConversationState<ScoreRevisionBounds | null>(scope, null);
+  const [interests, setInterests] = useConversationState<ContactCatalogInterestWithItem[]>(scope, []);
+  const [objections, setObjections] = useConversationState<ContactObjection[]>(scope, []);
+  const [objectionOccurrences, setObjectionOccurrences] = useConversationState<ConversationObjectionOccurrence[]>(scope, []);
+  const [insights, setInsights] = useConversationState<ConversationInsightWithEvidence[]>(scope, []);
+  const [loadingIntel, setLoadingIntel] = useConversationState(scope, false);
 
   // Score breakdown expansion toggle
-  const [showScoreBreakdown, setShowScoreBreakdown] = useState(false);
+  const [showScoreBreakdown, setShowScoreBreakdown] = useConversationState(scope, false);
   // Inline evidence disclosure expansion map
-  const [expandedEvidenceIds, setExpandedEvidenceIds] = useState<Record<string, boolean>>({});
+  const [expandedEvidenceIds, setExpandedEvidenceIds] = useConversationState<Record<string, boolean>>(scope, {});
 
   // Objection Override Dialog State
-  const [overrideDialogOpen, setOverrideDialogOpen] = useState(false);
-  const [selectedOccurrence, setSelectedOccurrence] = useState<ConversationObjectionOccurrence | null>(null);
+  const [overrideDialogOpen, setOverrideDialogOpen] = useConversationState(scope, false);
+  const [selectedOccurrence, setSelectedOccurrence] = useConversationState<ConversationObjectionOccurrence | null>(scope, null);
 
   // Active Follow-up & Creation Dialog
-  const [activeFollowup, setActiveFollowup] = useState<Task | null>(null);
-  const [createDialogOpen, setCreateDialogOpen] = useState(false);
-  const [dialogInitialValues, setDialogInitialValues] = useState<Partial<CreateTaskInput>>({});
+  const [activeFollowup, setActiveFollowup] = useConversationState<Task | null>(scope, null);
+  const [createDialogOpen, setCreateDialogOpen] = useConversationState(scope, false);
+  const [dialogInitialValues, setDialogInitialValues] = useConversationState<Partial<CreateTaskInput>>(scope, {});
 
   // Freshness calculation
-  const [lastAnalysisAt, setLastAnalysisAt] = useState<string | null>(null);
+  const [lastAnalysisAt, setLastAnalysisAt] = useConversationState<string | null>(scope, null);
 
   // 1. Fetch CRM & Contact Details
   const fetchCrmData = useCallback(async () => {
     if (!contact || !accountId) return;
+    const isCurrent = beginCrmRequest();
     const supabase = createClient();
 
     try {
@@ -152,6 +158,7 @@ export function IntelligenceSidebar({
           .eq("contact_id", contact.id),
       ]);
 
+      if (!isCurrent()) return;
       if (dealsRes.data) setDeals(dealsRes.data as unknown as Deal[]);
       else setDeals([]);
 
@@ -176,6 +183,7 @@ export function IntelligenceSidebar({
           }
         }
 
+        if (!isCurrent()) return;
         const enrichedNotes: EnrichedNote[] = rawNotes.map((n) => ({
           ...n,
           author_name: profileNameMap.get(n.user_id) || "Atendente",
@@ -213,6 +221,7 @@ export function IntelligenceSidebar({
         .order("due_at", { ascending: true })
         .limit(1);
 
+      if (!isCurrent()) return;
       if (followups && followups.length > 0) {
         setActiveFollowup(followups[0] as Task);
       } else {
@@ -221,11 +230,12 @@ export function IntelligenceSidebar({
     } catch (err) {
       console.error("[intelligence-sidebar] Failed to load CRM data:", err);
     }
-  }, [contact, accountId]);
+  }, [contact, accountId, beginCrmRequest, setDeals, setNotes, setTags, setActiveFollowup]);
 
   // 2. Fetch Commercial Intelligence Data
   const fetchIntelligenceData = useCallback(async () => {
     if (!contact || !accountId) return;
+    const isCurrent = beginIntelRequest();
     setLoadingIntel(true);
     setScoreRevisionBounds(null);
     const supabase = createClient();
@@ -257,6 +267,7 @@ export function IntelligenceSidebar({
           .order("created_at", { ascending: false }),
       ]);
 
+      if (!isCurrent()) return;
       if (profileRes.data) setLeadProfile(profileRes.data as ContactLeadProfile);
       else setLeadProfile(null);
 
@@ -273,6 +284,7 @@ export function IntelligenceSidebar({
           .eq("account_id", accountId)
           .eq("id", scoreRecord.scoring_revision_id)
           .maybeSingle();
+        if (!isCurrent()) return;
         if (revision?.snapshot) setScoreRevisionBounds(revision.snapshot as ScoreRevisionBounds);
       }
 
@@ -304,6 +316,7 @@ export function IntelligenceSidebar({
             .maybeSingle(),
         ]);
 
+        if (!isCurrent()) return;
         if (insightsDataRes.data) {
           setInsights(insightsDataRes.data as ConversationInsightWithEvidence[]);
         } else {
@@ -316,16 +329,14 @@ export function IntelligenceSidebar({
           setObjectionOccurrences([]);
         }
 
-        if (lastReqRes.data?.completed_at) {
-          setLastAnalysisAt(lastReqRes.data.completed_at);
-        }
+        setLastAnalysisAt(lastReqRes.data?.completed_at ?? null);
       }
     } catch (err) {
       console.error("[intelligence-sidebar] Failed to load intelligence data:", err);
     } finally {
-      setLoadingIntel(false);
+      if (isCurrent()) setLoadingIntel(false);
     }
-  }, [contact, accountId, conversationId]);
+  }, [contact, accountId, beginIntelRequest, setLoadingIntel, setScoreRevisionBounds, setLeadProfile, setLeadScore, setInterests, setObjections, conversationId, setLastAnalysisAt, setInsights, setObjectionOccurrences]);
 
   useEffect(() => {
     if (contact && accountId) {
@@ -377,7 +388,7 @@ export function IntelligenceSidebar({
 
   if (!contact) {
     return (
-      <div className="flex h-full w-full flex-col items-center justify-center p-6 text-center text-muted-foreground">
+      <div className="flex h-full min-h-0 w-full flex-col items-center justify-center p-6 text-center text-muted-foreground">
         <AlertCircle className="size-8 opacity-40 mb-2" />
         <p className="text-xs">Selecione uma conversa para ver os dados comerciais do contato.</p>
       </div>
@@ -409,8 +420,8 @@ export function IntelligenceSidebar({
   const isWarm = scoreValue !== null && scoreValue >= 40 && scoreValue < 70;
 
   return (
-    <div className="flex h-full w-full flex-col border-l border-border bg-card text-foreground">
-      <ScrollArea className="flex-1">
+    <div aria-busy={loadingIntel} className="flex h-full min-h-0 w-full flex-col border-l border-border bg-card text-foreground">
+      <ScrollArea className="flex-1 min-h-0" aria-label="Contexto comercial">
         <div className="p-4 space-y-4">
           {/* 1. QUEM: CONTACT SUMMARY (Clean, Canonical & Hardened) */}
           <div className="rounded-xl border border-border/80 bg-muted/20 p-3.5 space-y-2">
@@ -967,7 +978,7 @@ export function IntelligenceSidebar({
               )}
 
               {notes.length > 0 ? (
-                <div className="space-y-1.5 max-h-40 overflow-y-auto pr-1">
+                <div className="space-y-1.5 pr-1">
                   {notes.map((n) => (
                     <div
                       key={n.id}
