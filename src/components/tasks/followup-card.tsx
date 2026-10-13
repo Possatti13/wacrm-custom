@@ -1,6 +1,5 @@
 "use client";
 
-import { useRouter } from "next/navigation";
 import { format, formatDistanceToNow } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import type { Task, ActionType } from "@/types/tasks";
@@ -56,7 +55,6 @@ export function getActionTypeConfig(type: ActionType) {
 }
 
 export function FollowupCard({ task, onComplete, onSnooze }: FollowupCardProps) {
-  const router = useRouter();
   const actionConfig = getActionTypeConfig(task.action_type || "other");
   const ActionIcon = actionConfig.icon;
 
@@ -64,13 +62,11 @@ export function FollowupCard({ task, onComplete, onSnooze }: FollowupCardProps) 
   const isOverdue = effectiveDue ? new Date(effectiveDue) < new Date() && task.status !== "completed" : false;
   const isCompleted = task.status === "completed";
 
-  const handleOpenConversation = () => {
-    if (task.conversation_id) {
-      router.push(`/inbox?conversationId=${task.conversation_id}`);
-    } else if (task.contact_id) {
-      router.push(`/inbox?contactId=${task.contact_id}`);
-    }
-  };
+  // Use a document navigation: the optimized Inbox route cache can retain a
+  // previous canonical query during client navigation from Follow-ups.
+  const conversationHref = task.conversation_id
+    ? `/inbox?c=${encodeURIComponent(task.conversation_id)}`
+    : task.contact_id ? `/inbox?contactId=${encodeURIComponent(task.contact_id)}` : undefined;
 
   return (
     <div
@@ -205,7 +201,9 @@ export function FollowupCard({ task, onComplete, onSnooze }: FollowupCardProps) 
         <Button
           size="sm"
           variant="ghost"
-          onClick={handleOpenConversation}
+          nativeButton={!conversationHref}
+          role={conversationHref ? "link" : undefined}
+          render={conversationHref ? <a href={conversationHref} /> : undefined}
           disabled={!task.conversation_id && !task.contact_id}
           className="h-8 text-xs gap-1.5 text-primary hover:text-primary hover:bg-primary/10 px-2.5"
         >

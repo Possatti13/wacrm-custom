@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo } from "react";
-import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { useAuth } from "@/hooks/use-auth";
 import type {
@@ -39,7 +38,6 @@ import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 
 export function TasksView() {
-  const router = useRouter();
   const { accountId, user } = useAuth();
   const [view, setView] = useState<CockpitView>("today");
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -336,7 +334,10 @@ export function TasksView() {
                       <Button
                         size="sm"
                         variant="ghost"
-                        onClick={() => router.push(`/inbox?c=${lead.conversation_id}`)}
+                        nativeButton={!lead.conversation_id}
+                        role={lead.conversation_id ? "link" : undefined}
+                        disabled={!lead.conversation_id}
+                        render={lead.conversation_id ? <a href={`/inbox?c=${encodeURIComponent(lead.conversation_id)}`} /> : undefined}
                         className="h-7 text-xs gap-1 text-primary hover:text-primary hover:bg-primary/10 px-2"
                       >
                         <ExternalLink className="size-3" />
@@ -413,7 +414,9 @@ export function TasksView() {
                       <Button
                         size="sm"
                         variant="ghost"
-                        onClick={() => router.push(`/inbox?c=${lead.conversation_id}`)}
+                        nativeButton={false}
+                        role="link"
+                        render={<a href={`/inbox?c=${encodeURIComponent(lead.conversation_id)}`} />}
                         className="h-7 text-xs gap-1 text-primary hover:text-primary hover:bg-primary/10 px-2"
                       >
                         <ExternalLink className="size-3" />
