@@ -11,7 +11,13 @@ const fixtures = vi.hoisted(() => ({ rows: [] as Conversation[], delayed: false 
 vi.mock('next-intl', () => ({ useTranslations: () => (key: string) => key }));
 vi.mock('@/hooks/use-realtime', () => ({ useRealtime: () => ({ isConnected: true }) }));
 vi.mock('@/lib/supabase/client', () => ({ createClient: () => ({ auth: { getSession: async () => ({ data: { session: null } }) } }) }));
-vi.mock('@/components/ui/sheet', () => ({ Sheet: () => null, SheetContent: () => null }));
+// Keep the modal boundary observable even during its closed/exit state. Real
+// Sheet portals can remain mounted while exit animations finish; a breakpoint
+// must unmount that boundary instead of hiding only its popup with CSS.
+vi.mock('@/components/ui/sheet', () => ({
+  Sheet: ({ open, children }: { open: boolean; children: React.ReactNode }) => <div data-testid="context-sheet" data-open={open}>{open && children}</div>,
+  SheetContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+}));
 vi.mock('@/components/inbox/intelligence-sidebar', () => ({
   IntelligenceSidebar: ({ conversationId }: { conversationId?: string }) => <output data-testid="context">{conversationId ?? 'none'}</output>,
 }));
@@ -26,9 +32,9 @@ vi.mock('@/components/inbox/conversation-list', () => ({
   },
 }));
 vi.mock('@/components/inbox/message-thread', () => ({
-  MessageThread: ({ conversation, onRefresh, onBack }: {
-    conversation: Conversation | null; onRefresh: () => void; onBack: () => void;
-  }) => <><output data-testid="thread">{conversation?.id ?? 'none'}</output><button onClick={onRefresh}>Refresh conversation</button><button onClick={onBack}>Close conversation</button></>,
+  MessageThread: ({ conversation, onRefresh, onBack, onToggleContactPanel }: {
+    conversation: Conversation | null; onRefresh: () => void; onBack: () => void; onToggleContactPanel: () => void;
+  }) => <><output data-testid="thread">{conversation?.id ?? 'none'}</output><button onClick={onRefresh}>Refresh conversation</button><button onClick={onBack}>Close conversation</button><button onClick={onToggleContactPanel}>Toggle context</button><input aria-label="Draft" /></>,
 }));
 
 const A = '11111111-1111-4111-8111-111111111111';
@@ -36,6 +42,7 @@ const B = '22222222-2222-4222-8222-222222222222';
 const originalReplace = window.history.replaceState.bind(window.history);
 const router = { back: vi.fn(), forward: vi.fn(), refresh: vi.fn(), push: vi.fn(), replace: vi.fn(), prefetch: vi.fn() };
 let navigate: (id: string | null) => void;
+let resize: (width: number) => void;
 
 // Next's documented History API bridge publishes the new search params. The
 // actual optimized-router failure is also reproduced in the local Next app;
@@ -65,7 +72,40 @@ function expectSelection(id: string | null) {
 beforeEach(() => {
   fixtures.delayed = false;
   fixtures.rows = [A, B].map(id => ({ id, unread_count: 0, contact: { id: `contact-${id}` } } as Conversation));
-  Object.defineProperty(window, 'matchMedia', { configurable: true, value: () => ({ matches: true, addEventListener() {}, removeEventListener() {} }) });
+  let width = 1920;
+  const listeners = new Set<() => void>();
+  Object.defineProperty(window, 'innerWidth', { configurable: true, get: () => width });
+  Object.defineProperty(window, 'matchMedia', { configurable: true, value: () => ({ get matches() { return width >= 1440; }, addEventListener: (_: string, listener: () => void) => listeners.add(listener), removeEventListener: (_: string, listener: () => void) => listeners.delete(listener) }) });
+  resize = next => { width = next; listeners.forEach(listener => listener()); };
+});
+
+describe('Inbox commercial context breakpoint', () => {
+  it('has no modal boundary in the fixed desktop context mode', () => {
+    open();
+    expect(screen.queryByTestId('context-sheet')).toBeNull();
+  });
+  it('unmounts the entire modal on narrow -> wide without remounting thread/draft or changing selection', () => {
+    resize(390); open();
+    fireEvent.change(screen.getByLabelText('Draft'), { target: { value: 'Keep this draft' } });
+    fireEvent.click(screen.getByText('Toggle context'));
+    expect(screen.getByTestId('context-sheet').getAttribute('data-open')).toBe('true');
+    act(() => resize(1440));
+    expect(screen.queryByTestId('context-sheet')).toBeNull();
+    expect((screen.getByLabelText('Draft') as HTMLInputElement).value).toBe('Keep this draft');
+    expectSelection(A);
+  });
+  it('returns to narrow mode closed and can open the context again', () => {
+    resize(1366); open(); fireEvent.click(screen.getByText('Toggle context'));
+    act(() => resize(1920)); act(() => resize(1280));
+    expect(screen.getByTestId('context-sheet').getAttribute('data-open')).toBe('false');
+    fireEvent.click(screen.getByText('Toggle context'));
+    expect(screen.getByTestId('context-sheet').getAttribute('data-open')).toBe('true');
+  });
+  it('keeps the Sheet open between viewports below the fixed-context breakpoint', () => {
+    resize(1024); open(); fireEvent.click(screen.getByText('Toggle context'));
+    act(() => resize(1366));
+    expect(screen.getByTestId('context-sheet').getAttribute('data-open')).toBe('true');
+  });
 });
 afterEach(cleanup);
 

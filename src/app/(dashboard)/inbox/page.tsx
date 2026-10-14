@@ -582,11 +582,13 @@ export default function InboxPage() {
         )}
 
         {/* Mobile / Tablet Slide-Over Sheet for Commercial Context (< 1440px) */}
-        <Sheet open={mobileContextOpen} onOpenChange={setMobileContextOpen}>
+        {/* Unmount the whole modal at the breakpoint, including its portal,
+            backdrop and focus trap; hiding only the popup can strand them. */}
+        {!wideViewport && <Sheet open={mobileContextOpen} onOpenChange={setMobileContextOpen}>
           <SheetContent
             side="right"
             aria-label="Contexto comercial"
-            className="min-[1440px]:hidden data-[side=right]:w-full sm:data-[side=right]:max-w-[380px] p-0 border-l border-border bg-card text-foreground"
+            className="data-[side=right]:w-full sm:data-[side=right]:max-w-[380px] p-0 border-l border-border bg-card text-foreground"
           >
             <div className="h-full min-h-0 flex flex-col">
               <IntelligenceSidebar
@@ -596,7 +598,7 @@ export default function InboxPage() {
               />
             </div>
           </SheetContent>
-        </Sheet>
+        </Sheet>}
       </div>
     </div>
   );
